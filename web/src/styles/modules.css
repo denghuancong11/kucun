@@ -1,0 +1,765 @@
+/* ============================================================
+   Aster 库存系统 · 业务模块层：调拨面板、管理中心撤回记录、库存流水、批量操作条
+   ============================================================ */
+
+/* ---------- 调拨面板 ---------- */
+/* ---------- 审批中心与询库 ---------- */
+.inquiry-entry { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
+.detail-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); }
+.detail-tabs > .inquiry-entry { margin-left: 0; }
+.inquiry-dialog { width: min(680px, calc(100vw - 32px)); max-width: 680px; max-height: calc(100vh - 48px); overflow-y: auto; }
+.inquiry-fields { border: 0; padding: 0; margin: var(--sp-4) 0; min-width: 0; }
+.inquiry-fields .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.inquiry-note { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .approval-execution { margin-left: 0; }
+  .approval-progress-filter { margin-left: 0; }
+  .inquiry-entry { flex-wrap: wrap; }
+  .inquiry-fields .form-grid { grid-template-columns: 1fr; }
+}
+
+.alloc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+}
+
+.alloc-row > td > .alloc-panel {
+  border-left: 3px solid var(--brand);
+}
+
+/* 口径条：批次 → 账面在库 → 预锁定 / 已调出 → 可用，横向一条，不做五张等重卡片 */
+.alloc-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.alloc-kpi {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.alloc-kpi-label {
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.alloc-kpi-val {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.alloc-kpi-sep {
+  color: var(--text-3);
+  transform: rotate(-90deg);
+}
+
+/* 可用是决策值，单独提权 */
+.alloc-kpi-primary {
+  margin-left: auto;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--green-soft);
+}
+
+.alloc-kpi-primary .alloc-kpi-val {
+  font-size: 19px;
+}
+
+.alloc-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-h2);
+  font-weight: 600;
+}
+
+.alloc-section svg {
+  color: var(--text-3);
+}
+
+.alloc-records-toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alloc-records-toggle:hover {
+  color: var(--text);
+}
+
+.alloc-records-toggle .alloc-records-caret {
+  margin-left: auto;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-state) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+
+.alloc-records-toggle[aria-expanded="true"] .alloc-records-caret {
+  transform: none;
+  color: var(--brand);
+}
+
+.alloc-records-content[hidden] {
+  display: none;
+}
+
+.alloc-entry {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.alloc-fnsku-field input {
+  font-family: var(--mono);
+}
+
+/* 录入即时反馈：调拨后剩余可用 */
+.alloc-calc-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--sp-3);
+  padding: 8px var(--sp-3);
+  border-left: 3px solid var(--green);
+  border-radius: var(--radius-xs);
+  background: var(--green-soft);
+  font-size: var(--fs-aux);
+  color: var(--text);
+}
+
+.alloc-calc-banner svg {
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.alloc-calc-banner strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.alloc-entry .callout {
+  margin-top: var(--sp-3);
+  margin-bottom: 0;
+}
+
+.alloc-entry .callout .btn {
+  margin-top: 6px;
+}
+
+/* 数字变化一次性脉冲（≤300ms，非常驻动画） */
+.num-flash {
+  animation: num-flash 300ms var(--ease-soft) 1;
+}
+
+@keyframes num-flash {
+  0% { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+
+/* ---------- 管理中心 ---------- */
+
+/* ---------- 需求三：在途库存 ---------- */
+.transit-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 需求四：升级库存 ---------- */
+.upgrade-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.upgrade-page > .panel + .panel {
+  margin-top: 0;
+}
+
+.upgrade-filter {
+  max-width: 560px;
+  margin-bottom: var(--sp-3);
+}
+
+.upgrade-candidate-table,
+.upgrade-workflow-table,
+.upgrade-history-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.upgrade-history-table .data-table {
+  min-width: 1900px;
+}
+
+.upgrade-entry {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.upgrade-selected-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-aux);
+}
+
+.upgrade-selected-line strong {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.upgrade-balance {
+  margin-top: var(--sp-3);
+  padding: 7px var(--sp-3);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-aux);
+  font-variant-numeric: tabular-nums;
+}
+
+.upgrade-balance.valid {
+  border-left-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.upgrade-balance.invalid {
+  border-left-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.relocation-external-shipments { grid-column: 1 / -1; min-width: 0; width: 100%; white-space: normal; }
+.relocation-external-shipments .table-wrap { max-width: 100%; }
+.relocation-external-shipments .data-table { min-width: 430px; }
+.relocation-external-shipments .external-shipment-details { white-space: normal; overflow-wrap: anywhere; min-width: 170px; }
+.relocation-external-shipments input[type="checkbox"] { width: 16px; min-width: 16px; }
+.relocation-external-shipments .external-shipment-quantity { width: 88px; min-width: 88px; }
+.relocation-external-history { margin-top: var(--sp-2); min-width: 300px; white-space: normal; }
+.relocation-external-history summary { cursor: pointer; color: var(--brand-strong); }
+.relocation-external-history > div { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.relocation-external-history > div > div { margin-top: var(--sp-1); overflow-wrap: anywhere; }
+.relocation-shipping-form > .field { min-width: 0; }
+.relocation-shipping-form > .field > span { white-space: normal; }
+.relocation-shipping-form .upgrade-balance { grid-column: 1 / -1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+
+.upgrade-kpis {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-aux);
+}
+
+.upgrade-kpis strong {
+  margin-left: 4px;
+  color: var(--text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.upgrade-kpis .primary {
+  margin-left: auto;
+  color: var(--green);
+}
+
+.upgrade-kpis .primary strong {
+  color: var(--green);
+}
+
+.upgrade-kpis.compact {
+  margin: var(--sp-3) 0;
+}
+
+.upgrade-job {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.upgrade-job + .upgrade-job {
+  margin-top: var(--sp-3);
+}
+
+.upgrade-job-head,
+.upgrade-job-head > div {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.upgrade-job-head {
+  justify-content: space-between;
+}
+
+.upgrade-job-head > div > span {
+  color: var(--text-2);
+}
+
+.upgrade-inline-complete {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(90px, 1fr);
+  gap: 6px;
+  min-width: 260px;
+}
+
+.upgrade-inline-complete.direct {
+  grid-template-columns: minmax(0, 240px) minmax(0, 220px) minmax(0, 1fr);
+  justify-content: start;
+  margin-bottom: var(--sp-3);
+}
+
+.upgrade-inline-complete input {
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-aux);
+}
+
+.upgrade-job > .table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.upgrade-inline-complete select {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  height: var(--control-height);
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.upgrade-inline-complete .btn {
+  grid-column: 1 / -1;
+}
+
+.upgrade-inline-complete.direct .btn {
+  grid-column: auto;
+}
+
+@media (max-width: 768px) {
+  .upgrade-kpis .primary {
+    margin-left: 0;
+  }
+
+  .upgrade-inline-complete.direct {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .upgrade-inline-complete.direct .btn {
+    grid-column: 1;
+  }
+}
+
+.transit-page .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.transit-toolbar,
+.transit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+
+
+.transit-status-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transit-status-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.transit-status-header h2 {
+  margin: 0;
+}
+
+.transit-status-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transit-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--fs-aux);
+}
+
+.transit-status-summary strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.transit-status-table {
+  min-width: 1060px;
+}
+
+.transit-status-table td,
+.transit-status-table th {
+  white-space: nowrap;
+}
+
+.transit-status-table .transit-status-value {
+  min-width: 220px;
+  white-space: pre-wrap;
+  vertical-align: top;
+}
+
+
+.transit-preview-scroll {
+  max-width: 100%;
+}
+
+.transit-preview-table {
+  min-width: 1040px;
+}
+
+.transit-preview-table td,
+.transit-preview-table th {
+  white-space: nowrap;
+}
+
+.transit-import-records-table {
+  min-width: 900px;
+}
+
+.transit-import-records-table td,
+.transit-import-records-table th {
+  white-space: nowrap;
+}
+
+.transit-manual-input {
+  width: 110px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-aux);
+}
+
+.transit-actions {
+  justify-content: flex-end;
+}
+
+.on-shelf-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.on-shelf-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+.transit-on-shelf-dialog {
+  width: min(620px, 100%);
+}
+
+.transit-on-shelf-summary {
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .transit-preview-table {
+    min-width: 820px;
+  }
+}
+
+/* ---------- 撤回记录 ---------- */
+
+/* 管理中心数据表正文局部放大：只覆盖可撤回记录、历史撤回记录和库存流水，
+   不改变表头、控件及其他页面的全局字号。 */
+
+/* ---------- 库存流水 ---------- */
+.audit-action-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: var(--sp-3);
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.audit-action-switch button {
+  height: 28px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-aux);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.audit-action-switch button.active {
+  background: var(--surface);
+  color: var(--brand-strong);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.audit-search {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: 10px;
+}
+
+.audit-search .field {
+  width: 180px;
+}
+
+.audit-search-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.audit-query-error {
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-aux);
+  color: var(--red);
+}
+
+/* 数量变化：在库与预锁定压在一行，避免堆叠把行高推到 80px */
+.audit-quantity-change {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+.audit-dim {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.audit-dim small {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.audit-delta {
+  font-size: var(--fs-table);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-delta-positive { color: var(--green); }
+.audit-delta-negative { color: var(--red); }
+.audit-delta-zero { color: var(--text-3); font-weight: 400; }
+
+.audit-delta-unknown {
+  font-size: var(--fs-aux);
+  color: var(--text-3);
+}
+
+.audit-count {
+  margin-top: var(--sp-2);
+}
+
+.audit-table > tbody {
+  font-size: 16px;
+}
+
+.audit-table > tbody .date-cell {
+  font-size: 15px;
+}
+
+.audit-table > tbody .audit-dim small {
+  font-size: 13.5px;
+}
+
+.audit-table > tbody .audit-delta {
+  font-size: 16px;
+}
+
+.audit-table > tbody .audit-delta-unknown {
+  font-size: 15px;
+}
+
+@media (max-width: 768px) {
+  .alloc-panel {
+    padding: var(--sp-3);
+    gap: var(--sp-3);
+  }
+
+  .alloc-kpi-primary {
+    margin-left: 0;
+  }
+
+  .audit-search .field {
+    width: 100%;
+  }
+
+}
+.lingxing-sync { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0; max-width: 100%; }
+.lingxing-sync .btn { flex-shrink: 0; white-space: nowrap; }
+.lingxing-sync .dialog-error { flex: 1 1 180px; white-space: normal; overflow-wrap: anywhere; margin: 0; }
+.upgrade-workflow-table > .data-table > tbody > tr > td:last-child { white-space: normal; min-width: 420px; max-width: 560px; }
+.audit-panel .audit-table td.relocation-correction-audit { min-width: 360px; max-width: 650px; white-space: normal; overflow-wrap: anywhere; }
+
+.allocation-history-row > td { padding-block: 5px; }
+.allocation-history summary { cursor: pointer; width: fit-content; }
+.allocation-history-table { min-width: 760px; }
+
+
+/* 型号汇总保持可见，组内单据在表格区域横向滚动。 */
+.approval-page { min-width:0; font-size:14px; }
+.approval-toolbar { display:flex; flex-direction:column-reverse; gap:12px; margin-bottom:14px; }
+.approval-toolbar > .page-actions { align-self:flex-end; width:fit-content; justify-content:flex-end; margin-top:-53px; margin-bottom:4px; }
+.approval-toolbar .filter-bar { margin:0; padding:0; }
+.approval-search { display:flex; align-items:center; gap:8px; width:250px; }
+.approval-search input { width:100%; min-width:0; }
+.approval-table-scroll { max-width:100%; overflow-x:auto; container-type:inline-size; }
+.approval-summary-table { table-layout:fixed; width:100%; border-collapse:collapse; border:1px solid #edf0f5; font-size:13px; }
+.approval-summary-table th { background:#f8f9fb; color:var(--text-2); text-align:left; font-weight:400; padding:12px 10px; white-space:nowrap; }
+.approval-summary-table td { padding:10px; border-bottom:1px solid #edf0f5; vertical-align:middle; }
+.approval-document-table { table-layout:fixed; width:100%; min-width:2890px; border-collapse:collapse; }
+.approval-data-row > td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.approval-summary-table .approval-model-name { color:#2864c5; }
+.approval-expand, .approval-model-toggle { display:inline-flex; align-items:center; border:0; background:none; padding:0; cursor:pointer; color:inherit; }
+.approval-expand { width:24px; height:24px; justify-content:center; }
+.approval-expand svg { transform:rotate(-90deg); }
+.approval-expand[aria-expanded="true"] svg { transform:rotate(0); }
+.approval-model-toggle { display:block; max-width:100%; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.approval-number { font-variant-numeric:tabular-nums; font-weight:600; }
+.approval-model-row.is-open { background:#fffaf6; }
+.approval-model-details > td { padding:0; }
+.approval-record + .approval-record { border-top:3px solid #e4e8ee; }
+.approval-row-actions { position:sticky; left:0; width:100cqw; max-width:100%; display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px; background:#fbfcff; }
+.approval-row-actions:empty { display:none; }
+.approval-row-actions:has(.dialog-mask) { z-index:80; }
+.approval-action-row > td { padding:0; }
+.approval-progress .badge { border-radius:2px; padding:1px 5px; font-weight:400; white-space:nowrap; }
+.approval-metric-cell { font-variant-numeric:tabular-nums; }
+.relocation-fields > div { min-width:0; }
+.relocation-fields dt { font-size:12px; color:#909399; margin-bottom:5px; }
+.relocation-fields dd { color:#606266; white-space:pre-wrap; overflow-wrap:anywhere; }
+.field-wide { grid-column:1 / -1; }
+.approval-action-form { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
+.approval-action-form .field { flex:1 1 160px; min-width:0; }
+.approval-review-form { display:flex; align-items:end; gap:12px; width:100%; }
+.approval-review-form .field { width:140px; min-width:0; }
+.approval-review-form .approval-calculated-coverage { width:170px; }
+.approval-calculated-coverage output { display:block; min-height:34px; padding:8px 10px; border:1px solid #e4e8ee; border-radius:6px; background:#fff; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.approval-review-form .approval-business-note { flex:1; max-width:460px; }
+.transit-page { padding:0; border:0; box-shadow:none; }
+.transit-toolbar { border-bottom:1px solid #edf0f5; padding-bottom:16px; margin-bottom:16px; }
+.transit-page .empty-state { min-height:350px; }
+.transit-page h2 { font-size:14px; margin-bottom:10px; }
+.transit-preview-scroll { max-height:none; }
+.transit-import-preview > p { margin-bottom:10px; color:var(--text-3); }
+.upgrade-page > .panel:first-of-type { border:0; padding:0 0 12px; box-shadow:none; }
+.relocation-board { display:grid; grid-template-columns:minmax(340px, 40%) minmax(0, 60%); gap:14px; align-items:start; }
+.relocation-source-panel { padding:0; overflow:visible; }
+.relocation-source-panel .panel-head { padding:14px; margin:0; border-bottom:1px solid #edf0f5; }
+.relocation-source-panel .upgrade-filter { padding:12px; margin:0; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.upgrade-candidate-table { max-height:none; }
+.upgrade-candidate-table .data-table { table-layout:fixed; }
+.upgrade-candidate-table th:first-child { width:29%; }
+.upgrade-candidate-table td, .upgrade-candidate-table th { white-space:normal; overflow-wrap:anywhere; }
+.source-select { text-align:left; }
+.relocation-documents { min-width:0; display:grid; gap:14px; }
+.relocation-document { border:1px solid #edf0f5; border-radius:4px; padding:14px; background:white; }
+.relocation-document + .relocation-document { margin-top:14px; }
+.relocation-document-head { display:flex; align-items:start; justify-content:space-between; gap:12px; padding-bottom:12px; border-bottom:1px solid #edf0f5; margin-bottom:14px; }
+.relocation-document-head .muted { display:block; font-size:12px; margin-top:4px; }
+.relocation-document-head .lingxing-sync { margin:0; justify-content:flex-end; max-width:55%; }
+.relocation-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; font-size:13px; }
+.relocation-document .upgrade-inline-complete { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid #edf0f5; }
+.relocation-document .upgrade-inline-complete input, .relocation-document .upgrade-inline-complete select { min-width:0; width:auto; flex:1 1 170px; }
+.relocation-document .upgrade-inline-complete .field { min-width:0; }
+.relocation-document .form-hint { flex-basis:100%; }
+.relocation-external-shipments { margin-top:14px; border-top:1px solid #edf0f5; padding-top:14px; }
+.package-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.package-card { min-width:0; padding:12px; border:1px solid #edf0f5; border-radius:4px; font-size:12px; overflow-wrap:anywhere; }
+.package-card.selected { border-color:var(--brand); background:#fffaf6; }
+.package-card-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.package-quantities { margin:8px 0; color:var(--text-2); }
+.package-quantity { display:flex; align-items:center; gap:8px; }
+.package-quantity input { width:90px; min-width:0; }
+.audit-table > tbody, .audit-table > tbody .date-cell, .audit-table > tbody .audit-delta, .audit-table > tbody .audit-delta-unknown { font-size:13px; }
+.audit-table td { white-space:normal; overflow-wrap:anywhere; }
+.audit-detail-dialog { width:min(720px,calc(100vw - 64px)); }
+@media (max-width:1366px) { .relocation-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } .package-grid { grid-template-columns:1fr; } }
+
+.approval-toolbar select { height:32px; border:1px solid var(--border); border-radius:4px; padding:0 26px 0 10px; background:#fff; color:var(--text); font:inherit; font-size:13px; }

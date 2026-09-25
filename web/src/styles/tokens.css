@@ -1,0 +1,103 @@
+/* ============================================================
+   Aster 库存系统 · 紧凑工作台设计令牌
+   深色导航 · 白色内容 · 橙色主操作；字号沿用 v52
+   ============================================================ */
+
+:root {
+  /* 基础排版与字体 */
+  --font: Arial, "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* 动效曲线与响应时长 (Saleor fluid transitions) */
+  --ease-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-hover: 140ms;
+  --dur-state: 180ms;
+  --dur-view: 280ms;
+
+  /* 间距网格 (4px 基准) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* 圆角规范：面板 8px，紧凑控件 6px，标志保持胶囊形 */
+  --radius: 4px;
+  --radius-sm: 4px;
+  --radius-xs: 4px;
+  --radius-pill: 9999px;
+
+  /* 组件状态 */
+  --op-disabled: 0.45;
+
+  /* 字号层级（UI-REDESIGN-R6 §3.2；字重只用 400/500/600/700） */
+  --fs-h1: 20px;
+  --fs-h2: 15px;
+  --fs-body: 14px;
+  --fs-table: 13px;
+  --fs-th: 13px;
+  --fs-aux: 12px;
+
+  /* 表格与控件密度：单元格 4px 10px；字号令牌保持 v52 原值 */
+  --table-row-h: 28px;
+  --table-pad-y: 10px;
+  --table-pad-x: 10px;
+  --table-font-size: var(--fs-table);
+  --control-height: 32px;
+  --control-height-sm: 28px;
+  --control-height-lg: 32px;
+  --input-font-size: var(--fs-body);
+
+  /* 布局骨架 */
+  --sidebar-w: 64px;
+  --sidebar-w-icon: 64px;
+  --topbar-h: 54px;
+  --content-max: 1240px;
+  --panel-max-wide: 1480px;
+}
+
+/* ---------- 界面颜色 ---------- */
+:root {
+  --bg: #f4f6fc;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  --surface-3: #e3e6ea;
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --text: #1f2733;
+  --text-2: #55606e;
+  --text-3: #657181;
+
+  /* 品牌色只承担“当前选中 / 主操作”，不承担任何业务状态（README 状态色身份表） */
+  --brand: #ff7315;
+  --brand-strong: #df5a00;
+  --brand-soft: #fff2e8;
+  --on-brand: #ffffff;
+  --sidebar-bg: #131e2b;
+  --sidebar-border: #1b2839;
+  --sidebar-text: #b3bac4;
+
+  /* 业务状态颜色 */
+  --green: #0e7a53;
+  --green-soft: rgba(14, 122, 83, 0.1);
+  --blue: #1d4ed8;
+  --blue-soft: rgba(29, 78, 216, 0.1);
+  --amber: #a3620a;
+  --amber-soft: rgba(163, 98, 10, 0.1);
+  --red: #c0392b;
+  --red-soft: rgba(192, 57, 43, 0.1);
+  --accent: #7c3aed;
+  --accent-soft: rgba(124, 58, 237, 0.1);
+
+  /* 表格斑马纹与选中行：与语义色区分，只表达“行状态” */
+  --zebra: rgba(0, 0, 0, 0.022);
+  --row-hover: rgba(0, 0, 0, 0.035);
+
+  /* 阴影两阶：卡片默认 sm，浮层 md。R6 §3.3 已删除 lg 与 inset 高光 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.07), 0 12px 28px -8px rgba(0, 0, 0, 0.12);
+
+  --focus-ring: 0 0 0 2px var(--brand), 0 0 0 4px var(--brand-soft);
+}

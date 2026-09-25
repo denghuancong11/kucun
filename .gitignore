@@ -1,0 +1,46 @@
+# Private business data and local configuration
+.local-private/
+.env
+.env.*
+!.env.example
+config.local.json
+runtime-config.local.json
+*.session
+*.token
+cookies.json
+
+# Database files, backups, and operational output
+data/
+backups/
+logs/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.wal
+*.shm
+*.log
+*.bak
+*.backup
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+
+# Generated dependencies, builds, archives, and test evidence
+node_modules/
+web/dist/
+web/public/*.zip
+.test-output/
+test-results/
+playwright-report/
+screenshots/
+evidence/
+*.trace.zip
+
+# Historical releases and deployment copies
+releases/
+prototype/releases/
+prototype/backups/
+deploy/archive/
+deploy/previous/

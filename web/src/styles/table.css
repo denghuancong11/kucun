@@ -1,0 +1,534 @@
+/* ============================================================
+   Aster 库存系统 · 表格层：汇总表、明细子表、合计行、明细分段
+   v52 字号保持不变，通过单元格间距提高首屏容量
+   ============================================================ */
+
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.table-wrap.scroll-x {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--table-font-size);
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--table-pad-y) var(--table-pad-x);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.data-table thead th {
+  position: relative;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  background: #fafafa;
+  font-size: var(--fs-th);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+/* ---------- 库存汇总可读性（仅限库存汇总主表） ---------- */
+.inventory-summary-table {
+  table-layout: fixed;
+  min-width: 980px;
+}
+
+.inventory-summary-table .summary-col-model { width: 23%; }
+.inventory-summary-table .summary-col-category { width: 10%; }
+.inventory-summary-table .summary-col-number { width: 11%; }
+.inventory-summary-table .summary-col-batches { width: 12%; }
+
+.inventory-summary-table > thead > tr > th,
+.inventory-summary-table > tbody > tr.inventory-model-row > td {
+  padding: 4px 10px;
+}
+
+.inventory-summary-table tbody .inventory-summary-model,
+.inventory-summary-table tbody .inventory-summary-metric {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.inventory-summary-table tbody .inventory-summary-category .badge {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.inventory-summary-table .th-sort {
+  position: relative;
+  display: block;
+  /* 表头按钮复用 th 的内边距，标题边缘与数据单元格对齐；排序图标绝对定位，
+     不再占用标题的对齐空间。 */
+  padding: 6px 0;
+}
+
+.inventory-summary-table .th-sort > span {
+  display: block;
+}
+
+/* 型号正文保留左侧展开箭头；表头标题补齐相同的箭头与间距，
+   使两者的文字起点稳定一致。 */
+.inventory-summary-table .inventory-summary-model-header .th-sort > span {
+  padding-left: calc(12px + var(--sp-1));
+}
+
+.inventory-summary-table .inventory-summary-model-header .th-sort {
+  text-align: left;
+}
+
+.inventory-summary-table .sortable-th.num .th-sort > span {
+  text-align: right;
+}
+
+.inventory-summary-table .th-sort > svg {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+}
+
+/* ---------- 型号明细可读性（仅限在库 / 在途明细表体） ---------- */
+.detail-data-table > tbody {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.detail-data-table > tbody > tr:not(.alloc-row) > td {
+  line-height: 1.35;
+}
+
+.detail-data-table > tbody > tr:not(.alloc-row) .date-cell,
+.detail-data-table > tbody > tr:not(.alloc-row) .ver-chip,
+.detail-data-table > tbody > tr:not(.alloc-row) .clip.mono,
+.detail-data-table > tbody > tr:not(.alloc-row) .badge {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.detail-data-table > tbody > tr:not(.alloc-row) .ver-chip,
+.detail-data-table > tbody > tr:not(.alloc-row) .badge {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.detail-data-table > tfoot .subtotal-cell {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 斑马纹：极低强度，仅用于宽表横向追踪行；hover 与选中优先级更高 */
+.data-table tbody tr:nth-child(even of :not(.model-detail-host)) {
+  background: var(--zebra);
+}
+
+.data-table tbody tr:hover {
+  background: var(--row-hover);
+}
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .total {
+  font-weight: 700;
+}
+
+.data-table .date-cell {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .model-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.data-table .actions-col {
+  text-align: right;
+  width: 1%;
+}
+
+/* 含按钮的单元格压低纵向内边距，避免按钮高度把整行推高 */
+.data-table tbody td.actions-col {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* 排序表头：整个标题是按钮，命中区覆盖单元格 */
+.sortable-th {
+  padding: 0;
+}
+
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  padding: 8px var(--table-pad-x);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sortable-th.num .th-sort {
+  justify-content: flex-end;
+}
+
+.th-sort:hover {
+  color: var(--text);
+}
+
+.sort-hint {
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-soft);
+}
+
+.th-sort:hover .sort-hint {
+  opacity: 0.5;
+}
+
+.sort-active {
+  color: var(--brand-strong);
+}
+
+.data-table tbody tr.row-expanded {
+  background: var(--brand-soft);
+  box-shadow: inset 3px 0 0 0 var(--brand);
+}
+
+.data-table tbody tr.inventory-model-row:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
+.inventory-model-context-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 88px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.inventory-model-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--red);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inventory-model-context-menu button:hover,
+.inventory-model-context-menu button:focus-visible {
+  background: var(--red-soft);
+}
+
+/* 型号明细作为合法表格行紧随当前型号；不改变明细卡片本身的布局与样式。 */
+.data-table > tbody > tr.model-detail-host:hover {
+  background: transparent;
+}
+
+.model-detail-host-cell {
+  padding: 0 var(--sp-3) var(--sp-3) !important;
+  background: var(--surface-2);
+  white-space: normal !important;
+}
+
+.model-detail-host-cell > .detail-panel {
+  margin-top: 0;
+}
+
+.row-caret {
+  color: var(--text-3);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-state) var(--ease-soft);
+}
+
+.row-caret.open {
+  transform: none;
+  color: var(--brand);
+}
+
+/* ---------- 明细分段（在库 / 在途） ---------- */
+.detail-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.detail-tabs {
+  margin-bottom: 8px;
+}
+
+/* 在库=绿、在途=琥珀，与状态色身份表一致；仅落在图标上，不改文字色 */
+.detail-tabs .tab-stock svg {
+  color: var(--green);
+}
+
+.detail-tabs .tab-transit svg {
+  color: var(--amber);
+}
+
+.detail-tabs .chip:disabled svg {
+  color: inherit;
+}
+
+.detail-pane {
+  min-width: 0;
+}
+
+/* 子表字号与主表一致；层级用左缘边条表达，不靠缩小字号 */
+.data-table.sub {
+  font-size: var(--table-font-size);
+}
+
+.pane-stock .table-wrap {
+  border-left: 2px solid var(--green);
+}
+
+.pane-transit .table-wrap {
+  border-left: 2px solid var(--amber);
+}
+
+/* 长明细：容器限高内滚，表头相对容器吸顶。
+   overflow 裁切会让表格自身成为滚动容器导致 sticky 失效，故滚动容器放在 .table-wrap 上。 */
+.detail-table-scroll.stickable {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
+
+.detail-table-scroll.stickable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* ---------- 明细合计行 ---------- */
+.subtotal-row td {
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 0;
+  background: var(--surface-2);
+}
+
+.subtotal-cell {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.subtotal-label {
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.subtotal-note {
+  color: var(--text-2);
+}
+
+.subtotal-row.mismatch td {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.subtotal-row.mismatch .subtotal-note,
+.subtotal-row.mismatch .subtotal-cell {
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* ---------- 调拨展开行 ---------- */
+.alloc-row > td {
+  padding: 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: normal;
+}
+
+.alloc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--control-height-sm);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-aux);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+
+.alloc-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.alloc-toggle.open {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+}
+
+.alloc-toggle:disabled {
+  opacity: var(--op-disabled);
+  cursor: not-allowed;
+}
+
+.alloc-toggle-caret {
+  transform: rotate(-90deg);
+  transition: transform var(--dur-state) var(--ease-soft);
+}
+
+.alloc-toggle.open .alloc-toggle-caret {
+  transform: none;
+}
+
+/* 批次行展开态 */
+.data-table.sub tbody tr.batch-open {
+  background: var(--brand-soft);
+}
+
+/* 调拨记录中的“剩余可用”对照行：不是记录，用绿色左缘条与记录区分 */
+.row-available td {
+  background: var(--green-soft);
+  box-shadow: inset 2px 0 0 0 var(--green);
+}
+
+/* ---------- 长字段省略 ---------- */
+.clip {
+  display: inline-block;
+  max-width: 160px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  vertical-align: bottom;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.clip.mono {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+
+.clip.open {
+  max-width: none;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.clip:hover {
+  text-decoration: underline dotted;
+}
+
+/* 版本号：等宽小徽章，与数量（strong）、状态（徽标）形成三档层级 */
+.ver-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* ---------- 明细说明与空态 ---------- */
+.detail-empty {
+  padding: var(--sp-5) var(--sp-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.detail-field-note {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.transit-delete-error {
+  margin-top: var(--sp-2);
+}
+
+@media (max-width: 768px) {
+  .detail-panel {
+    padding: var(--sp-3);
+  }
+
+  .clip {
+    max-width: 110px;
+  }
+}
+
+/* 未知值：不可核算而非零。与 muted 的“真 0”在视觉上必须能区分 */
+.unknown-cell {
+  cursor: help;
+  border-bottom: 1px dotted var(--border-strong);
+}
+
+/* 型号摘要与批次明细沿用服务端数量。 */
+.inventory-summary-table { min-width:0; }
+.inventory-summary-table .summary-col-model { width:25%; }
+.inventory-summary-table .summary-col-category { width:10%; }
+.inventory-summary-table .summary-col-number { width:11%; }
+.inventory-summary-table .summary-col-batches { width:10%; }
+.inventory-summary-table > thead > tr > th, .inventory-summary-table > tbody > tr.inventory-model-row > td { padding:10px; }
+.inventory-summary-table tbody .inventory-summary-model, .inventory-summary-table tbody .inventory-summary-metric { font-size:14px; }
+.inventory-summary-model .model-cell { color:#2864c5; }
+.detail-data-table > tbody, .detail-data-table > tbody > tr:not(.alloc-row) .date-cell, .detail-data-table > tbody > tr:not(.alloc-row) .ver-chip, .detail-data-table > tbody > tr:not(.alloc-row) .clip.mono, .detail-data-table > tbody > tr:not(.alloc-row) .badge { font-size:13px; }
+.data-table thead th { background:#f8f9fb; font-weight:400; letter-spacing:0; padding-block:11px; }

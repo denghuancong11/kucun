@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {chromium} from 'playwright-core';
+import {seedVisualFixtures} from '../../scripts/revamp-fixtures.mjs';
+import {InventoryDatabase} from '../../inventory-db.mjs';
+import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
+const root=path.resolve(import.meta.dirname,'../..'),output=process.env.ASTER_FORMAL_OUTPUT||path.join(root,'.test-output/formal-wimoor');
+await fs.mkdir(path.join(output,'screenshots'),{recursive:true});
+const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-formal-wimoor-'));
+seedVisualFixtures(state);const db=new InventoryDatabase(state);
+const port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('formal-wimoor');
+const server=spawn(process.execPath,[path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'ignore',env:{...process.env,ASTER_STATE_ROOT:state,PORT:String(port),HOST:'127.0.0.1',PROD:'1',ASTER_TEST_INSTANCE_ID:instanceId}});
+const results={checks:[],widths:[],errors:[],databaseId:db.syncState().databaseId};let browser;
+const check=(name,condition=true)=>{assert.ok(condition,name);results.checks.push(name);console.log('PASS '+name);};
+try{
+ await waitForOwnedServer({base,child:server,instanceId});
+ browser=await chromium.launch({headless:true,executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
+ const page=await browser.newPage({viewport:{width:1600,height:1000},deviceScaleFactor:1});page.setDefaultTimeout(8000);page.on('pageerror',e=>results.errors.push(e.message));
+ const nav=name=>page.locator('.sidebar .nav-item',{hasText:name}).click(),role=value=>page.getByLabel('切换当前操作角色',{exact:true}).selectOption(value);
+ const shot=name=>page.screenshot({path:path.join(output,'screenshots',name+'.png'),fullPage:true});
+ await page.goto(base);await page.locator('.inventory-summary-row').first().waitFor();await shot('01-inventory');
+ assert.equal(await page.locator('#inventory-team,#inventory-warehouse').count(),0);assert.doesNotMatch(await page.locator('main').innerText(),/全局可见|一团可见|二团可见|新建询库/);
+ await page.locator('.inventory-summary-row').first().click();await page.locator('.detail-tabs .inquiry-entry').waitFor();assert.equal(await page.locator('.inventory-summary-row .inquiry-entry').count(),0);assert.equal(await page.locator('.detail-tabs .inquiry-entry').count(),1);check('型号摘要无仓库/团队筛选与可见标签；询库在明细标签右侧');
+ await nav('在途库存');await shot('02-transit-initial');assert.equal(await page.locator('input[type=file]').count(),2);assert.equal(await page.locator('.transit-preview-table').count(),0);assert.doesNotMatch(await page.locator('main').innerText(),/导入记录|重新解析|下载模板/);
+ const before=db.syncState();const csv='ITEM,订单数量,FNSKU,发货方式,计划号,出货时间,团队,版本号\nAPP-18,12,XFORMAL001,SyntheticWarehouseA,FORMAL-PLAN,2026-09-20,一团,V1';
+ await page.locator('#transit-import-file').setInputFiles({name:'正式验收硒鼓.csv',mimeType:'text/csv',buffer:Buffer.from(csv)});await page.locator('.transit-preview-table tbody tr').waitFor();assert.equal(db.getCatalog().inTransitDetails['APP-18']?.some(t=>t.plan==='FORMAL-PLAN'),false);await shot('03-transit-preview');
+ await page.getByRole('button',{name:'确认导入',exact:true}).click();await page.getByRole('status').filter({hasText:'已导入 1'}).waitFor();assert.ok(db.syncState().dataVersion>before.dataVersion);
+ await page.locator('#transit-status-file').setInputFiles({name:'物流更新.csv',mimeType:'text/csv',buffer:Buffer.from('计划号,物流状态\nFORMAL-PLAN,运输中')});await page.locator('.transit-status-table tbody tr').waitFor();await shot('04-logistics-preview');await page.getByRole('button',{name:'确认更新物流',exact:true}).click();await page.getByRole('status').filter({hasText:'更新 1 条'}).waitFor();assert.equal(db.getCatalog().inTransitDetails['APP-18'].find(t=>t.plan==='FORMAL-PLAN').status,'运输中');
+ check('两类文件走正式预览及确认接口，确认前业务数据不变，结果与数据库一致');
+ await nav('审批中心');await role('business');await page.getByLabel('搜索运营姓名、型号或 ASIN',{exact:true}).fill('APP-25');await page.locator('.approval-model-group').first().waitFor();assert.deepEqual(await page.locator('.approval-summary-table > thead th').allTextContents(),['','型号','在库库存','申请数量合计','商务审核数量合计']);await shot('05-approval-summary');
+ await page.locator('.approval-model-group .approval-expand').click();
+ assert.equal(await page.locator('.approval-record:visible').count(),32);await page.locator('.approval-model-group .approval-model-toggle').click();assert.equal(await page.locator('.approval-record:visible').count(),0);await page.locator('.approval-model-group .approval-expand').click();
+ assert.equal(await page.locator('.approval-record .approval-expand').count(),0);
+ for(const width of [1280,1366,1920]){await page.setViewportSize({width,height:1000});const size=await page.evaluate(()=>({width:innerWidth,document:document.documentElement.scrollWidth,tableScroll:[...document.querySelectorAll('.approval-table-scroll')].filter(e=>e.getClientRects().length).every(e=>getComputedStyle(e).overflowX==='auto'&&(e.clientWidth>=2890||e.scrollWidth>e.clientWidth)),overflow:[...document.querySelectorAll('.approval-row-actions input,.approval-metric-cell')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>e.tagName+'.'+e.className),scale:visualViewport.scale,dpr:devicePixelRatio}));results.widths.push(size);assert.equal(size.document,width);assert.equal(size.tableScroll,true);assert.deepEqual(size.overflow,[]);assert.equal(size.scale,1);await shot('06-approval-details-'+width);}
+ check('型号汇总展开后直接显示组内32张单据；1280/1366/1920、100% 缩放仅组内表格横向滚动，整页无横向溢出');
+ await page.setViewportSize({width:1600,height:1000});
+ await nav('升级库存');await role('admin');await page.locator('.source-select').first().waitFor();await page.locator('.source-select').filter({hasText:'ALLOC-'}).first().click();await shot('07-relocation');
+ assert.doesNotMatch(await page.locator('main').innerText(),/当前阶段|当前步骤|移仓分步登记|来源详情|已归档/);
+ check('移仓使用真实来源及逐笔单据卡，无阶段展示和来源详情入口');
+ await role('purchasing');await page.getByRole('tab',{name:'在库升级',exact:true}).click();await page.locator('.upgrade-job').first().waitFor();await shot('08-direct-upgrade');
+ await nav('库存流水');assert.equal(await page.getByLabel('选择库存操作分类',{exact:true}).locator('option').count(),11);await page.locator('.audit-table').waitFor();await shot('09-audit');await page.getByRole('button',{name:'查看',exact:true}).first().click();await shot('10-audit-detail');check('流水只有正式 11 项动作及型号/日期筛选，详情使用真实记录');
+ check('浏览器无运行错误',results.errors.length===0);db.assertInventoryInvariants();
+}finally{await fs.writeFile(path.join(output,'layout-results.json'),JSON.stringify(results,null,2));await browser?.close();server.kill();db.close();}

@@ -1,0 +1,17 @@
+/* ============================================================
+   Aster 库存系统 · 样式入口
+   按职责拆分为六个模块。
+     tokens   颜色、密度、字号、布局尺寸
+     base     重置、布局骨架、侧栏、顶栏、面板、焦点、响应式、动效降级
+     table    汇总表、明细子表、合计行、明细分段、长字段省略
+     controls 按钮、分段控件、表单、搜索、徽标、复选框
+     feedback 通知、提示条、空态、骨架屏、弹窗
+     modules  调拨面板、审批、库存流水、导入、升级
+   ============================================================ */
+
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/table.css";
+@import "./styles/controls.css";
+@import "./styles/feedback.css";
+@import "./styles/modules.css";

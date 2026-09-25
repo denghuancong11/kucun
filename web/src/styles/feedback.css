@@ -1,0 +1,335 @@
+/* ============================================================
+   Aster 库存系统 · 反馈层：通知、提示条、空态、骨架屏、弹窗
+   R6 §5：反馈组件减重——面板底 + 左侧 3px 语义条，不用整色块
+   ============================================================ */
+
+/* ---------- 浮动通知 ---------- */
+.notice-container {
+  position: fixed;
+  z-index: 90;
+  top: calc(var(--topbar-h) + var(--sp-3));
+  right: var(--sp-5);
+  max-width: min(420px, calc(100vw - var(--sp-8)));
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-aux);
+  box-shadow: var(--shadow-md);
+  animation: notice-in var(--dur-state) var(--ease-soft) 1;
+}
+
+@keyframes notice-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.notice-success { border-left-color: var(--green); }
+.notice-warning { border-left-color: var(--amber); }
+.notice-error { border-left-color: var(--red); }
+
+.notice-success .notice-icon { color: var(--green); }
+.notice-warning .notice-icon { color: var(--amber); }
+.notice-error .notice-icon { color: var(--red); }
+
+.notice-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.notice-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ---------- 提示条 ---------- */
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-aux);
+}
+
+.callout strong {
+  display: block;
+  font-size: var(--fs-aux);
+  font-weight: 600;
+}
+
+.callout p {
+  margin-top: 2px;
+  color: var(--text-2);
+}
+
+.callout-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
+.callout-warn {
+  border-left-color: var(--amber);
+}
+
+.callout-warn .callout-icon {
+  color: var(--amber);
+}
+
+.callout-danger {
+  border-left-color: var(--red);
+}
+
+.callout-danger .callout-icon {
+  color: var(--red);
+}
+
+/* ---------- 空态：独立块，不套表格壳 ---------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 120px;
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.empty-state .e-icon {
+  color: var(--text-3);
+}
+
+.empty-state strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.empty-state > span {
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+  max-width: 42ch;
+}
+
+.empty-action {
+  margin-top: var(--sp-2);
+}
+
+/* ---------- 骨架屏与加载指示 ---------- */
+.skeleton-table-wrap,
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-table-header,
+.skeleton-table-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.skeleton-table-header > *,
+.skeleton-table-row > * {
+  flex: 1;
+}
+
+.skeleton-bar {
+  display: block;
+  height: 13px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.2s var(--ease-soft) infinite;
+}
+
+.skeleton-rounded {
+  border-radius: var(--radius-pill);
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
+.loading-inline,
+.detail-loading-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.detail-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* ---------- 弹窗（撤销、撤回） ---------- */
+.dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  background: rgba(0, 0, 0, 0.45);
+  animation: mask-in var(--dur-state) var(--ease-soft) 1;
+}
+
+@keyframes mask-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  /* 弹窗永不超出视口：主体内滚，头部与操作区常驻可见 */
+  max-height: 88vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.dialog {
+  width: min(460px, 100%);
+  padding: var(--sp-4);
+  gap: var(--sp-3);
+  overflow-y: auto;
+}
+
+/* 确认框内容 */
+.dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-h2);
+  font-weight: 600;
+}
+
+.dialog-title-danger {
+  color: var(--red);
+}
+
+.dialog-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px var(--sp-3);
+  font-size: var(--fs-aux);
+}
+
+.dialog-rows dt {
+  color: var(--text-2);
+}
+
+.dialog-rows dd {
+  font-weight: 500;
+}
+
+.dialog-note {
+  font-size: var(--fs-aux);
+  color: var(--text-2);
+}
+
+.dialog-error {
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--red);
+  border-radius: var(--radius-xs);
+  background: var(--red-soft);
+  font-size: var(--fs-aux);
+  color: var(--red);
+}
+
+.dialog-error ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: auto;
+}
+
+@media (max-width: 768px) {
+  .dialog-mask {
+    padding: var(--sp-3);
+  }
+
+  .notice-container {
+    right: var(--sp-3);
+    left: var(--sp-3);
+    max-width: none;
+  }
+}

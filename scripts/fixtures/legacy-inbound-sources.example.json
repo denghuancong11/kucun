@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "imports": [
+    {
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "rows": [
+        {
+          "sourceRow": 1,
+          "model": "SYNTH-ITEM-001",
+          "quantity": 10,
+          "fnsku": "TEST-FNSKU-0001",
+          "shippingMethod": "SyntheticWarehouse",
+          "plan": "TEST-PLAN-0001",
+          "date": "2026-01-01",
+          "team": "一团",
+          "version": "TEST-V1",
+          "packPerBox": "4"
+        }
+      ]
+    }
+  ]
+}

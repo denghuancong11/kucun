@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';import vm from 'node:vm';import {runtime} from './extension-test-runtime.mjs';
+const root=path.resolve(import.meta.dirname,'..');
+const checks=[],check=x=>{checks.push(x);console.log('PASS '+x);};
+const r=await runtime();assert.equal(r.local.enabled,true);assert.equal(r.alarms.get('aster-lingxing-connection').periodInMinutes,0.5);assert.ok(r.local.connection.workerId);check('旧端口迁移为启用状态，启动建立连接并注册30秒闹钟');
+const original=r.local.connection.workerId;r.failures.heartbeat=1;await r.pulse().catch(()=>{});await r.eval('serial');assert.match(r.local.connectionStatus,/自动重试/);await r.pulse();assert.equal(r.local.connection.workerId,original);assert.match(r.local.connectionStatus,/已恢复/);check('暂时心跳失败保留身份，下一次唤醒恢复');
+r.failures.claim=1;await r.pulse().catch(()=>{});await r.pulse();assert.equal(r.local.connection.workerId,original);check('领取请求暂时失败不停止自动执行');
+r.host.worker=null;await r.pulse();assert.notEqual(r.local.connection.workerId,original);check('服务重启旧身份失效后自动连接');
+const recovered=await runtime({local:r.local,host:r.host});assert.equal(recovered.local.connection.workerId,r.local.connection.workerId);check('SW全局变量丢失后从存储恢复同一连接，不重复执行器');
+const response=await new Promise(resolve=>recovered.events.message({type:'disconnect'},{url:'chrome-extension://'+'a'.repeat(32)+'/worker.html'},resolve));assert.equal(response.ok,true);assert.equal(recovered.local.enabled,false);const disabled=await runtime({local:recovered.local,host:recovered.host});assert.equal(disabled.requests.length,0);check('用户主动断开跨后台重启保持，不被自动初始化覆盖');
+const blocked=await runtime({local:{port:4174},host:{worker:'other'}});assert.match(blocked.local.connectionStatus,/already connected/);assert.equal(blocked.host.worker,'other');check('已有不同执行器时不能抢占，保留自动重试');
+const output=process.env.ASTER_START_RESULT||path.join(root,'.test-output/start-result.json');await fs.mkdir(path.dirname(output),{recursive:true});await fs.writeFile(output,JSON.stringify({kind:'isolated-vm-error-injection',checks,realLingxing:false},null,2));
