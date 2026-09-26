@@ -243,6 +243,8 @@ export interface Allocation {
   updatedAt: string;
 }
 
+export type ApprovalAllocation = Allocation & { category: Category; packPerBox: string | null };
+
 export interface AllocationEntry {
   quantity: number;
   department: string;
@@ -316,7 +318,7 @@ export interface Inquiry {
 }
 
 export interface ApprovalsPayload {
-  allocations: Array<Allocation & { category: Category }>;
+  allocations: ApprovalAllocation[];
   inquiries: Inquiry[];
   sync: SyncState;
 }

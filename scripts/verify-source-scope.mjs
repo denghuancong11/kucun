@@ -19,7 +19,7 @@ async function api(route,role,body,status=200){const response=await fetch(base+r
 function snapshot(){return JSON.stringify(Object.fromEntries(db.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.db.prepare(`SELECT * FROM "${name}"`).all()])));}
 async function rejectUnchanged(route,role,body,status){const before=snapshot();await api(route,role,body,status);assert.equal(snapshot(),before);}
 async function receive(model,category,team,quantity,plan='SAME'){
- const csv=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},${quantity},4,XSAME,SyntheticWarehouseB,${plan},2026-09-24,${team},V1`;
+ const csv=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},${quantity},5,XSAME,SyntheticWarehouseB,${plan},2026-09-24,${team},V1`;
  const p=await fetch(base+'/api/transit/preview',{method:'POST',headers:{'x-role':'admin','x-file-name':encodeURIComponent(`${rid()}-${category}.csv`)},body:csv});assert.equal(p.status,200);const preview=await p.json();
  const imported=await api('/api/transit/import','admin',{previewToken:preview.previewToken,fileName:preview.fileName,fileHash:preview.fileSha256,templateHash:preview.templateSha256,rows:preview.rows,requestId:rid()});
  const row=imported.rows[0],role=team==='一团'?'assistant-1':'assistant-2',body={yes:'YES',expectedRevision:row.revision,requestId:rid()};
@@ -43,13 +43,14 @@ try{
    const bad=entry(model,two.key,'一团',1);await rejectUnchanged('/api/allocations','operation-1',bad,403);await rejectUnchanged('/api/allocations','operation-1',bad,403);
    check('隐藏墨盒来源与重复拒绝：所有表及dataVersion完全不变');
   }
+  // 该脚本验证团队范围；使用套/箱5的合法数量，避免混入调拨倍数校验。
   const body1=entry(model,one.key,'一团',5),body2=entry(model,two.key,'二团',5);
   let d1=(await api('/api/allocations','operation-1',body1)).record,d2=(await api('/api/allocations','operation-2',body2)).record;
   const replay=await api('/api/allocations','operation-1',body1);assert.equal(replay.deduped,true);
   if(category==='墨盒'){assert.deepEqual(Object.keys(replay.totals),[one.key]);assert.ok(!JSON.stringify(replay).includes(two.key));}
   const saved=db.db.prepare("SELECT response_json FROM idempotency_requests WHERE scope='allocation:create' AND request_id=?").get(body1.requestId);assert.ok(JSON.parse(saved.response_json).totals[two.key]);
   await rejectUnchanged('/api/allocations','operation-2',body1,403);
-  const tooMuch=entry(model,one.key,'一团',96);await rejectUnchanged('/api/allocations','operation-1',tooMuch,409);
+  const tooMuch=entry(model,one.key,'一团',100);await rejectUnchanged('/api/allocations','operation-1',tooMuch,409);
   db.syncLingxing({role:'business',items:[{asin:d1.asin,sales7d:11,sales30d:33,orderGrossProfit:1234.5,fbaAvailable:4,fbaPendingTransfer:5,fbaTransferring:6,fbaInbound:7},{asin:d2.asin,sales7d:22,sales30d:66,orderGrossProfit:9876.5,fbaAvailable:8,fbaPendingTransfer:9,fbaTransferring:10,fbaInbound:11}],capturedAt:new Date().toISOString(),requestId:rid()});
   for(const role of roles){const response=await api('/api/allocations?model='+model,role),records=Object.values(response.records).flat(),publicRows=Object.values(response.publicRecords).flat();
    assert.equal(records.length,role.includes('-')?1:2);assert.equal(publicRows.length,category==='硒鼓'?2:role.includes('-')?1:2);
@@ -76,7 +77,7 @@ try{
    const job=started[i].upgrade,body={sourceLineId:job.lines[0].id,completedQuantity:i?30:20,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',expectedRevision:job.revision,requestId:rid()};
    const result=await api(`/api/upgrades/direct/${job.id}/complete`,'purchasing',body);assert.equal(result.upgrade.inProgressQuantity,i?25:75);
    const after=snapshot();assert.equal((await api(`/api/upgrades/direct/${job.id}/complete`,'purchasing',body)).deduped,true);assert.equal(snapshot(),after);
-   const target=db.db.prepare('SELECT * FROM stock_batches WHERE model=? AND version=? AND source_team=?').get(model,'V2',i?'二团':'一团');assert.equal(target.pack_per_box,'4');assert.equal(db.getBalance(target.batch_key).onHand,i?30:20);
+   const target=db.db.prepare('SELECT * FROM stock_batches WHERE model=? AND version=? AND source_team=?').get(model,'V2',i?'二团':'一团');assert.equal(target.pack_per_box,'5');assert.equal(db.getBalance(target.batch_key).onHand,i?30:20);
   }
   const targets=db.db.prepare("SELECT batch_key,source_team FROM stock_batches WHERE model=? AND version='V2'").all(model);assert.equal(targets.length,2);assert.notEqual(targets[0].batch_key,targets[1].batch_key);
   assert.equal(db.getDocument(d1.id).batchKey,one.key);assert.equal(db.getDocument(d2.id).batchKey,two.key);
@@ -98,7 +99,7 @@ try{
     relocation=completed.upgrade.relocations[0];
    }
    const target=db.db.prepare("SELECT * FROM stock_batches WHERE model=? AND version='V2' AND source_team=?").get(model,index?'二团':'一团');
-   assert.equal(db.getBalance(target.batch_key).onHand,index?35:25);assert.equal(target.pack_per_box,'4');assert.equal(relocation.completedQuantity,5);
+   assert.equal(db.getBalance(target.batch_key).onHand,index?35:25);assert.equal(target.pack_per_box,'5');assert.equal(relocation.completedQuantity,5);
   }
   assert.equal(db.db.prepare("SELECT COUNT(*) n FROM stock_batches WHERE model=? AND version='V2'").get(model).n,2);
   check(`${category} 两团移仓分次2/3回库沿原来源分别合入本团升级目标，重放不重复入账`);

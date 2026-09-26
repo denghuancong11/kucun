@@ -119,6 +119,9 @@ try {
   const roles = ["admin", "assistant-1", "assistant-2", "business", "operation-1", "operation-2", "purchasing"];
   await fs.writeFile(path.join(stateRoot, "data", "permissions.json"), JSON.stringify({ 墨盒: Object.fromEntries(roles.map((value) => [value, { summary: true, detail: true, expand: true, actions: true }])) }));
   createInventoryDatabase({ databasePath: path.join(stateRoot, "data", INVENTORY_DATABASE_NAME) });
+  const packFixtureDb = new InventoryDatabase(stateRoot);
+  packFixtureDb.db.prepare("UPDATE stock_batches SET pack_per_box = '1' WHERE model = ? AND version = 'V11'").run("SYNTH-TONER-001");
+  packFixtureDb.close();
   const port = await new Promise((resolve, reject) => {
     const listener = net.createServer(); listener.once("error", reject);
     listener.listen(0, "127.0.0.1", () => { const value = listener.address().port; listener.close((error) => error ? reject(error) : resolve(value)); });
@@ -560,13 +563,13 @@ try {
     const transit = scopedStockDb.db.prepare(`INSERT INTO transit_batches(
       model,quantity,remaining_quantity,plan,ship_date,version,fnsku,brand,transport_method,shipping_method,team,
       logistics_status,on_shelf_indicator,status,source_row,revision,created_at,updated_at,on_shelf_by_role,on_shelf_at,pack_per_box
-    ) VALUES(?,100,0,?,?,?,?,'','','整柜',?,'已签收','已上架','on_shelf',1,1,?,?, 'admin', ?, '4')`)
+    ) VALUES(?,100,0,?,?,?,?,'','','整柜',?,'已签收','已上架','on_shelf',1,1,?,?, 'admin', ?, '3')`)
       .run(spec.model, source.plan, source.date, source.version, sourceFnsku, department, at, at, at);
     const batchKey = `${spec.model}#${source.plan}#${source.date}#${source.version}#${sourceFnsku}`;
     scopedStockDb.db.prepare(`INSERT INTO stock_batches(
       batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,revision,created_by_import_id,
       created_by_transit_id,is_legacy_placeholder,warehouse,pack_per_box
-    ) VALUES(?,?,?,?,?,?,0,?,1,NULL,?,0,?, '4')`)
+    ) VALUES(?,?,?,?,?,?,0,?,1,NULL,?,0,?, '3')`)
       .run(batchKey, spec.model, source.plan, source.date, source.version, sourceFnsku, at, Number(transit.lastInsertRowid), 'SyntheticWarehouseA');
     scopedStockDb.db.prepare(`INSERT INTO stock_receipts(transit_id,batch_key,quantity,created_by_role,created_at,request_id,ledger_watermark)
       VALUES(?,?,100,'admin',?,?,0)`).run(Number(transit.lastInsertRowid), batchKey, at, `approval-team-source-${key}`);

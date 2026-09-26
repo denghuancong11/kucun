@@ -7,11 +7,11 @@ import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { useApprovals } from "../hooks/useApprovals";
 import { useInventoryCatalog } from "../hooks/useInventory";
-import type { Allocation, Category, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
+import type { ApprovalAllocation, Category, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { operationGroups } from "../utils/roles";
 
-type ApprovalItem = { kind: "allocation"; record: Allocation & { category: Category } } | { kind: "inquiry"; record: Inquiry };
+type ApprovalItem = { kind: "allocation"; record: ApprovalAllocation } | { kind: "inquiry"; record: Inquiry };
 type TypeFilter = "all" | ApprovalItem["kind"];
 type ProgressFilter = "all" | "active";
 function isActive(item: ApprovalItem) { return item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "rejected" : item.record.status.startsWith("pending_"); }
@@ -84,6 +84,14 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const review = (decision: "approve" | "reject") => {
     const approvedQuantity = Number(quantity);
     if (decision === "approve" && (!Number.isInteger(approvedQuantity) || approvedQuantity <= 0)) { setError("审核数量请填写大于 0 的整数"); return; }
+    if (decision === "approve" && item.kind === "allocation") {
+      const packText = String(item.record.packPerBox ?? "").trim();
+      const pack = Number(packText);
+      if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
+        setError("来源批次套/箱未维护或不是正整数，请补齐后再批准。"); return;
+      }
+      if (approvedQuantity % pack !== 0) { setError(`来源批次套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`); return; }
+    }
     const payload = { decision, ...(decision === "approve" ? { approvedQuantity } : {}), businessNote: businessNote.trim(), expectedRevision: row.revision, requestId: createRequestId(`${item.kind}-review`) };
     void perform({ execute: () => item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload), message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
   };
@@ -108,6 +116,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     <tr className="approval-action-row"><td colSpan={11 + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.documentNo}`} onSubmit={event => event.preventDefault()}>
         <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" value={quantity} disabled={busy || uncertain} onChange={event => setQuantity(event.target.value)} /></label>
+        {item.kind === "allocation" && <label className="field"><span>套/箱</span><input type="text" value={item.record.packPerBox?.trim() ? item.record.packPerBox : "未维护"} readOnly /></label>}
         <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
         <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
         <button className="btn btn-primary" type="button" disabled={busy || uncertain} onClick={() => review("approve")}>批准</button>

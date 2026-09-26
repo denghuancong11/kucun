@@ -1,4 +1,4 @@
-// 独立 HTTP 回归：仅限制运营按所选在库批次的套/箱倍数提交调拨。
+// 独立 HTTP 回归：运营提交与商务批准调拨按所选在库批次套/箱校验，询库保持原规则。
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -57,13 +57,13 @@ async function receive({ model, plan, date = '2026-09-24', version = 'V1', quant
   const shelved = await api(`/api/transit/${imported.rows[0].id}/on-shelf`, 'admin', {
     yes: 'YES', expectedRevision: imported.rows[0].revision, requestId: requestId(),
   });
-  return { ...shelved, model, plan, date, version };
+  return { ...shelved, model, plan, date, version, team };
 }
 
 function allocationBody(batch, role, quantity, suffix) {
   return {
     model: batch.model, plan: batch.plan, date: batch.date, version: batch.version, sourceBatchKey: batch.batchKey,
-    quantity, department: role === 'operation-2' ? '二团' : '一团', store: 'AUS', operator: `pack-${suffix}`,
+    quantity, department: role === 'operation-2' || batch.team === '二团' ? '二团' : '一团', store: 'AUS', operator: `pack-${suffix}`,
     fnsku: 'XPACK00001', asin: 'BPACK00001', requestId: requestId(),
   };
 }
@@ -143,15 +143,113 @@ try {
     assert.equal(snapshot(), beforeInvalid);
   });
 
-  await test('规则只限运营提交：管理员可按旧规则提交，商务审批可改为非倍数', async () => {
-    const adminBody = allocationBody(batch4, 'admin', 5, 'admin-old-rule');
-    const submitted = await api('/api/allocations', 'admin', adminBody);
+  await test('商务按来源batchKey显示套/箱；拒绝0件和非4倍数，仍可把申请5增至16并只新增锁定11', async () => {
+    const submitted = await api('/api/allocations', 'admin', allocationBody(batch4, 'admin', 5, 'admin-increase'));
     assert.equal(submitted.record.quantity, 5);
-    const reviewed = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+    const approvals = await api('/api/approvals', 'business');
+    assert.equal(approvals.allocations.find(record => record.id === submitted.record.id)?.packPerBox, '4');
+    assert.equal(db.getBalance(batch4.batchKey).available, 11);
+
+    let before = snapshot();
+    const zero = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 0, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    }, null);
+    assert.equal(zero.status, 400);
+    assert.equal(snapshot(), before);
+
+    const fractional = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 5.5, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    }, null);
+    assert.equal(fractional.status, 400);
+    assert.equal(fractional.code, 'invalid_quantity');
+    assert.equal(snapshot(), before);
+
+    before = snapshot();
+    const nonMultiple = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
       decision: 'approve', approvedQuantity: 7, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    }, null);
+    assert.equal(nonMultiple.status, 400, JSON.stringify(nonMultiple));
+    assert.equal(nonMultiple.code, 'allocation_pack_multiple');
+    assert.equal(nonMultiple.error, '来源批次套/箱为 4，审核数量须为 4 的整数倍。');
+    assert.equal(snapshot(), before);
+
+    const approvalBody = {
+      decision: 'approve', approvedQuantity: 16, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    };
+    const approved = await api(`/api/allocations/${submitted.record.id}/review`, 'business', approvalBody);
+    assert.equal(approved.record.approvedQuantity, 16);
+    assert.equal(approved.record.quantity, 16);
+    assert.equal(db.getBalance(batch4.batchKey).locked, 40);
+    assert.equal(db.getBalance(batch4.batchKey).available, 0);
+    assert.equal(db.db.prepare("SELECT locked_delta FROM inventory_ledger WHERE document_id=? AND entry_type='review_adjustment'").get(submitted.record.id).locked_delta, 11);
+    const afterApproval = snapshot();
+    const replay = await api(`/api/allocations/${submitted.record.id}/review`, 'business', approvalBody);
+    assert.equal(replay.deduped, true);
+    assert.equal(snapshot(), afterApproval);
+  });
+
+  await test('商务按所选套/箱6批次校验，忽略客户端伪造的套/箱4并接受12', async () => {
+    const submitted = await api('/api/allocations', 'admin', allocationBody(batch6Probe, 'admin', 5, 'admin-pack-six'));
+    const approvals = await api('/api/approvals', 'business');
+    assert.equal(approvals.allocations.find(record => record.id === submitted.record.id)?.packPerBox, '6');
+    const before = snapshot();
+    const rejected = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 8, packPerBox: '4', businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    }, null);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected));
+    assert.equal(rejected.code, 'allocation_pack_multiple');
+    assert.equal(rejected.error, '来源批次套/箱为 6，审核数量须为 6 的整数倍。');
+    assert.equal(snapshot(), before);
+    const overAvailable = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 24, packPerBox: '4', businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    }, null);
+    assert.equal(overAvailable.status, 409, JSON.stringify(overAvailable));
+    assert.equal(overAvailable.code, 'insufficient_available');
+    assert.equal(snapshot(), before);
+    const approved = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 12, packPerBox: '4', businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
     });
-    assert.equal(reviewed.record.approvedQuantity, 7);
-    assert.equal(reviewed.record.quantity, 7);
+    assert.equal(approved.record.approvedQuantity, 12);
+    assert.equal(db.getBalance(batch6Probe.batchKey).locked, 12);
+  });
+
+  await test('商务减少审核数量仍释放多余锁定', async () => {
+    const submitted = await api('/api/allocations', 'admin', allocationBody(batch4Probe, 'admin', 12, 'admin-decrease'));
+    assert.equal(db.getBalance(batch4Probe.batchKey).available, 8);
+    const approved = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 4, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    });
+    assert.equal(approved.record.approvedQuantity, 4);
+    assert.equal(db.getBalance(batch4Probe.batchKey).locked, 4);
+    assert.equal(db.getBalance(batch4Probe.batchKey).available, 16);
+    assert.equal(db.db.prepare("SELECT locked_delta FROM inventory_ledger WHERE document_id=? AND entry_type='review_adjustment'").get(submitted.record.id).locked_delta, -8);
+  });
+
+  for (const [plan, pack] of [['APPROVAL-PACK-MISSING', null], ['APPROVAL-PACK-INVALID', '0']]) {
+    await test(`来源套/箱${pack == null ? '缺失' : '无效'}时商务批准无写入`, async () => {
+      const source = await receive({ model, plan, quantity: 20, pack: '4' });
+      db.db.prepare('UPDATE stock_batches SET pack_per_box=? WHERE batch_key=?').run(pack, source.batchKey);
+      const submitted = await api('/api/allocations', 'admin', allocationBody(source, 'admin', 5, plan));
+      const before = snapshot();
+      const rejected = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+        decision: 'approve', approvedQuantity: 4, businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+      }, null);
+      assert.equal(rejected.status, 400, JSON.stringify(rejected));
+      assert.equal(rejected.code, 'invalid_pack_per_box');
+      assert.equal(rejected.error, '来源批次套/箱未维护或不是正整数，请补齐后再批准。');
+      assert.equal(snapshot(), before);
+    });
+  }
+
+  await test('来源套/箱缺失时仍可拒绝并释放预锁', async () => {
+    const source = await receive({ model, plan: 'APPROVAL-PACK-REJECT', quantity: 20, pack: '4' });
+    db.db.prepare('UPDATE stock_batches SET pack_per_box=NULL WHERE batch_key=?').run(source.batchKey);
+    const submitted = await api('/api/allocations', 'admin', allocationBody(source, 'admin', 5, 'missing-pack-reject'));
+    const rejected = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
+      decision: 'reject', businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
+    });
+    assert.equal(rejected.record.approvalStatus, 'rejected');
+    assert.equal(db.getBalance(source.batchKey).locked, 0);
   });
 
   await test('询库仍允许5件，不受库存批次套/箱倍数限制', async () => {
@@ -161,6 +259,10 @@ try {
     });
     assert.equal(inquiry.record.quantity, 5);
     assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM inquiry_documents WHERE operator_name='inquiry-pack-unrestricted'").get().n, 1);
+    const reviewed = await api(`/api/inquiries/${inquiry.record.id}/review`, 'business', {
+      decision: 'approve', approvedQuantity: 5, businessNote: '', expectedRevision: inquiry.record.revision, requestId: requestId(),
+    });
+    assert.equal(reviewed.record.approvedQuantity, 5);
   });
 
   db.assertInventoryInvariants();

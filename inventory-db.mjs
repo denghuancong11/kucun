@@ -3575,12 +3575,17 @@ export class InventoryDatabase {
     const cutoff = this.refreshApprovalDisplay();
     return {
       // 未完成单始终保留；终态按实际办结时间在下一次计划截止点隐藏。
-      allocations: this.db.prepare(`SELECT * FROM allocation_documents WHERE status <> 'draft'
-        AND (status = 'pending' OR ? IS NULL OR CASE
-          WHEN status = 'confirmed' THEN confirmed_at
-          WHEN approval_status = 'rejected' THEN reviewed_at
-          ELSE created_at END >= ?)
-        ORDER BY updated_at DESC, id DESC`).all(cutoff, cutoff).map((row) => this.documentRecord(row)),
+      allocations: this.db.prepare(`SELECT d.*, b.pack_per_box AS source_pack_per_box
+        FROM allocation_documents d LEFT JOIN stock_batches b ON b.batch_key = d.batch_key
+        WHERE d.status <> 'draft'
+        AND (d.status = 'pending' OR ? IS NULL OR CASE
+          WHEN d.status = 'confirmed' THEN d.confirmed_at
+          WHEN d.approval_status = 'rejected' THEN d.reviewed_at
+          ELSE d.created_at END >= ?)
+        ORDER BY d.updated_at DESC, d.id DESC`).all(cutoff, cutoff).map((row) => ({
+          ...this.documentRecord(row),
+          packPerBox: row.source_pack_per_box == null ? null : String(row.source_pack_per_box),
+        })),
       inquiries: this.db.prepare(`SELECT * FROM inquiry_documents
         WHERE (status IN ('pending_business', 'pending_purchasing', 'pending_assistant') OR ? IS NULL OR CASE
           WHEN status = 'archived' THEN archived_at
@@ -4913,6 +4918,17 @@ export class InventoryDatabase {
       this.requireRevision(row, expectedRevision);
       if (row.status !== "pending" || row.approval_status !== "pending") throw new BusinessError(409, "invalid_approval_status", "仅待商务审核的调拨可审核");
       normalizeAsin(row.asin);
+      if (decision === "approve") {
+        const sourceBatch = this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key);
+        const packText = String(sourceBatch?.pack_per_box ?? "").trim();
+        const pack = Number(packText);
+        if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
+          throw new BusinessError(400, "invalid_pack_per_box", "来源批次套/箱未维护或不是正整数，请补齐后再批准。");
+        }
+        if (approved % pack !== 0) {
+          throw new BusinessError(400, "allocation_pack_multiple", `来源批次套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`);
+        }
+      }
       const at = new Date().toISOString();
       const reserve = this.db.prepare("SELECT id FROM inventory_ledger WHERE document_id = ? AND entry_type = 'reserve'").get(id);
       if (decision === "approve") {
