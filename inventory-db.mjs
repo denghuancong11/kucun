@@ -3280,14 +3280,18 @@ export class InventoryDatabase {
   transaction(task) {
     const run = () => {
       this.changedBatches = new Set();
-      this.db.exec("BEGIN IMMEDIATE");
+      let started = false;
       try {
+        this.db.exec("BEGIN IMMEDIATE");
+        started = true;
         const result = task();
         for (const batch of this.changedBatches) this.getBalance(batch);
         this.db.exec("COMMIT");
         return result;
       } catch (error) {
-        try { this.db.exec("ROLLBACK"); } catch { /* preserve original error */ }
+        if (started) {
+          try { this.db.exec("ROLLBACK"); } catch { /* preserve original error */ }
+        }
         if (/SQLITE_BUSY|database is locked/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)) {
           throw new BusinessError(409, "database_busy", "库存数据库正被其他操作占用，请刷新后重试");
         }
@@ -4987,6 +4991,7 @@ export class InventoryDatabase {
   }
 
   upgradeLedgerForAuditEvent(row) {
+    if (Array.isArray(row.scopedUpgradeLedger)) return row.scopedUpgradeLedger;
     if (!String(row.event_type).startsWith("upgrade_")) return [];
     const payload = parseEventPayload(row.payload_json);
     let operationId = Number(payload.operationId);
@@ -5025,7 +5030,7 @@ export class InventoryDatabase {
         onHandDelta: visibleLedger.reduce((sum, entry) => sum + Number(entry.on_hand_delta), 0),
         lockedDelta: visibleLedger.reduce((sum, entry) => sum + Number(entry.locked_delta), 0),
       };
-      return { ...row, currentTeam: group, payload_json: JSON.stringify(scopedPayload) };
+      return { ...row, currentTeam: group, payload_json: JSON.stringify(scopedPayload), scopedUpgradeLedger: visibleLedger };
     }
     if (String(row.event_type).startsWith('transit_')) {
       const imported = payload.importId == null ? [] : this.transitImportRows(Number(payload.importId));
@@ -5186,8 +5191,9 @@ export class InventoryDatabase {
     }
     const businessNo = String(options.businessNo ?? "").trim();
     if (businessNo) {
-      clauses.push("d.document_no LIKE ? ESCAPE '\\'");
-      parameters.push(`%${escapeLike(businessNo)}%`);
+      clauses.push("(d.document_no LIKE ? ESCAPE '\\' OR CASE WHEN json_valid(e.payload_json) THEN json_extract(e.payload_json, '$.upgradeNo') LIKE ? ESCAPE '\\' ELSE 0 END)");
+      const pattern = `%${escapeLike(businessNo)}%`;
+      parameters.push(pattern, pattern);
     }
     const model = String(options.model ?? "").trim();
     if (model) {
