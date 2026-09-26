@@ -252,6 +252,16 @@ async function requireActions(role, category) {
   }
 }
 
+async function requireTransitImportActions(role, fileName, rows) {
+  await requireActions(role, transitCategoryFromFileName(fileName));
+  // 已有型号沿用库存类目，文件名不能绕过它的操作权限。
+  const categories = new Set(rows.map(item => {
+    const data = item?.data ?? item;
+    return inventory.getModel(String(data?.model ?? data?.ITEM ?? "").trim())?.category;
+  }).filter(Boolean));
+  for (const category of categories) await requireActions(role, category);
+}
+
 function requireRole(request) {
   const role = requestRole(request);
   if (!role) throw new BusinessError(403, "invalid_demo_role", "缺少有效角色，无法执行该操作");
@@ -1491,6 +1501,7 @@ const server = http.createServer(async (request, response) => {
       const fileName = decodeFileNameHeader(request.headers["x-file-name"], "upload.xlsx");
       await requireActions(role, transitCategoryFromFileName(fileName));
       const parsed = parseTransitImportRows(body, fileName, { sheetName: sheetNameHeader(request), dateYear: dateYearHeader(request) });
+      await requireTransitImportActions(role, fileName, parsed.rows);
       inventory.requireTransitImportTeams(role, parsed.rows);
       const fileSha256 = hashBuffer(body);
       const templateSha256 = hashTemplate(parsed.headers);
@@ -1507,8 +1518,8 @@ const server = http.createServer(async (request, response) => {
       const role = requireRole(request);
       if (!transitRoleSet.has(role)) throw new BusinessError(403, "transit_import_forbidden", "当前角色无权导入在途库存");
       const payload = await parseJsonRequest(request);
-      await requireActions(role, transitCategoryFromFileName(payload.fileName));
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      await requireTransitImportActions(role, payload.fileName, rows);
       const result = inventory.transitImport({
         role,
         previewToken: requirePreviewToken(payload),
