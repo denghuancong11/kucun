@@ -1,0 +1,173 @@
+// 真实 Edge、独立 SQLite：运营调拨按当前所选批次套/箱倍数拦截，询库保持原规则。
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { chromium } from 'playwright-core';
+import { createInventoryDatabase, InventoryDatabase } from '../../inventory-db.mjs';
+import { createTestInstanceId, freePort, waitForOwnedServer } from '../../scripts/test-server-ownership.mjs';
+
+const root = path.resolve(import.meta.dirname, '../..');
+const output = process.env.ASTER_ALLOCATION_PACK_PAGE_OUTPUT || path.join(root, '.test-output/allocation-pack-multiples-page');
+const state = await fs.mkdtemp(path.join(os.tmpdir(), 'aster-allocation-pack-page-'));
+await fs.mkdir(output, { recursive: true });
+createInventoryDatabase({ databasePath: path.join(state, 'data/aster-inventory.sqlite'), seedCatalogData: false });
+const db = new InventoryDatabase(state);
+const port = await freePort();
+const base = `http://127.0.0.1:${port}`;
+const instanceId = createTestInstanceId('allocation-pack-page');
+const server = spawn(process.execPath, [path.join(root, 'server.mjs')], {
+  cwd: root, windowsHide: true, stdio: 'ignore',
+  env: { ...process.env, ASTER_STATE_ROOT: state, HOST: '127.0.0.1', PORT: String(port), PROD: '1', ASTER_TEST_INSTANCE_ID: instanceId },
+});
+let browser;
+let page;
+let failure;
+const checks = [];
+const allocationRequests = [];
+const pageErrors = [];
+const check = name => { checks.push(name); console.log(`PASS ${name}`); };
+const rid = () => crypto.randomUUID();
+
+async function api(route, role = 'admin', body) {
+  const response = await fetch(`${base}${route}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'x-role': role, 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+  return result;
+}
+
+async function receive({ model, plan, quantity = 40, pack }) {
+  const csv = `ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},${quantity},${pack},XPACK00001,SyntheticWarehouseA,${plan},2026-09-24,一团,V1`;
+  const previewResponse = await fetch(`${base}/api/transit/preview`, {
+    method: 'POST', headers: { 'x-role': 'admin', 'x-file-name': encodeURIComponent(`allocation-pack-ui-硒鼓-${plan}.csv`) }, body: csv,
+  });
+  const previewText = await previewResponse.text();
+  assert.equal(previewResponse.status, 200, previewText);
+  const preview = JSON.parse(previewText);
+  const imported = await api('/api/transit/import', 'admin', {
+    previewToken: preview.previewToken, fileName: preview.fileName, fileHash: preview.fileSha256,
+    templateHash: preview.templateSha256, rows: preview.rows, requestId: rid(),
+  });
+  const shelved = await api(`/api/transit/${imported.rows[0].id}/on-shelf`, 'admin', {
+    yes: 'YES', expectedRevision: imported.rows[0].revision, requestId: rid(),
+  });
+  return { batchKey: shelved.batchKey, model, plan };
+}
+
+async function openAllocation(batch) {
+  const stockRow = page.locator('.detail-stock-table tbody tr').filter({ hasText: batch.plan }).first();
+  await stockRow.waitFor({ state: 'visible' });
+  await stockRow.locator('.alloc-toggle').click();
+  return page.locator('.allocation-panel');
+}
+
+async function fillAllocation(panel, { quantity, operator }) {
+  await panel.locator('input[type="number"]').fill(String(quantity));
+  for (const [label, value] of Object.entries({
+    '调拨店铺': 'AUS', '调拨运营': operator, '已贴 FNSKU': 'XPACK00001', 'ASIN（必填）': 'BPACK00001',
+  })) await panel.getByLabel(label, { exact: true }).fill(value);
+}
+
+try {
+  await waitForOwnedServer({ base, child: server, instanceId });
+  const model = 'PACK-MULTIPLE-UI';
+  const batch4 = await receive({ model, plan: 'UI-PACK4', pack: '4' });
+  const batch6 = await receive({ model, plan: 'UI-PACK6', pack: '6' });
+  const missing = await receive({ model, plan: 'UI-PACK-MISSING', pack: '4' });
+  db.db.prepare('UPDATE stock_batches SET pack_per_box = NULL WHERE batch_key = ?').run(missing.batchKey);
+  const invalid = await receive({ model, plan: 'UI-PACK-INVALID', pack: '4' });
+  db.db.prepare("UPDATE stock_batches SET pack_per_box = '0' WHERE batch_key = ?").run(invalid.batchKey);
+
+  browser = await chromium.launch({ headless: true, executablePath: process.env.ASTER_BROWSER_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' });
+  page = await browser.newPage({ viewport: { width: 1500, height: 1100 } });
+  page.setDefaultTimeout(10000);
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/allocations' && request.method() === 'POST') allocationRequests.push(request.postDataJSON());
+  });
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.addInitScript(() => sessionStorage.setItem('aster-current-role', 'operation-1'));
+  await page.goto(`${base}/?q=${encodeURIComponent(model)}&model=${encodeURIComponent(model)}`);
+  await page.getByRole('button', { name: '询库', exact: true }).waitFor();
+
+  const fourForm = await openAllocation(batch4);
+  await fillAllocation(fourForm, { quantity: 5, operator: 'ui-pack-four-reject' });
+  await fourForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  const fourWarning = '本批次套/箱为 4，调拨数量须为 4 的整数倍。';
+  await fourForm.getByRole('alert').filter({ hasText: fourWarning }).waitFor();
+  assert.equal(await fourForm.locator('input[type="number"]').inputValue(), '5');
+  assert.equal(allocationRequests.length, 0);
+  assert.equal(await fourForm.locator('input[type="number"]').getAttribute('step'), '1');
+  check('所选套/箱4的非倍数5显示明确警告、保留输入并在前端阻止请求');
+
+  await fourForm.locator('input[type="number"]').fill('8');
+  await fourForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  await fourForm.getByRole('status').waitFor();
+  assert.equal(allocationRequests.length, 1);
+  assert.equal(allocationRequests[0].sourceBatchKey, batch4.batchKey);
+  assert.equal(Object.hasOwn(allocationRequests[0], 'packPerBox'), false);
+  assert.equal(db.db.prepare("SELECT quantity FROM allocation_documents WHERE operator_name='ui-pack-four-reject'").get().quantity, 8);
+  check('修改为套/箱4的合法倍数8后成功提交并预锁');
+
+  const sixForm = await openAllocation(batch6);
+  await fillAllocation(sixForm, { quantity: 8, operator: 'ui-pack-six-reject' });
+  const sixWarning = '本批次套/箱为 6，调拨数量须为 6 的整数倍。';
+  await sixForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  await sixForm.getByRole('alert').filter({ hasText: sixWarning }).waitFor();
+  assert.equal(allocationRequests.length, 1);
+  assert.equal(await sixForm.locator('input[type="number"]').inputValue(), '8');
+  await sixForm.locator('input[type="number"]').fill('12');
+  await sixForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  await sixForm.getByRole('status').waitFor();
+  assert.equal(allocationRequests.length, 2);
+  assert.equal(allocationRequests[1].sourceBatchKey, batch6.batchKey);
+  assert.equal(Object.hasOwn(allocationRequests[1], 'packPerBox'), false);
+  assert.equal(db.db.prepare('SELECT quantity FROM allocation_documents ORDER BY id DESC LIMIT 1').get().quantity, 12);
+  check('同型号套/箱6的批次按自身基数拒绝8并允许12');
+
+  for (const [batch, operator] of [[missing, 'ui-pack-missing'], [invalid, 'ui-pack-invalid']]) {
+    const form = await openAllocation(batch);
+    await fillAllocation(form, { quantity: 4, operator });
+    const warning = '本批次套/箱未维护或不是正整数，请补齐后再调拨。';
+    await form.getByRole('alert').filter({ hasText: warning }).waitFor();
+    await form.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+    assert.equal(allocationRequests.length, 2);
+    assert.equal(db.db.prepare('SELECT id FROM allocation_documents WHERE operator_name = ?').get(operator), undefined);
+  }
+  check('缺失和无效套/箱均提示补齐并阻止运营调拨');
+
+  await page.getByRole('button', { name: '询库', exact: true }).click();
+  const inquiry = page.getByRole('dialog');
+  await inquiry.getByLabel('询库数量（必填）', { exact: true }).fill('5');
+  for (const [label, value] of Object.entries({ '询库店铺（必填）': 'AUS', '询库运营（必填）': 'ui-inquiry-pack', 'ASIN（必填）': 'BPACK00002', 'FNSKU（必填）': 'XPACK00002' })) {
+    await inquiry.getByLabel(label, { exact: true }).fill(value);
+  }
+  await inquiry.getByRole('button', { name: '提交询库', exact: true }).click();
+  await inquiry.waitFor({ state: 'hidden' });
+  assert.equal(db.db.prepare("SELECT requested_quantity FROM inquiry_documents WHERE operator_name='ui-inquiry-pack'").get().requested_quantity, 5);
+  assert.equal(allocationRequests.length, 2);
+  check('询库表单仍可按旧规则提交数量5');
+
+  assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM allocation_documents WHERE operator_name LIKE 'ui-pack-%'").get().n, 2);
+  assert.deepEqual(pageErrors, []);
+  db.assertInventoryInvariants();
+  assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(), []);
+  check('页面交互结束后库存恒等式与外键保持一致');
+} catch (error) {
+  failure = error.stack;
+  await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true });
+  throw error;
+} finally {
+  await browser?.close();
+  db.close();
+  server.kill();
+  if (server.exitCode === null) await once(server, 'exit');
+  await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ state, base, checks, allocationRequests, pageErrors, failure }, null, 2));
+}
+
+console.log(`ALLOCATION_PACK_MULTIPLES_PAGE_PASS ${checks.length}`);

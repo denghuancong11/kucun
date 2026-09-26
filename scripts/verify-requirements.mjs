@@ -161,6 +161,8 @@ try {
     墨盒: Object.fromEntries(roles.map((role) => [role, { summary: true, detail: true, expand: true, actions: true }])),
   }));
   createInventoryDatabase({ databasePath });
+  // 本脚本不验证箱规；为审批与并发样例显式配置相关合成批次为每箱1件。
+  assert.equal(writeSql("UPDATE stock_batches SET pack_per_box='1' WHERE model=? AND plan=? AND version IN ('V11','V12')", batch.model, batch.plan).changes, 2);
   await start();
 
   const missing = await call("POST", "/api/allocations", "operation-1", { ...allocationBody(100, "missing"), asin: "" }, 400);

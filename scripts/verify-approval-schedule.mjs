@@ -17,6 +17,8 @@ const setTime=at=>fs.writeFile(clockFile,at);
 await setTime('2026-09-21T12:00:00.000Z');
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('approval-pending');
+// 本脚本验证审批展示时间，不验证箱规；显式配置该夹具为每箱1件以保留原审批数量样例。
+assert.equal(db.db.prepare("UPDATE stock_batches SET pack_per_box='1' WHERE model='SYNTH-TONER-001' AND plan='TEST-PLAN-TONER' AND ship_date='2026-02-10' AND version='V11'").run().changes,1);
 const child=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'ignore',env:{...process.env,ASTER_STATE_ROOT:state,ASTER_TEST_INSTANCE_ID:instanceId,HOST:'127.0.0.1',PORT:String(port),PROD:'1',TZ:'America/Los_Angeles'}});
 const rid=()=>crypto.randomUUID(),checks=[],calls=[];
 const check=name=>{checks.push(name);console.log('PASS '+name);};

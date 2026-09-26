@@ -144,6 +144,7 @@ function StockPane({
                 date: row.date ?? "",
                 version: row.version ?? "",
                 fnsku: row.fnsku ?? "",
+                packPerBox: row.packPerBox ?? null,
               };
 
               return (

@@ -278,7 +278,7 @@ export function createAllocation(
   return requestJson("/api/allocations", role, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...batch, ...entry, sourceBatchKey: batch.key }),
+    body: JSON.stringify({ model: batch.model, plan: batch.plan, date: batch.date, version: batch.version, ...entry, sourceBatchKey: batch.key }),
   });
 }
 

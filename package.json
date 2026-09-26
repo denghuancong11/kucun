@@ -14,7 +14,7 @@
     "typecheck": "npm --prefix web run typecheck",
     "lint": "npm --prefix web run lint",
     "test": "node scripts/verify-requirements.mjs && node scripts/verify-inquiry-final-quantity.mjs",
-    "test:inventory-regressions": "node scripts/verify-backend-audit.mjs && node scripts/verify-transit-category-permissions.mjs && node scripts/verify-approval-schedule.mjs && npm --prefix web run build && node web/scripts/business-response-recovery-page-check.mjs && node web/scripts/configured-warehouse-page-check.mjs && node web/scripts/role-session-page-check.mjs",
+    "test:inventory-regressions": "node scripts/verify-backend-audit.mjs && node scripts/verify-transit-category-permissions.mjs && node scripts/verify-approval-schedule.mjs && node scripts/verify-allocation-pack-multiples.mjs && npm --prefix web run build && node web/scripts/business-response-recovery-page-check.mjs && node web/scripts/configured-warehouse-page-check.mjs && node web/scripts/role-session-page-check.mjs && node web/scripts/allocation-pack-multiples-page-check.mjs",
     "test:teams": "node scripts/verify-team-scope.mjs",
     "test:multi-page": "node web/scripts/multi-page-sync-check.mjs",
     "test:all-business-sync": "node web/scripts/all-business-sync-check.mjs",

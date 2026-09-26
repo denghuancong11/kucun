@@ -4870,6 +4870,16 @@ export class InventoryDatabase {
       if (!batch) throw new BusinessError(400, "unknown_batch", `型号“${model}”无此在库批次`);
       const visibleKeys = this.visibleStockBatchKeys(model, this.getModel(model)?.category, OPERATION_GROUPS[role] ?? null);
       if (visibleKeys && !visibleKeys.has(batch.batch_key)) throw new BusinessError(403, "source_team_forbidden", "当前角色不能使用该墨盒来源批次");
+      if (["operation-1", "operation-2"].includes(role)) {
+        const packText = String(batch.pack_per_box ?? "").trim();
+        const pack = Number(packText);
+        if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
+          throw new BusinessError(400, "invalid_pack_per_box", "本批次套/箱未维护或不是正整数，请补齐后再调拨。");
+        }
+        if (quantity % pack !== 0) {
+          throw new BusinessError(400, "allocation_pack_multiple", `本批次套/箱为 ${pack}，调拨数量须为 ${pack} 的整数倍。`);
+        }
+      }
       const key = batch.batch_key;
       const balance = this.getBalance(key);
       if (quantity > balance.available) throw new BusinessError(409, "insufficient_available", `超出可用库存（当前可用 ${balance.available}）`);
