@@ -44,7 +44,7 @@ $env:ASTER_STATE_ROOT = Join-Path $env:LOCALAPPDATA 'UnismarInventory\developmen
 $env:HOST = '127.0.0.1'
 $env:PORT = '4174'
 $env:PROD = '1'
-npm run initialize
+npm run initialize -- --state-root "$env:ASTER_STATE_ROOT"
 npm start
 ```
 
