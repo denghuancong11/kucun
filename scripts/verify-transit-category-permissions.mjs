@@ -101,5 +101,3 @@ try {
 console.log(JSON.stringify({ passed, failed: failures.length, failures, state }));
 if (failures.length) console.error(serverErrors);
 process.exitCode = failures.length ? 1 : 0;
-
-
