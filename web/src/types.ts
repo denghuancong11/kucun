@@ -1,7 +1,8 @@
 export type RequirementKey = "req1" | "req3" | "req4" | "approvals" | "audit";
 
 /* 助理与运营分别按团队办理；硒鼓库存明细和公开调拨摘要保持跨团可见。 */
-export type Role = "admin" | "assistant-1" | "assistant-2" | "operation-1" | "operation-2" | "purchasing" | "business";
+export const ROLES = ["admin", "assistant-1", "assistant-2", "operation-1", "operation-2", "purchasing", "business"] as const;
+export type Role = typeof ROLES[number];
 
 /** 在途导入、物流更新及页面访问角色；助理数据范围仍由服务端按团队复核。 */
 export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing"];
