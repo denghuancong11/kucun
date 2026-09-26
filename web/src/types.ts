@@ -588,6 +588,7 @@ export interface RelocationUpgrade extends UpgradeBase {
 export type UpgradeJob = DirectUpgrade | RelocationUpgrade;
 
 export interface UpgradeDashboardPayload {
+  overseasWarehouses: string[];
   directSources: DirectUpgradeSource[];
   relocationCandidates: RelocationCandidate[];
   relocationWorkItems: RelocationWorkItem[];

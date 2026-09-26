@@ -132,6 +132,7 @@ export function Requirement4View({ role }: { role: Role }) {
   }, [role]);
 
   const dashboard = query.data;
+  const overseasWarehouses = dashboard?.overseasWarehouses ?? [];
   const sources = useMemo(() => {
     const map = new Map<string, RelocationSource>();
     for (const row of [...(dashboard?.relocationWorkItems ?? []), ...relocationJobs(dashboard?.upgrades ?? []), ...(dashboard?.relocationCandidates ?? [])]) map.set(candidateKey(row), row);
@@ -390,7 +391,7 @@ export function Requirement4View({ role }: { role: Role }) {
               ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || "—"}</dd></div>)}</dl>
             </Panel>}
             <RelocationWorkflow role={role} rows={relocationWorkItems.filter(row => candidateKey(row) === selectedKey)} procurementDrafts={procurementDrafts} setProcurementDrafts={setProcurementDrafts} operationDrafts={operationDrafts} setOperationDrafts={setOperationDrafts} shippingDrafts={shippingDrafts} setShippingDrafts={setShippingDrafts} busy={busy} onProcurement={submitProcurement} onOperation={submitOperation} onShipping={submitShipping} onRefresh={refreshAfterWrite} />
-            <RelocationHistory role={role} jobs={relocationHistory.filter(row => candidateKey(row) === selectedKey)} drafts={relocationCompleteDrafts} setDrafts={setRelocationCompleteDrafts} busy={busy} pending={pendingRelocation} onComplete={finishRelocation} onRefresh={refreshAfterWrite} />
+            <RelocationHistory role={role} overseasWarehouses={overseasWarehouses} jobs={relocationHistory.filter(row => candidateKey(row) === selectedKey)} drafts={relocationCompleteDrafts} setDrafts={setRelocationCompleteDrafts} busy={busy} pending={pendingRelocation} onComplete={finishRelocation} onRefresh={refreshAfterWrite} />
           </div>
         </div>
       ) : (
@@ -427,7 +428,7 @@ export function Requirement4View({ role }: { role: Role }) {
             )}
           </Panel>
 
-          <DirectHistory role={role} jobs={directHistory} drafts={directCompleteDrafts} setDrafts={setDirectCompleteDrafts} busy={busy} pending={pendingDirect} onComplete={finishDirect} />
+          <DirectHistory role={role} overseasWarehouses={overseasWarehouses} jobs={directHistory} drafts={directCompleteDrafts} setDrafts={setDirectCompleteDrafts} busy={busy} pending={pendingDirect} onComplete={finishDirect} />
         </>
       )}
       <Notice notice={notice} onClose={() => setNotice(null)} />
@@ -502,6 +503,7 @@ function RelocationWorkflow({
 
 function RelocationHistory({
   role,
+  overseasWarehouses,
   jobs,
   drafts,
   setDrafts,
@@ -511,6 +513,7 @@ function RelocationHistory({
   onRefresh,
 }: {
   role: Role;
+  overseasWarehouses: string[];
   jobs: RelocationUpgrade[];
   drafts: Record<number, CompleteDraft>;
   setDrafts: React.Dispatch<React.SetStateAction<Record<number, CompleteDraft>>>;
@@ -534,7 +537,7 @@ function RelocationHistory({
                         <div className="upgrade-inline-complete">
                           <input aria-label={`${row.relocationNo} 升级完成数量`} inputMode="numeric" placeholder={`最多 ${row.inProgressQuantity}`} value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, quantity: event.target.value } }))} />
                           <input aria-label={`${row.relocationNo} 升级完成版本号`} placeholder="新版本" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, version: event.target.value } }))} />
-                          <select aria-label={`${row.relocationNo} 目标海外仓`} value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [row.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option><option>SyntheticWarehouseB</option><option>SyntheticWarehouseA</option></select>
+                          <select aria-label={`${row.relocationNo} 目标海外仓`} value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [row.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option>{overseasWarehouses.map(warehouse => <option key={warehouse} value={warehouse}>{warehouse}</option>)}</select>
                           <button className="btn btn-primary btn-sm" type="button" disabled={(!recovery && !valid) || busy !== null} onClick={() => void onComplete(job, row.id, row.revision, row.inProgressQuantity)}>{busy === `upgrade-relocation-complete-${row.id}` ? "提交中…" : recovery ? "重试确认" : "完成入库"}</button>
                         </div>
                       ) : null}
@@ -545,6 +548,7 @@ function RelocationHistory({
 
 function DirectHistory({
   role,
+  overseasWarehouses,
   jobs,
   drafts,
   setDrafts,
@@ -553,6 +557,7 @@ function DirectHistory({
   onComplete,
 }: {
   role: Role;
+  overseasWarehouses: string[];
   jobs: DirectUpgrade[];
   drafts: Record<number, CompleteDraft>;
   setDrafts: React.Dispatch<React.SetStateAction<Record<number, CompleteDraft>>>;
@@ -588,7 +593,7 @@ function DirectHistory({
                 <select aria-label={`${job.upgradeNo} 完成来源批次`} value={selectedLine?.id ?? (recovery?.sourceLineId ?? "")} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, sourceLineId: Number(event.target.value)}}))}>{!selectedLine&&!recovery&&<option value="">请重新选择实际来源批次</option>}{job.lines.filter(line => line.inProgressQuantity > 0 || line.id === recovery?.sourceLineId).map(line => <option key={line.id} value={line.id}>{line.sourceTeam ? line.sourceTeam + " / " : ""}{line.warehouse || "历史仓库未确定"} / {line.plan} / {line.shipDate} / {line.fnsku}（{line.inProgressQuantity}）</option>)}</select>
                 <input aria-label={`${job.upgradeNo} 升级完成数量`} inputMode="numeric" placeholder="所选批次的完成数量" value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, quantity: event.target.value } }))} />
                 <input aria-label={`${job.upgradeNo} 升级完成版本号`} placeholder="升级完成版本号" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, version: event.target.value } }))} />
-                <select aria-label={`${job.upgradeNo} 目标海外仓`} value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option><option>SyntheticWarehouseB</option><option>SyntheticWarehouseA</option></select>
+                <select aria-label={`${job.upgradeNo} 目标海外仓`} value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option>{overseasWarehouses.map(warehouse => <option key={warehouse} value={warehouse}>{warehouse}</option>)}</select>
                           <button className="btn btn-primary" type="button" disabled={(!recovery && !valid) || busy !== null} onClick={() => void onComplete(job)}>{busy === `upgrade-direct-complete-${job.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button>
                 {!recovery&&!selectedLine&&<p className="form-hint">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}
                 {!recovery&&selectedLine&&quantity>selectedLine.inProgressQuantity&&<p className="form-hint">所选批次还剩 {selectedLine.inProgressQuantity} 件，请按这批货的实际完成量填写。</p>}

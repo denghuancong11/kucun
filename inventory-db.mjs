@@ -4280,6 +4280,7 @@ export class InventoryDatabase {
 
   getUpgradeDashboard({ visibleGroup = null, scopeDirectByTeam = false } = {}) {
     return {
+      overseasWarehouses: [...OVERSEAS_WAREHOUSES],
       directSources: this.getDirectUpgradeSources({ visibleGroup, scopeDirectByTeam }),
       relocationCandidates: this.getRelocationCandidates({ visibleGroup }),
       relocationWorkItems: this.getRelocationWorkItems({ visibleGroup }),
