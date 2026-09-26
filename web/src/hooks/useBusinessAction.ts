@@ -21,7 +21,8 @@ export function useBusinessAction(onRefresh: () => Promise<unknown>, onSuccess: 
       onSuccess(message);
     } catch (failure) {
       const e = failure as ApiError;
-      const unknown = e.status === undefined || e.status >= 500;
+      // 只有明确的 4xx 拒绝才能丢弃幂等键；2xx 坏回执仍可能已保存。
+      const unknown = !(e.status !== undefined && e.status >= 400 && e.status < 500);
       if (!unknown) pending.current = null;
       setUncertain(unknown); setError(unknown ? `${e.message} 请点击“重试确认”查看本次提交结果。` : e.message);
     } finally { running.current = false; setBusy(false); }
