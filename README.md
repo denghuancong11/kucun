@@ -25,6 +25,7 @@ npm run build
 
 ```powershell
 npm test
+npm run test:inventory-regressions
 npm run test:migration
 npm run test:warehouse-fba
 npm run test:teams
