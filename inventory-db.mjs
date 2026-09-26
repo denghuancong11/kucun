@@ -3574,9 +3574,19 @@ export class InventoryDatabase {
   approvalView() {
     const cutoff = this.refreshApprovalDisplay();
     return {
-      allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
-        .map((row) => this.documentRecord(row)),
-      inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE (? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff).map((row) => this.inquiryRecord(row)),
+      // 未完成单始终保留；终态按实际办结时间在下一次计划截止点隐藏。
+      allocations: this.db.prepare(`SELECT * FROM allocation_documents WHERE status <> 'draft'
+        AND (status = 'pending' OR ? IS NULL OR CASE
+          WHEN status = 'confirmed' THEN confirmed_at
+          WHEN approval_status = 'rejected' THEN reviewed_at
+          ELSE created_at END >= ?)
+        ORDER BY updated_at DESC, id DESC`).all(cutoff, cutoff).map((row) => this.documentRecord(row)),
+      inquiries: this.db.prepare(`SELECT * FROM inquiry_documents
+        WHERE (status IN ('pending_business', 'pending_purchasing', 'pending_assistant') OR ? IS NULL OR CASE
+          WHEN status = 'archived' THEN archived_at
+          WHEN status = 'rejected' THEN reviewed_at
+          ELSE created_at END >= ?)
+        ORDER BY updated_at DESC, id DESC`).all(cutoff, cutoff).map((row) => this.inquiryRecord(row)),
     };
   }
 
