@@ -693,7 +693,7 @@
 .approval-summary-table { table-layout:fixed; width:100%; border-collapse:collapse; border:1px solid #edf0f5; font-size:13px; }
 .approval-summary-table th { background:#f8f9fb; color:var(--text-2); text-align:left; font-weight:400; padding:12px 10px; white-space:nowrap; }
 .approval-summary-table td { padding:10px; border-bottom:1px solid #edf0f5; vertical-align:middle; }
-.approval-document-table { table-layout:fixed; width:100%; min-width:2890px; border-collapse:collapse; }
+.approval-document-table { table-layout:fixed; width:100%; min-width:100%; border-collapse:collapse; }
 .approval-data-row > td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .approval-summary-table .approval-model-name { color:#2864c5; }
 .approval-expand, .approval-model-toggle { display:inline-flex; align-items:center; border:0; background:none; padding:0; cursor:pointer; color:inherit; }
@@ -717,6 +717,8 @@
 .field-wide { grid-column:1 / -1; }
 .approval-action-form { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
 .approval-action-form .field { flex:1 1 160px; min-width:0; }
+.inquiry-purchasing-form .field { flex:0 1 190px; min-width:160px; }
+.inquiry-purchasing-form .inquiry-purchase-note { flex:1 1 240px; max-width:460px; }
 .approval-review-form { display:flex; align-items:end; gap:12px; width:100%; }
 .approval-review-form .field { width:140px; min-width:0; }
 .approval-review-form .approval-calculated-coverage { width:170px; }

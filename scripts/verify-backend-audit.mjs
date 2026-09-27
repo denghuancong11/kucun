@@ -102,7 +102,7 @@ try{
    }else if(kind==='inquiry'){
      let record=(await api('/api/inquiries','operation-2',{model,quantity:20,department:'二团',store:'AUDITUS',operator:'合成运营',fnsku:'AUDIT-FNSKU',asin:'AUDITASIN',requestId:rid()})).record;
      record=(await api(`/api/inquiries/${record.id}/review`,'business',{decision:'approve',approvedQuantity:20,expectedRevision:record.revision,requestId:rid()})).record;
-     record=(await api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:20,shippingWarehouse:'SYNTHETIC',expectedRevision:record.revision,requestId:rid()})).record;
+     record=(await api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:20,shippingWarehouse:'CA',expectedRevision:record.revision,requestId:rid()})).record;
      record=(await api(`/api/inquiries/${record.id}/archive`,'assistant-2',{plan:'AUDIT-PLAN',date:'2026-09-24',version:'V1',expectedRevision:record.revision,requestId:rid()})).record;
      source={inquiryId:record.id};
    }else source={fbaArchiveId:shelf.fbaArchiveId};

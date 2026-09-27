@@ -570,12 +570,16 @@ async function handleApprovalsApi(request, response, pathname) {
         businessNote: String(payload.businessNote ?? "").trim(),
       });
     } else if (action === "reply") {
-      if (payload.supplierQuantity == null || payload.supplierQuantity === "") {
+      if (payload.supplierQuantity == null || (typeof payload.supplierQuantity === "string" && payload.supplierQuantity.trim() === "")) {
         throw new BusinessError(400, "missing_supplier_quantity", "请填写供应商库存回复，有货填数量，无货填 0");
+      }
+      if (typeof payload.supplierQuantity !== "number" && typeof payload.supplierQuantity !== "string") {
+        throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
       }
       result = inventory.replyInquiry({
         ...common, supplierQuantity: requireNonNegativeInteger(payload.supplierQuantity, "供应商库存回复"),
         shippingWarehouse: String(payload.shippingWarehouse ?? "").trim(),
+        purchaseNote: String(payload.purchaseNote ?? "").trim(),
       });
     } else if (action === "archive") {
       result = inventory.archiveInquiry({

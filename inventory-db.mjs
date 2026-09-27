@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 28;
+export const INVENTORY_SCHEMA_VERSION = 29;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1609,6 +1609,7 @@ function createSchema(db, databaseId, createdAt) {
   migratePackPerBoxV26(db, createdAt, []);
   migrateInquiryFinalQuantityV27(db, createdAt);
   migrateSourceInventoryV28(db, createdAt, []);
+  migrateInquiryProcurementSchemaV29(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2793,6 +2794,37 @@ function migrateSourceInventoryV28(db, at, imports) {
     verifiedDerivedBatches: [...expectedStock].map(([batchKey,packPerBox])=>({batchKey,packPerBox,sources:[...(sources.get(batchKey)?.values()??[])]})), teamChanges } };
 }
 
+function migrateInquiryProcurementSchemaV29(db, at) {
+  const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='inquiry_documents'").get()?.sql;
+  if (!schema) throw new Error("迁移 v29 找不到询库单表 inquiry_documents");
+  const tableName = /CREATE TABLE (?:IF NOT EXISTS )?(?:"inquiry_documents"|inquiry_documents)\s*\(/;
+  if (!tableName.test(schema) || !schema.includes("approved_quantity INTEGER CHECK (approved_quantity > 0)")
+    || !schema.includes("business_note TEXT NOT NULL DEFAULT '',")) {
+    throw new Error("迁移 v29 遇到非预期的询库表结构，迁移已中止");
+  }
+  const related = db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('index','trigger') AND (tbl_name='inquiry_documents' OR sql LIKE '%inquiry_documents%')").all();
+  const views = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='view' AND sql LIKE '%inquiry_documents%'").all();
+  const sequence = db.prepare("SELECT seq FROM sqlite_sequence WHERE name='inquiry_documents'").get()?.seq;
+  for (const view of views) db.exec(`DROP VIEW "${view.name}"`);
+  for (const item of related) db.exec(`DROP ${item.type} "${item.name}"`);
+
+  const rebuiltSchema = schema
+    .replace(tableName, "CREATE TABLE inquiry_documents_v29 (")
+    .replace("approved_quantity INTEGER CHECK (approved_quantity > 0)", "approved_quantity INTEGER CHECK (approved_quantity >= 0)")
+    .replace("business_note TEXT NOT NULL DEFAULT '',", "business_note TEXT NOT NULL DEFAULT '',\n      purchase_note TEXT NOT NULL DEFAULT '',");
+  if (rebuiltSchema === schema) throw new Error("迁移 v29 未能生成询库表结构，迁移已中止");
+  const columns = db.prepare("PRAGMA table_info(inquiry_documents)").all().map(column => `"${column.name}"`).join(",");
+  db.exec(rebuiltSchema);
+  db.exec(`INSERT INTO inquiry_documents_v29(${columns}) SELECT ${columns} FROM inquiry_documents;
+    DROP TABLE inquiry_documents;
+    ALTER TABLE inquiry_documents_v29 RENAME TO inquiry_documents;`);
+  if (sequence != null) db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='inquiry_documents'").run(sequence);
+  for (const item of related) db.exec(item.sql);
+  for (const view of views) db.exec(view.sql);
+  db.prepare("INSERT INTO schema_migrations(version,applied_at,description) VALUES(29,?,?)")
+    .run(at, "询库采购回复限定仓库并将采购回复量作为最终量；新增采购备注");
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2802,16 +2834,18 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v27 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v28 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
-  let verifiedPackImports;
-  try {
-    verifiedPackImports = loadVerifiedPackImports();
-  } catch (error) {
-    db.close();
-    throw error;
+  let verifiedPackImports = [];
+  if (fromVersion < 28) {
+    try {
+      verifiedPackImports = loadVerifiedPackImports();
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
   try {
     /* v5 需要重建 import_batches 以把文件唯一约束收窄为“未撤销批次”。
@@ -2917,6 +2951,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 25) { Object.assign(migrated, migratePackPerBoxV26(db, appliedAt, verifiedPackImports)); version = 26; }
     if (version === 26) { migrateInquiryFinalQuantityV27(db, appliedAt); version = 27; }
     if (version === 27) { Object.assign(migrated, migrateSourceInventoryV28(db, appliedAt, verifiedPackImports)); version = 28; }
+    if (version === 28) { migrateInquiryProcurementSchemaV29(db, appliedAt); version = 29; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3607,7 +3642,7 @@ export class InventoryDatabase {
       approvedQuantity: row.approved_quantity == null ? null : Number(row.approved_quantity),
       supplierQuantity: row.supplier_quantity == null ? null : Number(row.supplier_quantity),
       department: row.department, store: row.store_name, operator: row.operator_name,
-      operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse,
+      operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, purchaseNote: row.purchase_note ?? "",
       plan: row.plan, date: row.ship_date, version: row.version,
       status: row.status, statusCode: row.status,
       statusText: { pending_business: "待商务审核", pending_purchasing: "待采购回复", pending_assistant: "待助理归档", archived: "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
@@ -3691,22 +3726,31 @@ export class InventoryDatabase {
     });
   }
 
-  replyInquiry({ id, role, supplierQuantity, shippingWarehouse, expectedRevision, requestId }) {
+  replyInquiry({ id, role, supplierQuantity, shippingWarehouse, purchaseNote, expectedRevision, requestId }) {
     if (role !== "purchasing") throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购可填写供应商库存回复");
+    if (typeof supplierQuantity !== "number" && typeof supplierQuantity !== "string") {
+      throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
+    }
+    if (typeof supplierQuantity === "string" && supplierQuantity.trim() === "") {
+      throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
+    }
     const quantity = Number(supplierQuantity);
     const warehouse = String(shippingWarehouse ?? "").trim();
+    const note = String(purchaseNote ?? "").trim();
     if (!Number.isInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
     if (quantity > 0 && !warehouse) throw new BusinessError(400, "missing_shippingWarehouse", "请填写发货仓库");
-    return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, expectedRevision }, () => {
+    if (warehouse && !["CA", "SC"].includes(warehouse)) throw new BusinessError(400, "invalid_shippingWarehouse", "发货仓库只能选择 CA 或 SC");
+    return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, purchaseNote: note, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, status = ?,
+      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?,
+        purchase_note = ?, status = ?,
         replied_by_role = ?, replied_at = ?, archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?,
         revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, warehouse, quantity === 0 ? "archived" : "pending_assistant", role, at,
+        .run(quantity, quantity, quantity, warehouse, note, quantity === 0 ? "archived" : "pending_assistant", role, at,
           quantity === 0 ? role : null, quantity === 0 ? at : null,
           quantity === 0 ? JSON.stringify(this.lingxingForDocument(row)) : null, at, id);
-      this.addInquiryEvent(id, quantity === 0 ? "reply_no_stock_archive" : "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse });
+      this.addInquiryEvent(id, quantity === 0 ? "reply_no_stock_archive" : "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, purchaseNote: note });
       return { ok: true, record: this.getInquiry(id) };
     });
   }

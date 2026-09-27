@@ -82,7 +82,7 @@ try {
  finally {db.db.exec('DROP TRIGGER test_fail_sync_commit');}
  assert.deepEqual(db.getInquiry(a.id).lingxing,previousMetric);assert.equal(db.syncState().dataVersion,previousVersion);check('任务成功状态写入失败时，指标和版本同事务回滚，不留下半次保存');
  let row=db.getInquiry(a.id);row=db.reviewInquiry({id:row.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:row.revision,requestId:rid()}).record;
- row=db.replyInquiry({id:row.id,role:'purchasing',supplierQuantity:10,shippingWarehouse:'隔离',expectedRevision:row.revision,requestId:rid()}).record;
+ row=db.replyInquiry({id:row.id,role:'purchasing',supplierQuantity:10,shippingWarehouse:'SC',expectedRevision:row.revision,requestId:rid()}).record;
  row=db.archiveInquiry({id:row.id,role:'assistant-1',plan:'TEST',date:'2026-09-10',version:'V1',expectedRevision:row.revision,requestId:rid()}).record;
  const snapshot=row.lingxing;
  const refresh=(await submit([same.id])).job;await execute('claim');await finish(refresh.id,[metric(a.asin,100)]);assert.deepEqual(db.getInquiry(a.id).lingxing,snapshot);check('后续刷新缓存不修改归档指标快照');

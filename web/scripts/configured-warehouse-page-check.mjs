@@ -21,7 +21,7 @@ const db = new InventoryDatabase(state), rid = () => crypto.randomUUID();
 const direct = db.createDirectUpgrade({ role: 'admin', model: 'SYNTH-TONER-001', sourceVersion: 'V11', requestId: rid() }).upgrade;
 let inquiry = db.createInquiry({ role: 'admin', model: 'SYNTH-TONER-001', quantity: 20, department: '一团', store: 'AUDITUS', operator: 'warehouse-fixture', asin: 'BWARE001', fnsku: 'XWARE001', requestId: rid() }).record;
 inquiry = db.reviewInquiry({ id: inquiry.id, role: 'business', decision: 'approve', approvedQuantity: 20, expectedRevision: inquiry.revision, requestId: rid() }).record;
-inquiry = db.replyInquiry({ id: inquiry.id, role: 'purchasing', supplierQuantity: 20, shippingWarehouse: 'source-fixture', expectedRevision: inquiry.revision, requestId: rid() }).record;
+inquiry = db.replyInquiry({ id: inquiry.id, role: 'purchasing', supplierQuantity: 20, shippingWarehouse: 'CA', expectedRevision: inquiry.revision, requestId: rid() }).record;
 inquiry = db.archiveInquiry({ id: inquiry.id, role: 'assistant-1', plan: 'AUDIT-PLAN', date: '2026-09-01', version: 'V1', expectedRevision: inquiry.revision, requestId: rid() }).record;
 let work = db.initiateRelocationUpgrade({ role: 'admin', inquiryId: inquiry.id, requestId: rid() }).workItem;
 work = db.recordRelocationProcurement({ id: work.id, role: 'purchasing', rma: 'AUDIT-RMA', relocationAddress: 'synthetic-address', expectedRevision: work.revision, requestId: rid() }).workItem;

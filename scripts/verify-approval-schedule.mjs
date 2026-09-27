@@ -29,7 +29,7 @@ const baseBody={model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10'
 const createAllocation=quantity=>api('/api/allocations','operation-1',{...baseBody,quantity,requestId:rid()}).then(r=>r.record);
 const inquiry=(quantity=10,team='一团')=>api('/api/inquiries',team==='一团'?'operation-1':'operation-2',{...baseBody,department:team,quantity,requestId:rid()}).then(r=>r.record);
 const review=(record,kind='inquiries',decision='approve')=>api(`/api/${kind}/${record.id}/review`,'business',{decision,approvedQuantity:record.requestedQuantity,expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
-const reply=(record,quantity)=>api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'合成仓库':'',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
+const reply=(record,quantity)=>api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'CA':'',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const archive=record=>api(`/api/inquiries/${record.id}/archive`,'assistant-1',{plan:'SCHEDULE-FBA',date:'2026-09-21',version:'V1',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const confirm=record=>api(`/api/allocations/${record.id}/confirm`,'assistant-1',{expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const sortedIds=rows=>rows.map(r=>r.id).sort((a,b)=>a-b);

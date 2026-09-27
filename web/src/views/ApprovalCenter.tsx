@@ -60,6 +60,7 @@ const METRIC_COLUMNS: ApprovalColumn[] = [
 
 const DOCUMENT_COLUMNS: ApprovalColumn[] = [
   { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "商务部备注", width: 230 },
+  { label: "供应商库存回复", width: 140 }, { label: "发货仓库", width: 130 }, { label: "采购备注", width: 230 },
   { label: "调拨部门", width: 100 }, { label: "调拨店铺", width: 160 }, { label: "调拨运营", width: 110 },
   { label: "已贴FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
   { label: "提交时间", width: 160 }, { label: "状况", width: 135 },
@@ -79,6 +80,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const row = item.record;
   const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
   const [businessNote, setBusinessNote] = useState(row.businessNote || "");
+  const columns = approvalDocumentColumns(role);
   const { perform, busy, uncertain, error, setError } = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
   const needsReview = item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "approved" && item.record.approvalStatus !== "rejected" : item.record.status === "pending_business";
   const review = (decision: "approve" | "reject") => {
@@ -96,13 +98,16 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     void perform({ execute: () => item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload), message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
   };
   const metrics = row.lingxing;
-  const metricColumns = approvalDocumentColumns(role).filter(column => column.key);
+  const metricColumns = columns.filter(column => column.key);
   const progress = progressLabel(item);
   return <tbody className="approval-record" data-document-no={row.documentNo} data-document-key={`${item.kind}-${row.id}`} aria-label={`${item.kind === "allocation" ? "调拨" : "询库"} ${row.documentNo}`}>
     <tr className="approval-data-row">
       <td className="approval-requested approval-number" data-field="申请数量">{formatNumber(row.requestedQuantity)}</td>
       <td className="approval-number" data-field="商务审核数量">{row.approvedQuantity === null ? "—" : formatNumber(row.approvedQuantity)}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
+      <td className="approval-number" data-field="供应商库存回复">{item.kind === "inquiry" && item.record.supplierQuantity !== null ? formatNumber(item.record.supplierQuantity) : "—"}</td>
+      <td title={item.kind === "inquiry" ? item.record.shippingWarehouse : undefined} data-field="发货仓库">{item.kind === "inquiry" ? item.record.shippingWarehouse || "—" : "—"}</td>
+      <td title={item.kind === "inquiry" ? item.record.purchaseNote : undefined} data-field="采购备注">{item.kind === "inquiry" ? item.record.purchaseNote || "—" : "—"}</td>
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
       <td>{row.createdAt ? displayTime(row.createdAt) : "—"}</td>
@@ -113,7 +118,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       })}
       <td className="approval-metric-cell" data-field="调货前倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageBefore, metrics)}</span></td><td className="approval-metric-cell" data-field="调货后倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageAfter, metrics)}</span></td>
     </tr>
-    <tr className="approval-action-row"><td colSpan={11 + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
+    <tr className="approval-action-row"><td colSpan={columns.length}><div className="approval-row-actions">
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.documentNo}`} onSubmit={event => event.preventDefault()}>
         <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" value={quantity} disabled={busy || uncertain} onChange={event => setQuantity(event.target.value)} /></label>
         {item.kind === "allocation" && <label className="field"><span>套/箱</span><input type="text" value={item.record.packPerBox?.trim() ? item.record.packPerBox : "未维护"} readOnly /></label>}

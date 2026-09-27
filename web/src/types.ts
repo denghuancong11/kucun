@@ -296,6 +296,7 @@ export interface Inquiry {
   operatorNote: string;
   businessNote: string;
   shippingWarehouse: string;
+  purchaseNote: string;
   plan: string;
   date: string;
   version: string;

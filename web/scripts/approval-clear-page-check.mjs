@@ -20,7 +20,7 @@ await fs.writeFile(preload,`import fs from 'node:fs';const RealDate=Date;const n
 const setTime=at=>fs.writeFile(clockFile,at);
 await setTime('2026-09-21T12:00:00.000Z');
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
-const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`;
+const db=new InventoryDatabase(state);assert.equal(db.db.prepare("UPDATE stock_batches SET pack_per_box='1' WHERE model='SYNTH-TONER-001' AND plan='TEST-PLAN-TONER' AND ship_date='2026-02-10' AND version='V11'").run().changes,1);const port=await freePort(),base=`http://127.0.0.1:${port}`;
 const checks=[],errors=[],posts=[],rid=()=>crypto.randomUUID();let server,browser;
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 async function start(){const instanceId=createTestInstanceId('approval-clear');server=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'ignore',env:{...process.env,ASTER_STATE_ROOT:state,ASTER_TEST_INSTANCE_ID:instanceId,HOST:'127.0.0.1',PORT:String(port),PROD:'1',TZ:'America/Los_Angeles'}});await waitForOwnedServer({base,child:server,instanceId});}
@@ -31,7 +31,7 @@ function businessSnapshot(){return Object.fromEntries(db.db.prepare("SELECT name
 const view=()=>api('/api/approvals');
 async function inquiry(operator,quantity=10,team='一团'){return(await api('/api/inquiries',team==='一团'?'operation-1':'operation-2',{model:'SYNTH-TONER-001',quantity,department:team,store:'隔离US清空验证',operator,fnsku:'XCLEAR0001',asin:'BCLEAR0001',requestId:rid()})).record;}
 async function review(r,kind='inquiries',decision='approve'){return(await api(`/api/${kind}/${r.id}/review`,'business',{decision,approvedQuantity:r.requestedQuantity,businessNote:'隔离审核',expectedRevision:r.revision,requestId:rid()})).record;}
-async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'验证仓':'',expectedRevision:r.revision,requestId:rid()})).record;}
+async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'CA':'',expectedRevision:r.revision,requestId:rid()})).record;}
 async function page(who){const p=await browser.newPage({viewport:{width:1366,height:900},timezoneId:'Pacific/Honolulu'});p.setDefaultTimeout(10000);p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname);});await p.goto(base);await p.getByLabel('切换当前操作角色',{exact:true}).selectOption(who);await p.locator('.sidebar .nav-item',{hasText:'审批中心'}).click();await p.locator('.approval-page').waitFor();return p;}
 async function count(p,n){await p.waitForFunction(n=>document.querySelectorAll('.approval-record').length===n,n);}
 async function shot(p,name){await p.evaluate(()=>window.scrollTo(0,0));await p.screenshot({path:path.join(output,name+'.png'),fullPage:true,animations:'disabled'});}

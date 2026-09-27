@@ -99,7 +99,7 @@ export function reviewInquiry(role: Role, id: number, payload: ApprovalReview): 
 }
 
 export function replyInquiry(role: Role, id: number, payload: {
-  supplierQuantity: number; shippingWarehouse: string; expectedRevision: number; requestId: string;
+  supplierQuantity: number; shippingWarehouse: string; purchaseNote: string; expectedRevision: number; requestId: string;
 }): Promise<unknown> {
   return requestJson(`/api/inquiries/${id}/reply`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),

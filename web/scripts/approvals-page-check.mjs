@@ -91,15 +91,15 @@ async function verifyApprovalDisplay(page, phase) {
       documentHeaders:[...element.querySelector('.approval-document-table').querySelectorAll('thead th')].map(e=>e.textContent),
       metrics:[...element.querySelectorAll('.approval-record')].filter(e=>e.getClientRects().length).map(e=>({count:e.querySelectorAll('.approval-metric-value').length,columnCount:e.querySelectorAll('.approval-data-row > td').length,colSpan:e.querySelector('.approval-action-row > td')?.colSpan,ys:[...e.querySelectorAll('.approval-data-row > td')].map(f=>f.getBoundingClientRect().y)})),
       tableScroll:[...element.querySelectorAll('.approval-table-scroll')].filter(e=>e.getClientRects().length).every(e=>getComputedStyle(e).overflowX==='auto' && (e.clientWidth>=(['assistant-1','assistant-2','purchasing'].includes(document.querySelector('select[aria-label="切换当前操作角色"]')?.value)?2700:2890) || e.scrollWidth>e.clientWidth)),
-      clipped:[...element.querySelectorAll('.approval-row-actions input,.approval-metric-cell')].filter(e=>e.getClientRects().length&&e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>({tag:e.tagName,class:e.className,width:e.clientWidth,scroll:e.scrollWidth})),
+      clipped:[...element.querySelectorAll('.approval-row-actions input,.approval-row-actions select,.approval-metric-cell')].filter(e=>e.getClientRects().length&&e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>({tag:e.tagName,class:e.className,width:e.clientWidth,scroll:e.scrollWidth})),
       sizes:[...element.querySelectorAll('.approval-summary-table td,.approval-metric-value,input,select')].filter(e=>e.getClientRects().length).map(e=>parseFloat(getComputedStyle(e).fontSize))
     }));
     assert.deepEqual(result.headers,['','型号','在库库存','申请数量合计','商务审核数量合计']);
     const hidesProfit=['assistant-1','assistant-2','purchasing'].includes(result.role);
-    const expectedDocumentHeaders=['申请数量','商务部审核数量','商务部备注','调拨部门','调拨店铺','调拨运营','已贴FNSKU','ASIN','运营备注','提交时间','状况','7 天销量','30 天销量',...(hidesProfit?[]:['订单毛利润（USD）']),'FBA 可售','FBA 待调仓','FBA 调仓中','FBA 在途','调货前倍数','调货后倍数'];
+    const expectedDocumentHeaders=['申请数量','商务部审核数量','商务部备注','供应商库存回复','发货仓库','采购备注','调拨部门','调拨店铺','调拨运营','已贴FNSKU','ASIN','运营备注','提交时间','状况','7 天销量','30 天销量',...(hidesProfit?[]:['订单毛利润（USD）']),'FBA 可售','FBA 待调仓','FBA 调仓中','FBA 在途','调货前倍数','调货后倍数'];
     assert.deepEqual(result.documentHeaders,expectedDocumentHeaders);
     assert.equal(result.zoom,1);assert.ok(result.pageWidth<=width);assert.equal(result.tableScroll,true);assert.deepEqual(result.clipped,[]);
-    const expectedColumns=hidesProfit?19:20,expectedMetrics=hidesProfit?6:7;
+    const expectedColumns=hidesProfit?22:23,expectedMetrics=hidesProfit?6:7;
     assert.ok(result.metrics.length>0&&result.metrics.every(m=>m.count===expectedMetrics&&m.columnCount===expectedColumns&&m.colSpan===expectedColumns&&m.ys.length===expectedColumns&&new Set(m.ys).size===1));assert.ok(result.sizes.every(n=>n>=13));
     for (const dialog of await page.getByRole('dialog').all()) for (const button of await dialog.getByRole('button').all()) {
       assert.equal(await button.evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}),true,'办理按钮不能被其他单据遮挡');
@@ -109,7 +109,7 @@ async function verifyApprovalDisplay(page, phase) {
     await page.screenshot({path:path.join(output,'approval-'+phase+'-'+width+'.png'),fullPage:true,animations:'disabled'});
   }
   await page.setViewportSize({width:1440,height:1100});
-  check(phase+`型号汇总及${['assistant-1','assistant-2','purchasing'].includes(await page.locator('select[aria-label="切换当前操作角色"]').inputValue())?'19':'20'}列单据、对应指标及第二行原办理表单在1280/1366/1920完整显示且仅表内横向滚动`,true);
+  check(phase+`型号汇总及${['assistant-1','assistant-2','purchasing'].includes(await page.locator('select[aria-label="切换当前操作角色"]').inputValue())?'22':'23'}列单据、对应指标及第二行原办理表单在1280/1366/1920完整显示且仅表内横向滚动`,true);
   await fs.writeFile(path.join(output,'approval-layout.json'),JSON.stringify(displayChecks,null,2));
 }
 
@@ -275,9 +275,9 @@ try {
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'250');
   assert.equal(await modelGroup.locator('[data-field="商务审核数量合计"]').innerText(),'—');
   for (const [card,requested] of [[allocationCard,'100'],[inquiryCard,'150']]) {
-    assert.equal(await card.locator('.approval-data-row > td').count(),20);
+    assert.equal(await card.locator('.approval-data-row > td').count(),23);
     assert.equal(await card.locator(':scope > tr').count(),2);
-    assert.equal(await card.locator('.approval-action-row > td').getAttribute('colspan'),'20');
+    assert.equal(await card.locator('.approval-action-row > td').getAttribute('colspan'),'23');
     assert.equal(await card.locator('.approval-metrics-row,.approval-metrics').count(),0);
     assert.equal(await card.locator('[data-field="申请数量"]').innerText(),requested);
     assert.equal(await card.locator('[data-field="商务审核数量"]').innerText(),'—');
@@ -307,8 +307,8 @@ try {
   assert.equal(await allocationCard.locator('[data-field="运营备注"]').innerText(),longNote);
   assert.deepEqual(await allocationCard.locator('.approval-metric-value').allTextContents(),['40','170','1,234,567,890.12','100','76','100','100']);
   assert.deepEqual(await inquiryCard.locator('.approval-metric-value').allTextContents(),['0','0','0','0','0','0','0']);
-  assert.deepEqual(await allocationCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(11)),['40','170','1,234,567,890.12','100','76','100','100','2.2 倍','2.8 倍']);
-  assert.deepEqual(await inquiryCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(11)),['0','0','0','0','0','0','0','无销量','无销量']);
+  assert.deepEqual(await allocationCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(14)),['40','170','1,234,567,890.12','100','76','100','100','2.2 倍','2.8 倍']);
+  assert.deepEqual(await inquiryCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(14)),['0','0','0','0','0','0','0','无销量','无销量']);
   check('同型号合并250、库存只取一次、逐单100/150及未审核缺失值正确，多型号独立展开',true);
   check('不同ASIN保留各自七项指标与真实零，长备注全文保留，直接审核区不混入资料行',true);
   check("调拨保留2.2倍和USD，底层取数时间保留且不再展示", (await allocationCard.innerText()).includes("2.2") && Boolean((await api("GET","/api/approvals","admin")).allocations.find(r=>r.id===allocation.id).lingxing.capturedAt) && await allocationCard.locator('[data-field="取数时间"]').count()===0 && (await modelGroup.locator('.approval-document-table > thead').innerText()).includes('USD') && !(await allocationCard.innerText()).includes("全部店铺"));
@@ -391,9 +391,15 @@ try {
   await role(page, "purchasing");
   await page.getByRole("button",{name:/^我的待办/}).click();
   await expand(page);
-  await inquiryCard.getByRole("button",{name:"采购回复",exact:true}).click();
   await inquiryCard.getByLabel("供应商库存回复", { exact: true }).fill("60");
-  await inquiryCard.getByLabel("发货仓库", { exact: true }).fill("东莞供应仓");
+  const purchasingWarehouse = inquiryCard.locator(".inquiry-purchasing-form select");
+  assert.equal(await purchasingWarehouse.count(), 1);
+  assert.equal(await purchasingWarehouse.evaluate(element => element.tagName), "SELECT");
+  assert.equal(await purchasingWarehouse.evaluate(element => element.closest("label")?.textContent?.trim().startsWith("发货仓库")), true);
+  assert.deepEqual(await purchasingWarehouse.locator("option").allTextContents(), ["选择仓库", "CA", "SC"]);
+  await purchasingWarehouse.selectOption("CA");
+  await inquiryCard.getByLabel("采购备注", { exact: true }).fill("供应商确认可供 60 件");
+  assert.equal(await record(operationPage,inquiry.documentNo).getByLabel('采购备注',{exact:true}).count(),0);
   await verifyApprovalDisplay(page, 'purchasing');
   await write(page, `/api/inquiries/${inquiry.id}/reply`, () => inquiryCard.getByRole("button", { name: "提交", exact: true }).click());
   await inquiryCard.waitFor({ state: "hidden" });
@@ -428,12 +434,19 @@ try {
   await approvals(page); await expand(page);
   const archivedInquiry=(await api("GET","/api/approvals","admin")).inquiries.find(r=>r.id===inquiry.id);
   assert.equal(archivedInquiry.requestedQuantity,60);
-  assert.equal(archivedInquiry.approvedQuantity,90);
+  assert.equal(archivedInquiry.approvedQuantity,60);
   assert.equal(archivedInquiry.supplierQuantity,60);
+  assert.equal(archivedInquiry.shippingWarehouse,"CA");
+  assert.equal(archivedInquiry.purchaseNote,"供应商确认可供 60 件");
   assert.equal(archivedInquiry.events.find(event=>event.type==='entry').payload.requestedQuantity,150);
   assert.equal(await inquiryCard.locator('[data-field="申请数量"]').innerText(),'60');
+  assert.equal(await inquiryCard.locator('[data-field="商务审核数量"]').innerText(),'60');
+  assert.equal(await inquiryCard.locator('[data-field="供应商库存回复"]').innerText(),'60');
+  assert.equal(await inquiryCard.locator('[data-field="发货仓库"]').innerText(),'CA');
+  assert.equal(await inquiryCard.locator('[data-field="采购备注"]').innerText(),'供应商确认可供 60 件');
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'160');
-  check("采购回复后申请数量、主行及型号合计改为最终量60；商务审核90和原申请历史150保留，归档仍显示已完成", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0 && await inquiryCard.locator('[data-field="供货数量"]').count()===0);
+  assert.equal(await modelGroup.locator('[data-field="商务审核数量合计"]').innerText(),'150');
+  check("采购回复后申请量、商务审核量及型号合计统一为最终量60，供应商回复、仓库和采购备注在正确列显示", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0);
   for (const close of await page.getByRole("button", { name: "关闭提示", exact: true }).all()) await close.click();
   await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0,0); });
   await page.screenshot({ path: path.join(output, "approvals-desktop.png"), fullPage: true });
@@ -447,7 +460,7 @@ try {
   await role(page, "assistant-1");
   await approvals(page);
   await expand(page);
-  check("浏览器刷新后审批归档数量和备注保持", (await detailsText(allocationCard)).includes("调拨备注保留") && (await detailsText(inquiryCard)).includes("询库备注保留")
+  check("浏览器刷新后审批归档数量和采购备注保持", (await detailsText(allocationCard)).includes("调拨备注保留") && (await detailsText(inquiryCard)).includes("供应商确认可供 60 件")
     && beforeRefresh.inquiries.find((row) => row.id === inquiry.id).quantity === 60);
   await page.locator(".sidebar .nav-item", { hasText: "升级库存" }).click();
   await page.locator(".upgrade-page").waitFor();
@@ -469,12 +482,27 @@ try {
   zero=(await api("POST",`/api/inquiries/${zero.id}/review`,"business",{decision:"approve",approvedQuantity:10,expectedRevision:zero.revision,requestId:requestId("zero-review")})).record;
   await watchCounts([1,1,0,1,1]); await operationStage(zero.documentNo,'待采购回复');
   await role(page,"purchasing");await approvals(page);await expand(page);
-  const zeroCard=record(page,zero.documentNo);await zeroCard.getByRole("button",{name:"采购回复",exact:true}).click();await zeroCard.getByLabel("供应商库存回复",{exact:true}).fill("0");
+  const zeroCard=record(page,zero.documentNo);
+  const zeroQuantity=zeroCard.getByLabel("供应商库存回复",{exact:true});
+  await zeroQuantity.fill("");assert.equal(await zeroQuantity.evaluate(input=>input.validity.valueMissing),true);
+  await zeroQuantity.fill("-1");assert.equal(await zeroQuantity.evaluate(input=>input.validity.rangeUnderflow),true);
+  await zeroQuantity.fill("0.5");assert.equal(await zeroQuantity.evaluate(input=>input.validity.stepMismatch),true);
+  await zeroQuantity.fill("0");
   await page.screenshot({path:path.join(output,'zero-reply-form.png'),fullPage:true});
-  assert.equal(await zeroCard.getByRole('dialog').locator('form').evaluate(form=>form.checkValidity()),true);
+  assert.equal(await zeroCard.locator('.inquiry-purchasing-form').evaluate(form=>form.checkValidity()),true);
+  assert.equal(await zeroCard.getByLabel('发货仓库',{exact:true}).inputValue(),'');
   assert.equal(await zeroCard.getByRole('button',{name:'提交',exact:true}).evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}),true,'零供货回复不能被后续详情遮挡');
   result=await write(page,`/api/inquiries/${zero.id}/reply`,()=>zeroCard.getByRole("button",{name:"提交",exact:true}).click());
-  check("页面供应商0回复立即归档",result.record.status==="archived" && result.record.quantity===0);
+  check("页面供应商0回复将申请量与商务审核量置0并立即归档",result.record.status==="archived" && result.record.requestedQuantity===0 && result.record.approvedQuantity===0 && result.record.quantity===0);
+  await page.waitForFunction(documentNo=>{
+    const row=document.querySelector(`[data-document-no="${CSS.escape(documentNo)}"]`);
+    return row?.querySelector('[data-field="申请数量"]')?.textContent?.trim()==="0"
+      && row?.querySelector('[data-field="商务审核数量"]')?.textContent?.trim()==="0"
+      && row?.querySelector('[data-field="供应商库存回复"]')?.textContent?.trim()==="0";
+  },zero.documentNo,{timeout:8000});
+  assert.equal(await zeroCard.locator('[data-field="申请数量"]').innerText(),'0');
+  assert.equal(await zeroCard.locator('[data-field="商务审核数量"]').innerText(),'0');
+  assert.equal(await zeroCard.locator('[data-field="供应商库存回复"]').innerText(),'0');
   await todo(page, 0); await watchCounts([1,0,0,0,1]);
   check('采购回复0退出待办且不生成助理待办', true);
   let rejectedAllocation=(await api('POST','/api/allocations','operation-1',{model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity:10,department:'一团',store:'AUS',operator:'拒绝测试',fnsku:'XTODO00001',asin:'BTODO00001',requestId:requestId('reject-allocation')})).record;
@@ -521,10 +549,21 @@ try {
   await watchCounts([0,1,0,0,2]);
   await record(observers[4],teamAllocation.documentNo).locator('[data-field="商务审核数量"]').filter({hasText:/^\d+$/}).waitFor();
   await record(observers[4],teamInquiry.documentNo).locator('[data-field="商务审核数量"]').filter({hasText:/^\d+$/}).waitFor();
-  await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'operation-2',{supplierQuantity:8,shippingWarehouse:'二团供应仓',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-reply')},403);
-  teamInquiry=(await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'purchasing',{supplierQuantity:8,shippingWarehouse:'二团供应仓',expectedRevision:teamInquiry.revision,requestId:requestId('team2-reply')})).record;
+  await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'operation-2',{supplierQuantity:8,shippingWarehouse:'CA',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-reply')},403);
+  await role(page,'purchasing');await approvals(page);await page.getByRole('button',{name:/^我的待办/}).click();await todo(page,1);await expand(page,'SYNTH-INK-001');
+  const teamInquiryCard=record(page,teamInquiry.documentNo);
+  await teamInquiryCard.getByLabel('供应商库存回复',{exact:true}).fill('8');
+  await teamInquiryCard.getByLabel('发货仓库',{exact:true}).selectOption('SC');
+  await teamInquiryCard.getByLabel('采购备注',{exact:true}).fill('墨盒供应商回复');
+  teamInquiry=(await write(page,`/api/inquiries/${teamInquiry.id}/reply`,()=>teamInquiryCard.getByRole('button',{name:'提交',exact:true}).click())).record;
   await watchCounts([0,0,0,0,2]);
-  assert.equal(teamInquiry.supplierQuantity,8);assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="供货数量"]').count(),0);
+  assert.equal(teamInquiry.supplierQuantity,8);assert.equal(teamInquiry.requestedQuantity,8);assert.equal(teamInquiry.approvedQuantity,8);
+  const teamObservedReply=record(observers[4],teamInquiry.documentNo).locator('[data-field="供应商库存回复"]');
+  await teamObservedReply.filter({hasText:/^8$/}).waitFor();
+  assert.equal(await teamObservedReply.innerText(),'8');
+  assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="发货仓库"]').innerText(),'SC');
+  assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="采购备注"]').innerText(),'墨盒供应商回复');
+  check('硒鼓与墨盒均在表格正确列提交 CA/SC 回复，采购备注独立显示给其他岗位',true);
   await observers[4].screenshot({path:path.join(output,'operation-team2-following.png'),fullPage:true});
   await api('POST',`/api/allocations/${teamAllocation.id}/confirm`,'operation-2',{expectedRevision:teamAllocation.revision,requestId:requestId('forbidden-confirm')},403);
   await api('POST',`/api/inquiries/${teamInquiry.id}/archive`,'operation-2',{plan:'FBA-TEAM2',date:'2026-09-01',version:'V20',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-archive')},403);
@@ -677,7 +716,7 @@ try {
   for (const fixture of visibilityDocs.inquiries) {
     const reviewed = await api('POST', '/api/inquiries/' + fixture.record.id + '/review', 'business', { decision: 'approve', approvedQuantity: 3, expectedRevision: fixture.record.revision, requestId: requestId('visibility-review-inquiry') });
     assert.equal(reviewed.record.lingxing.orderGrossProfit, expectedGrossProfit.get(fixture.asin));
-    const replied = await api('POST', '/api/inquiries/' + fixture.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: '测试供应仓', expectedRevision: reviewed.record.revision, requestId: requestId('visibility-reply-inquiry') });
+    const replied = await api('POST', '/api/inquiries/' + fixture.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: 'CA', expectedRevision: reviewed.record.revision, requestId: requestId('visibility-reply-inquiry') });
     assert.ok(!Object.hasOwn(replied.record.lingxing, 'orderGrossProfit'));
     assert.equal(replied.record.lingxing.sales30d, visibilityMetrics.find(item => item.asin === fixture.asin).sales30d);
     const archived = await api('POST', '/api/inquiries/' + fixture.record.id + '/archive', fixture.department === '一团' ? 'assistant-1' : 'assistant-2', { plan: 'FBA-VISIBILITY', date: '2026-09-22', version: 'V1', expectedRevision: replied.record.revision, requestId: requestId('visibility-archive-inquiry') });
@@ -694,7 +733,7 @@ try {
   assert.ok(!Object.hasOwn(assistantConflict.details.current.lingxing, 'orderGrossProfit'));
   assert.equal(assistantConflict.details.current.lingxing.sales7d, visibilityMetrics.find(item => item.asin === staleAllocation.asin).sales7d);
   const staleInquiry = visibilityDocs.inquiries[0];
-  const purchasingConflict = await api('POST', '/api/inquiries/' + staleInquiry.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: '测试供应仓', expectedRevision: staleInquiry.record.revision - 1, requestId: requestId('visibility-stale-reply') }, 409);
+  const purchasingConflict = await api('POST', '/api/inquiries/' + staleInquiry.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: 'CA', expectedRevision: staleInquiry.record.revision - 1, requestId: requestId('visibility-stale-reply') }, 409);
   assert.ok(!Object.hasOwn(purchasingConflict.details.current.lingxing, 'orderGrossProfit'));
   assert.equal(purchasingConflict.details.current.lingxing.sales7d, visibilityMetrics.find(item => item.asin === staleInquiry.asin).sales7d);
   check('确认/采购回复/助理归档结果与 details.current 隐藏毛利润；后续同步不覆盖单据历史快照', true);
@@ -724,8 +763,8 @@ try {
       const cells = await rows.evaluateAll(elements => elements.map(element => {
         const tds = [...element.querySelectorAll('.approval-data-row > td')];
         return {
-          department: tds[3]?.textContent?.trim(),
-          asin: tds[7]?.textContent?.trim(),
+          department: tds[6]?.textContent?.trim(),
+          asin: tds[10]?.textContent?.trim(),
           profit: element.querySelector('[data-field="订单毛利润（USD）"] .approval-metric-value')?.textContent?.trim(),
           metricCount: element.querySelectorAll('.approval-metric-value').length,
           hasSales: Boolean(element.querySelector('[data-field="7 天销量"] .approval-metric-value')),

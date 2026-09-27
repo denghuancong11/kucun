@@ -254,16 +254,40 @@ try {
   });
   const inquirySubmitted = result.record;
   check("询库申请 150 独立进入商务待审", inquirySubmitted.status === "pending_business" && inquirySubmitted.requestedQuantity === 150 && inquirySubmitted.asin === "BTEST00002");
-  await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse: "东莞仓", expectedRevision: inquirySubmitted.revision, requestId: requestId("reply-before-review") }, 409);
+  await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse: "CA", expectedRevision: inquirySubmitted.revision, requestId: requestId("reply-before-review") }, 409);
   result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/review`, "business", reviewBody(inquirySubmitted, 90));
   const inquiryApproved = result.record;
   check("询库批准 90 保留申请 150 并进入采购待办", inquiryApproved.status === "pending_purchasing" && inquiryApproved.requestedQuantity === 150 && inquiryApproved.approvedQuantity === 90);
-  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse: "东莞仓", expectedRevision: result.record.revision, requestId: requestId("reply-60") });
+  const invalidReplySnapshot = read("SELECT * FROM inquiry_documents WHERE id = ?", inquirySubmitted.id)[0];
+  const invalidReplyEvents = read("SELECT * FROM inquiry_events WHERE inquiry_id = ? ORDER BY id", inquirySubmitted.id);
+  const directReplyDb = new InventoryDatabase(stateRoot);
+  try {
+    for (const supplierQuantity of ["   ", false]) {
+      assert.throws(() => directReplyDb.replyInquiry({ id: inquiryApproved.id, role: "purchasing", supplierQuantity, shippingWarehouse: "", purchaseNote: "", expectedRevision: inquiryApproved.revision, requestId: requestId("direct-invalid-reply") }), error => error.status === 400);
+    }
+  } finally { directReplyDb.close(); }
+  check("数据库直接调用拒绝空白和布尔数量且不改变单据或事件", JSON.stringify(read("SELECT * FROM inquiry_documents WHERE id = ?", inquirySubmitted.id)[0]) === JSON.stringify(invalidReplySnapshot)
+    && JSON.stringify(read("SELECT * FROM inquiry_events WHERE inquiry_id = ? ORDER BY id", inquirySubmitted.id)) === JSON.stringify(invalidReplyEvents));
+  for (const [quantity, warehouse, label] of [["", "CA", "空值"], ["   ", "", "纯空白"], [false, "", "布尔 false"], [-1, "CA", "负数"], [1.5, "CA", "小数"], [60, "", "正数缺仓库"], [60, "东莞仓", "非 CA/SC 仓库"]]) {
+    await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: quantity, shippingWarehouse: warehouse, purchaseNote: "不应保存", expectedRevision: inquiryApproved.revision, requestId: requestId(`invalid-reply-${label}`) }, 400);
+  }
+  check("采购回复数量非法、正数缺仓库或仓库不在 CA/SC 时不写入业务数据", JSON.stringify(read("SELECT * FROM inquiry_documents WHERE id = ?", inquirySubmitted.id)[0]) === JSON.stringify(invalidReplySnapshot)
+    && JSON.stringify(read("SELECT * FROM inquiry_events WHERE inquiry_id = ? ORDER BY id", inquirySubmitted.id)) === JSON.stringify(invalidReplyEvents));
+  const replyPayload = { supplierQuantity: "60", shippingWarehouse: "CA", purchaseNote: "供应商确认可供 60 件", expectedRevision: inquiryApproved.revision, requestId: requestId("reply-60") };
+  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", replyPayload);
   const inquiryReplied = result.record;
-  check("供应商回复 60 覆盖申请量、保留商务审核 90 并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
-    && inquiryReplied.approvedQuantity === 90 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "东莞仓");
+  check("供应商回复 60 统一覆盖申请量与商务审核量并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
+    && inquiryReplied.approvedQuantity === 60 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA"
+    && inquiryReplied.purchaseNote === replyPayload.purchaseNote && inquiryReplied.businessNote === "商务审核备注");
   check("采购回复保留最初申请事件及原始数量", inquiryReplied.events.find(event => event.type === "entry")?.payload.requestedQuantity === 150
-    && inquiryReplied.events.some(event => event.type === "reply" && event.payload.supplierQuantity === 60));
+    && inquiryReplied.events.some(event => event.type === "review" && event.payload.approvedQuantity === 90)
+    && inquiryReplied.events.some(event => event.type === "reply" && event.payload.supplierQuantity === 60 && event.payload.purchaseNote === replyPayload.purchaseNote));
+  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", replyPayload);
+  check("采购回复幂等重试不重复写入事件且相同请求可重放", result.deduped === true
+    && read("SELECT COUNT(*) AS count FROM inquiry_events WHERE inquiry_id = ? AND event_type = 'reply'", inquirySubmitted.id)[0].count === 1);
+  const changedNoteRetry = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { ...replyPayload, purchaseNote: "不同的备注" }, 409);
+  check("采购备注属于幂等参数，同编号改备注不能覆盖已保存回复", changedNoteRetry.code === "idempotency_conflict"
+    && read("SELECT COUNT(*) AS count FROM inquiry_events WHERE inquiry_id = ? AND event_type = 'reply'", inquirySubmitted.id)[0].count === 1);
   await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", { plan: "FBA-INQUIRY-PLAN", date: "", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive-missing-date") }, 400);
   const archiveBody = { plan: "FBA-INQUIRY-PLAN", date: "2026-09-01", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive") };
   result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", archiveBody);
@@ -289,11 +313,11 @@ try {
   const expiredAllocation = await call("POST", "/api/upgrades/relocation-work-items", "assistant-1", { allocationId: submitted.id, requestId: requestId("expired-allocation") }, 409);
   check("超过90天的调拨来源仍被发起接口拒绝且不影响库存", expiredAllocation.code === "allocation_outside_90_days"
     && JSON.stringify(await balance()) === JSON.stringify(balanceBeforeExpiredAllocation));
-  for (const qty of [0,120]) {
+  for (const [qty, warehouse] of [[0, ""], [200, "SC"]]) {
     let r=(await call("POST","/api/inquiries","operation-1",{...allocationBody(150,`reply-${qty}`),model:batch.model})).record;
     r=(await call("POST",`/api/inquiries/${r.id}/review`,"business",reviewBody(r,90))).record;
-    r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:qty?"东莞仓":"",expectedRevision:r.revision,requestId:requestId("supplier")})).record;
-    check(`供应商回复${qty}覆盖申请量并按最终量处理`,r.requestedQuantity===qty && r.quantity===qty && r.status===(qty===0?"archived":"pending_assistant"));
+    r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:warehouse,expectedRevision:r.revision,requestId:requestId("supplier")})).record;
+    check(`供应商回复${qty}覆盖申请量和商务审核量并按最终量处理`,r.requestedQuantity===qty && r.approvedQuantity===qty && r.supplierQuantity===qty && r.quantity===qty && r.status===(qty===0?"archived":"pending_assistant"));
   }
   for (const route of ["/api/admin/withdrawals","/api/features","/api/transit/1/off-shelf","/api/inquiries/1/ship"]) await call(route.includes("ship")?"POST":"GET",route,"admin",undefined,404);
   const beforeRetired=read('SELECT * FROM stock_balances ORDER BY batch_key');
