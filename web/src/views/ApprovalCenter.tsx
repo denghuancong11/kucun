@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { confirmAllocation, formatNumber, reviewAllocation, reviewInquiry } from "../api";
+import { confirmAllocation, fetchApprovals, formatNumber, reviewAllocation, reviewInquiry } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment } from "../components/InquiryFulfillment";
@@ -7,6 +7,7 @@ import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { useApprovals } from "../hooks/useApprovals";
 import { useInventoryCatalog } from "../hooks/useInventory";
+import { buildInquiryWorkbook } from "../utils/inquiry-export";
 import type { ApprovalAllocation, Category, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { operationGroups } from "../utils/roles";
@@ -145,6 +146,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
+  const [exporting, setExporting] = useState(false);
   const documentColumns = approvalDocumentColumns(role);
   const documentMinWidth = documentColumns.reduce((total, column) => total + column.width, 100);
   const items = useMemo<ApprovalItem[]>(() => [ ...(query.data?.allocations ?? []).map(record => ({ kind: "allocation" as const, record })), ...(query.data?.inquiries ?? []).map(record => ({ kind: "inquiry" as const, record })) ].sort((a, b) => (b.record.createdAt ?? "").localeCompare(a.record.createdAt ?? "")), [query.data]);
@@ -158,6 +160,42 @@ export function ApprovalCenterView({ role }: { role: Role }) {
   }, [items, todoItems, type, category, scope, progress, search]);
   const syncDocuments = groups.flatMap(([, records]) => records.filter(isActive).map(item => ({ kind: item.kind, id: item.record.id })));
   const toggle = (key: string) => setExpanded(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const exportInquiries = async () => {
+    setExporting(true);
+    try {
+      let payload;
+      try {
+        payload = await fetchApprovals(role);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "请求失败，请检查库存服务后重试";
+        setNotice({ kind: "error", text: `读取最新询库失败：${reason}` });
+        return;
+      }
+      if (!Array.isArray(payload.inquiries)) {
+        setNotice({ kind: "error", text: "读取到的询库数据格式无效，未生成导出文件。" });
+        return;
+      }
+      if (payload.inquiries.length === 0) {
+        setNotice({ kind: "warning", text: "当前角色没有可导出的询库单据" });
+        return;
+      }
+      const workbook = buildInquiryWorkbook(payload.inquiries);
+      const url = URL.createObjectURL(new Blob([workbook.bytes], { type: workbook.contentType }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "询库导出.xlsx";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice({ kind: "success", text: `已导出 ${payload.inquiries.length} 张询库单据` });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "未知错误";
+      setNotice({ kind: "error", text: `生成询库文件失败：${reason}` });
+    } finally {
+      setExporting(false);
+    }
+  };
   return <div className="approval-page"><Panel>
     <div className="approval-toolbar"><div className="filter-bar">
       <label className="search-input approval-search"><Icon name="search" size={15} /><input aria-label="搜索运营姓名、型号或 ASIN" placeholder="型号 / 单号 / 运营 / ASIN" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -166,7 +204,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
       <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions"><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    </div><div className="page-actions"><button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "正在导出…" : "导出询库"}</button><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}
     {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
       <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>
