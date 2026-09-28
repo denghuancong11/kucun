@@ -27,6 +27,9 @@ $requiredFiles = @(
   "server.mjs",
   "inventory-db.mjs",
   "lingxing-host.mjs",
+  "warehouse-address.mjs",
+  "upgrade-template.mjs",
+  "migrations\requirements-5-9.mjs",
   "package.json",
   "scripts\release-fingerprint.mjs"
 )

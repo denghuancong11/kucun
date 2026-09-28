@@ -145,7 +145,7 @@ export class LingxingHost {
         if (!this.worker || this.worker.id !== workerId || this.raw(id).state !== 'running') throw new BusinessError(409,'worker_disconnected',disconnected);
         const onSaved = result => {
           this.db.prepare("UPDATE lingxing_sync_jobs SET state='succeeded',message=?,capture_json=?,result_json=?,finished_at=? WHERE id=?")
-            .run(`同步成功，已保存 ${result.updated} ${target.action==='metrics'?'个 ASIN':'条包裹商品记录'}`,JSON.stringify(capture),JSON.stringify({updated:result.updated,capturedAt:result.capturedAt}),now(),id);
+            .run(`已保存 ${result.updated} ${target.action==='metrics'?'个 ASIN':`条包裹商品记录；${result.businessMessage}`}`,JSON.stringify(capture),JSON.stringify({updated:result.updated,capturedAt:result.capturedAt,cacheSaved:result.cacheSaved,businessApplied:result.businessApplied,businessMessage:result.businessMessage,shippedDelta:result.shippedDelta,shippedQuantity:result.shippedQuantity}),now(),id);
         };
         const args = {role:row.role,capturedAt:capture?.capturedAt,requestId:`lingxing-host-${id}`,onSaved};
         if (target.action === 'metrics') this.inventory.syncLingxing({...args,items:capture?.items});

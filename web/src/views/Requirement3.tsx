@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
+import { UpgradeTemplates } from '../components/UpgradeTemplates';
 import { createRequestId } from "../utils/ids";
 
 
@@ -143,6 +144,7 @@ export function Requirement3View({ role }: { role: Role }) {
 
   return (
     <div className="transit-page">
+      {role==='logistics' && <UpgradeTemplates role={role} transfer />}
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
       <div className="transit-toolbar">
         <label className="btn btn-primary" htmlFor="transit-import-file">{busy === "preview" ? "读取中…" : "导入在途表格"}</label>
@@ -197,7 +199,7 @@ export function Requirement3View({ role }: { role: Role }) {
 
 
       {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
-        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>店铺</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.store || "待补录"}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
       <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "导入中…" : "确认导入"}</button></div></section>}
       {!preview && !statusPreview && !notice && <EmptyState title="选择表格开始导入" hint="XLSX / CSV" />}
     </div>

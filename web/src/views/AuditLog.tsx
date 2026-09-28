@@ -5,7 +5,7 @@ import { Icon } from "../components/Icon";
 import { Panel, displayTime } from "../components/ui";
 import type { AuditAction, AuditRecord, Role, Tone } from "../types";
 
-type VisibleAuditAction = Extract<AuditAction, "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
+type VisibleAuditAction = Extract<AuditAction, "upgrade_transfer_started" | "upgrade_flow_update" | "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
 
 const auditActions: ReadonlyArray<{ value: VisibleAuditAction; label: string; tone: Tone }> = [
   {value:"transit_import",label:"在途导入",tone:"blue"},
@@ -16,7 +16,9 @@ const auditActions: ReadonlyArray<{ value: VisibleAuditAction; label: string; to
   { value: "reject", label: "商务拒绝", tone: "red" },
   { value: "confirm", label: "调拨确认", tone: "green" },
   { value: "upgrade_relocation_created", label: "移仓发货", tone: "amber" },
-  { value: "upgrade_relocation_complete", label: "移仓升级完成", tone: "green" },
+  {value:"upgrade_transfer_started",label:"转仓发起",tone:"amber"},
+  {value:"upgrade_flow_update",label:"升级资料与进度",tone:"blue"},
+  { value: "upgrade_relocation_complete", label: "升级完成与更正", tone: "green" },
   { value: "upgrade_direct_start", label: "在库升级锁定", tone: "blue" },
   { value: "upgrade_direct_complete", label: "在库升级完成", tone: "green" },
 ];
@@ -30,6 +32,8 @@ const roleLabels: Record<string, string> = {
   "operation-1": "运营·一团",
   "operation-2": "运营·二团",
   purchasing: "采购",
+  logistics: "物流",
+  alan: "Alan",
   business: "商务",
 };
 

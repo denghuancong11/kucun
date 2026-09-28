@@ -1,0 +1,140 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { InventoryDatabase, createInventoryDatabase, migrateInventoryDatabaseToCurrent, OVERSEAS_WAREHOUSES } from '../inventory-db.mjs';
+import { processWarehouseAddress } from '../warehouse-address.mjs';
+
+const root=path.resolve(import.meta.dirname,'..');
+const state=await fs.mkdtemp(path.join(await fs.mkdir(path.join(root,'.test-output'),{recursive:true}).then(()=>path.join(root,'.test-output')),'req59-'));
+const file=path.join(state,'data','aster-inventory.sqlite');await fs.mkdir(path.dirname(file),{recursive:true});
+const results=[]; const check=(name,fn)=>{fn();results.push({name,passed:true});console.log('PASS '+name);};
+const rid=()=>crypto.randomUUID(); const warehouse=OVERSEAS_WAREHOUSES[0];
+if(process.env.ASTER_ACCEPTANCE_SNAPSHOT) {
+  await fs.copyFile(process.env.ASTER_ACCEPTANCE_SNAPSHOT,file);
+  const before=new DatabaseSync(file),ledger=JSON.stringify(before.prepare('SELECT * FROM upgrade_inventory_ledger ORDER BY id').all());
+  const balances=before.prepare('SELECT batch_key,on_hand,locked FROM stock_balances ORDER BY batch_key').all();before.close();
+  migrateInventoryDatabaseToCurrent({databasePath:file});
+  const after=new DatabaseSync(file);
+  check('迁移保留每条升级台账及每个批次余额',()=>{assert.equal(JSON.stringify(after.prepare('SELECT * FROM upgrade_inventory_ledger ORDER BY id').all()),ledger);assert.deepEqual(after.prepare('SELECT batch_key,on_hand,locked FROM stock_balances ORDER BY batch_key').all(),balances);});
+  check('历史零回复拒绝、旧待办采购接续、隐藏记录重新展示',()=>{
+    assert.equal(after.prepare('SELECT status FROM inquiry_documents WHERE id=6').get().status,'rejected');
+    assert.equal(after.prepare('SELECT status FROM inquiry_documents WHERE id=5').get().status,'pending_procurement');
+    assert.equal(after.prepare('SELECT COUNT(*) AS n FROM inquiry_documents WHERE hidden_at IS NULL').get().n,8);
+    assert.equal(after.prepare("SELECT quantity FROM upgrade_completion_details WHERE id='COMP-UOP-00000007'").get().quantity,1);
+  });after.close();
+  check('重复迁移不执行任何数据重放',()=>assert.equal(migrateInventoryDatabaseToCurrent({databasePath:file}).changed,false));
+} else createInventoryDatabase({databasePath:file,seedCatalogData:false});
+const db=new InventoryDatabase(state),at=new Date().toISOString();
+db.db.prepare("INSERT INTO catalog_models(model,category,base_in_stock,in_transit,revision,updated_at) VALUES('SYNTH-REQ59','墨盒',0,0,1,?)").run(at);
+const model='SYNTH-REQ59';
+const createInquiry=()=>db.createInquiry({role:'operation-1',model,quantity:120,department:'一团',store:'AUS',operator:'隔离验收',fnsku:'X123456789',asin:'B123456789',requestId:rid()}).record;
+const review=i=>db.reviewInquiry({id:i.id,role:'business',decision:'approve',approvedQuantity:110,expectedRevision:i.revision,requestId:rid()}).record;
+const reply=(i,qty,role='alan')=>db.replyInquiry({id:i.id,role,supplierQuantity:qty,shippingWarehouse:qty?'CA':'',expectedRevision:i.revision,requestId:rid()}).record;
+const archive=i=>db.archiveInquiry({id:i.id,role:'purchasing',plan:'SYNTH-PLAN',date:'2026-09-28',version:'V1',expectedRevision:i.revision,requestId:rid()}).record;
+let i=review(createInquiry());const reviewed=i;i=reply(i,100);
+check('Alan先回复生效；申请和审核数量保留，采购旧版本被拒',()=>{
+  assert.equal(i.status,'pending_procurement');assert.equal(i.requestedQuantity,120);assert.equal(i.approvedQuantity,110);
+  assert.throws(()=>reply(reviewed,90,'purchasing'),e=>e.code==='stale_revision');
+  assert.throws(()=>db.archiveInquiry({id:i.id,role:'assistant-1',plan:'P',date:'2026-09-28',version:'V1',expectedRevision:i.revision,requestId:rid()}),e=>e.code==='inquiry_archive_forbidden');
+});i=archive(i);
+let zero=reply(review(createInquiry()),0,'purchasing');
+check('回复0进入已拒绝且保留备份',()=>{assert.equal(zero.status,'rejected');assert.ok(db.inquiryBackups().some(x=>x.id===zero.id));});
+db.hideInquiries({role:'purchasing',ids:[i.id,zero.id],requestId:rid()});
+check('手动隐藏只影响审批显示，备份保留',()=>{assert.ok(!db.approvalView().inquiries.some(x=>x.id===i.id));assert.ok(db.inquiryBackups().some(x=>x.id===i.id));});
+zero=db.recallInquiry({id:zero.id,role:'business',expectedRevision:db.getInquiry(zero.id).revision,requestId:rid()}).record;
+check('商务回撤重现并清除本轮审核、回复',()=>{assert.equal(zero.status,'pending_business');assert.equal(zero.approvedQuantity,null);assert.equal(zero.hiddenAt,null);});
+check('商务回撤后采购不能跳过重审；审核后可按原规则回撤',()=>{
+  assert.throws(()=>db.recallInquiry({id:zero.id,role:'purchasing',expectedRevision:zero.revision,requestId:rid()}),e=>e.code==='inquiry_business_review_required');
+  zero=review(zero);
+  zero=db.recallInquiry({id:zero.id,role:'purchasing',expectedRevision:zero.revision,requestId:rid()}).record;
+  assert.equal(zero.status,'pending_purchasing');assert.equal(zero.approvedQuantity,110);
+});
+const w=db.initiateRelocationUpgrade({role:'purchasing',inquiryId:i.id,requestId:rid()}).workItem;
+const raw='Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside CA 92503\n电话 12345';
+let rows=db.upgradeTemplateRows([w.id]).map(r=>({...r,rma:'R616738',rawAddress:raw,packPerBox:'4'}));
+db.updateUpgradeFlows({role:'logistics',rows,requestId:rid()});
+check('按样例处理联系人、RMA、房间号并进入运营填写',()=>{
+  const f=db.upgradeFlow(w.id);assert.equal(f.status,'awaiting_operation');assert.ok(f.processedAddress.includes('Mirella RW-ups228 (RMA#: R616738)'));assert.ok(f.processedAddress.includes('12000 Magnolia Ave of 106, Suite#101'));
+});
+const f=db.upgradeFlow(w.id);
+db.recordRelocationOperation({id:w.id,role:'operation-1',removalOrderNo:'SYNTH-ORDER',expectedRevision:f.revision,requestId:rid()});
+const packageRow=(quantity,ext='PKG1',store='A-US 美国')=>({externalId:ext,storeId:store,storeName:store,countryCode:'US',orderNo:'SYNTH-ORDER',fnsku:'X123456789',quantity,carrier:'UPS',trackingNo:'TRACK-'+ext,shipDate:'2026-09-28'});
+const capture=items=>db.syncRelocationLogistics({id:w.id,role:'logistics',shipments:items,capturedAt:new Date().toISOString(),requestId:rid()});
+let sync=capture([packageRow(40)]);
+check('缓存保存后自动采纳40件并更新业务',()=>{assert.equal(sync.businessApplied,true);assert.equal(db.upgradeFlow(w.id).shippedQuantity,40);});
+capture([packageRow(40)]);
+check('同包裹重抓不重复',()=>assert.equal(db.upgradeFlow(w.id).shippedQuantity,40));
+const update=(id,patches,progress)=>{const current=db.upgradeTemplateRows([id]);const out=current.map((r,n)=>({...r,progressQuantity:progress,...(patches[n]||{})}));db.updateUpgradeFlows({role:'logistics',rows:out,requestId:rid()});return out;};
+const two=update(w.id,[{completedQuantity:2,completedVersion:'V2',warehouse}],38);
+db.updateUpgradeFlows({role:'logistics',rows:two,requestId:rid()});
+update(w.id,[{completedQuantity:5,completedVersion:'V2',warehouse}],35);
+check('累计2→重复2→5净入库5；不同内容旧版本冲突',()=>{
+  assert.equal(db.upgradeFlow(w.id).completedQuantity,5);assert.equal(db.getBalance(db.upgradeFlow(w.id).details[0].batchKey).onHand,5);
+  assert.throws(()=>db.updateUpgradeFlows({role:'logistics',rows:two.map(r=>({...r,completedQuantity:3})),requestId:rid()}),e=>e.code==='completion_stale_revision');
+});
+capture([packageRow(40),packageRow(5,'PKG2')]);
+check('重抓新增包裹只加5，完成保持5',()=>{assert.equal(db.upgradeFlow(w.id).shippedQuantity,45);assert.equal(db.upgradeFlow(w.id).completedQuantity,5);});
+const cross=capture([packageRow(7,'PKGX','BE-US 美国')]);
+check('跨店缓存与业务应用明确区分',()=>{assert.equal(cross.cacheSaved,true);assert.equal(cross.businessApplied,false);assert.equal(db.upgradeFlow(w.id).shippedQuantity,45);});
+check('已采纳包裹下降拒绝',()=>assert.throws(()=>capture([packageRow(39)]),e=>e.code==='external_shipment_below_used'));
+i=db.recallInquiry({id:i.id,role:'purchasing',expectedRevision:db.getInquiry(i.id).revision,requestId:rid()}).record;
+i=reply(i,30);
+check('D1保留低回复、显示15差额、阻止重新归档',()=>{assert.equal(i.supplierQuantity,30);assert.equal(i.sourceDeficit,15);assert.throws(()=>archive(i),e=>e.code==='inquiry_source_deficit');});
+update(w.id,[{completedQuantity:6,completedVersion:'V2',warehouse}],39);
+check('回撤清空原单后，既有升级仍按启动计划入库',()=>{const b=db.db.prepare('SELECT * FROM stock_batches WHERE batch_key=?').get(db.upgradeFlow(w.id).details[0].batchKey);assert.equal(b.plan,'SYNTH-PLAN');assert.equal(b.fnsku,'X123456789');assert.equal(b.shipping_method,'Aster海外仓-升级后库存');});
+const transferInput={importId:'SYNTH-FIRST',transitId:'',model,quantity:60,plan:'SYNTH-TRANSFER',date:'2026-09-28',version:'V1',fnsku:'X123456789',team:'一团',store:'AUS',packPerBox:'4'};
+const transfer=db.importTransferFlows({role:'logistics',rows:[transferInput],requestId:rid()}).flows[0];
+db.importTransferFlows({role:'logistics',rows:[transferInput],requestId:rid()});
+check('首次转仓重试不另建流程；等待清点不入库',()=>{assert.equal(db.db.prepare("SELECT COUNT(*) AS n FROM upgrade_relocation_work_items WHERE transfer_key='SYNTH-FIRST'").get().n,1);assert.equal(transfer.completedQuantity,0);});
+update(transfer.id,[{rma:'RMA-T',countedQuantity:55}],55);
+check('D2清点55按55继续，差额−5单列',()=>{const t=db.upgradeFlow(transfer.id);assert.equal(t.countDifference,-5);assert.equal(t.status,'transferring');});
+const td=db.upgradeFlow(transfer.id);db.addCompletionDetail({id:td.id,role:'logistics',expectedRevision:td.revision,requestId:rid()});
+update(td.id,[{completedQuantity:10,completedVersion:'V2',warehouse},{completedQuantity:10,completedVersion:'V2',warehouse}],35);
+let ds=db.upgradeFlow(td.id).details;
+check('同版本两明细共20件、不同ID、多行共用父版本可提交',()=>{assert.notEqual(ds[0].id,ds[1].id);assert.equal(ds[0].batchKey,ds[1].batchKey);assert.equal(db.getBalance(ds[0].batchKey).onHand,20);});
+let allocated=db.createAllocation({role:'operation-1',model,sourceBatchKey:ds[0].batchKey,plan:'SYNTH-TRANSFER',date:'2026-09-28',version:'V2',quantity:12,department:'一团',store:'AUS',operator:'验收调拨',fnsku:'X123456789',asin:'B123456789',requestId:rid()}).record;
+allocated=db.reviewAllocation({id:allocated.id,role:'business',decision:'approve',approvedQuantity:12,expectedRevision:allocated.revision,requestId:rid()}).record;
+db.confirmAllocation({id:allocated.id,role:'assistant-1',expectedRevision:allocated.revision,requestId:rid()});
+check('升级后库存可按真实套/箱4申请、商务审核、助理调拨12件',()=>assert.equal(db.getBalance(ds[0].batchKey).available,8));
+update(td.id,[{completedQuantity:2},{completedQuantity:10}],43);
+check('D3共享可用8允许更正，另一明细贡献不变',()=>{assert.equal(db.getBalance(ds[0].batchKey).available,0);assert.deepEqual(db.upgradeFlow(td.id).details.map(d=>d.quantity),[2,10]);});
+const ledgers=db.db.prepare('SELECT COUNT(*) AS n FROM upgrade_inventory_ledger').get().n;
+check('超可用余额更正整事务回滚',()=>{assert.throws(()=>update(td.id,[{completedQuantity:1}],44),e=>e.code==='completion_balance_insufficient');assert.equal(db.db.prepare('SELECT COUNT(*) AS n FROM upgrade_inventory_ledger').get().n,ledgers);assert.equal(db.upgradeFlow(td.id).details[0].quantity,2);});
+update(td.id,[{completedQuantity:1},{completedQuantity:11}],43);
+check('同文件共享批次一减一增按整份净额校验，顺序不造成误拒',()=>{assert.equal(db.getBalance(ds[0].batchKey).available,0);assert.deepEqual(db.upgradeFlow(td.id).details.map(d=>d.quantity),[1,11]);});
+const dup=db.upgradeTemplateRows([td.id]);
+check('同文件重复完成ID整份拒绝',()=>assert.throws(()=>db.updateUpgradeFlows({role:'logistics',rows:[dup[0],dup[0]],requestId:rid()}),e=>e.code==='duplicate_completion_id'));
+const beforeVersion=db.upgradeFlow(w.id).details[0];
+update(w.id,[{completedVersion:'V3'}],39);
+check('完成版本更正按原明细转出转入，总量6不变',()=>{
+  const after=db.upgradeFlow(w.id).details[0];assert.notEqual(after.batchKey,beforeVersion.batchKey);
+  assert.equal(db.getBalance(beforeVersion.batchKey).onHand,0);assert.equal(db.getBalance(after.batchKey).onHand,6);
+});
+let lock=db.createAllocation({role:'operation-1',model,sourceBatchKey:db.upgradeFlow(w.id).details[0].batchKey,plan:'SYNTH-PLAN',date:'2026-09-28',version:'V3',quantity:4,department:'一团',store:'AUS',operator:'锁定更正验收',fnsku:'X123456789',asin:'B123456789',requestId:rid()}).record;
+check('完成版本更正受原批次锁定4件限制，失败保持原版本',()=>{
+  assert.throws(()=>update(w.id,[{completedVersion:'V4'}],39),e=>e.code==='completion_balance_insufficient');
+  assert.equal(db.upgradeFlow(w.id).details[0].version,'V3');assert.equal(db.getBalance(db.upgradeFlow(w.id).details[0].batchKey).locked,4);
+});
+db.reviewAllocation({id:lock.id,role:'business',decision:'reject',expectedRevision:lock.revision,requestId:rid()});
+// 显式历史夹具：已有其他减少20件；新自动抓取不会推算此值。
+db.db.prepare('UPDATE upgrade_relocations SET sold_quantity=20,fba_remaining_quantity=fba_remaining_quantity-20 WHERE id=(SELECT relocation_id FROM upgrade_relocation_work_items WHERE id=?)').run(w.id);
+db.db.prepare('UPDATE upgrade_relocation_work_items SET sold_quantity=20,fba_remaining_quantity=fba_remaining_quantity-20 WHERE id=?').run(w.id);
+check('D1既有其他减少参与来源缺口且不被自动抓取重算',()=>{assert.equal(db.getInquiry(i.id).sourceDeficit,35);assert.equal(capture([packageRow(40)]).businessApplied,true);assert.equal(db.upgradeFlow(w.id).otherReduction,20);});
+const oldSource=db.upgradeFlow(w.id);i=db.recallInquiry({id:i.id,role:'purchasing',expectedRevision:db.getInquiry(i.id).revision,requestId:rid()}).record;i=reply(i,100);i=archive(i);
+check('重新归档继续扣既有45已发和20其他减少，只剩35',()=>assert.equal(db.relocationSourceQuantity(null,i.id),35));
+db.db.prepare("UPDATE inquiry_documents SET plan='SECOND-PLAN',fnsku='X999999999',store_name='BUS' WHERE id=?").run(i.id);
+check('所有旧升级读取固定来源，包括汇总接口及完成详情',()=>{const u=db.getUpgradeDashboard().upgrades.find(u=>u.inquiryId===i.id);assert.equal(u.plan,oldSource.plan);assert.equal(u.fnsku,oldSource.fnsku);assert.equal(u.relocations[0].source.store_name,'AUS');});
+for(const counted of [65,0]) {
+  const tr=db.importTransferFlows({role:'logistics',rows:[{...transferInput,importId:`SYNTH-COUNT-${counted}`,plan:`PLAN-${counted}`}],requestId:rid()}).flows[0];
+  update(tr.id,[{rma:'RMA-COUNT',countedQuantity:counted}],counted);
+  check(`D2清点${counted}，差额${counted-60}且不改转出60`,()=>{const f=db.upgradeFlow(tr.id);assert.equal(f.sourceQuantity,60);assert.equal(f.countedQuantity,counted);assert.equal(f.countDifference,counted-60);});
+}
+for(const rma of ['R616738','R616744','R616747']) check(`A号样例${rma}联系人、Suite及电话完整保留`,()=>{
+  const p=processWarehouseAddress({store:'AUS',rma,raw:raw.replace('R616738',rma)});
+  assert.equal(p.processed,raw.replace('R616738',rma).replace('Mirella RW','Mirella RW-ups228').replace('12000 Magnolia Ave','12000 Magnolia Ave of 106'));
+});
+check('B27依B列A213；U缺资料明确未处理',()=>{assert.ok(processWarehouseAddress({store:'MNUS',rma:'R616738',raw}).processed.includes('of A213'));assert.ok(processWarehouseAddress({store:'UUS',rma:'R616738',raw}).issue.includes('缺失'));});
+check('所有库存恒等式',()=>db.assertInventoryInvariants());
+await fs.writeFile(path.join(state,'results.json'),JSON.stringify({checks:results,state,limitations:['全部写入隔离库；真实领星未验证。浏览器下载与文件往返另有此前保存的独立证据，本脚本不控制浏览器。']},null,2));
+db.close();console.log(JSON.stringify({state,checks:results.length}));

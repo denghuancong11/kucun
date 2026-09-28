@@ -1,4 +1,4 @@
-// 真实 HTTP 与独立 SQLite，子进程受控时钟验证定时隐藏只作用于旧终态。
+// 真实 HTTP 与独立 SQLite：周二/四北京时间21点仅隐藏调拨终态，询库手动隐藏。
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -30,7 +30,7 @@ const createAllocation=quantity=>api('/api/allocations','operation-1',{...baseBo
 const inquiry=(quantity=10,team='一团')=>api('/api/inquiries',team==='一团'?'operation-1':'operation-2',{...baseBody,department:team,quantity,requestId:rid()}).then(r=>r.record);
 const review=(record,kind='inquiries',decision='approve')=>api(`/api/${kind}/${record.id}/review`,'business',{decision,approvedQuantity:record.requestedQuantity,expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const reply=(record,quantity)=>api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'CA':'',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
-const archive=record=>api(`/api/inquiries/${record.id}/archive`,'assistant-1',{plan:'SCHEDULE-FBA',date:'2026-09-21',version:'V1',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
+const archive=record=>api(`/api/inquiries/${record.id}/archive`,'purchasing',{plan:'SCHEDULE-FBA',date:'2026-09-21',version:'V1',expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const confirm=record=>api(`/api/allocations/${record.id}/confirm`,'assistant-1',{expectedRevision:record.revision,requestId:rid()}).then(r=>r.record);
 const sortedIds=rows=>rows.map(r=>r.id).sort((a,b)=>a-b);
 try{
@@ -51,9 +51,9 @@ try{
  check('周二21点只推进显示元数据，全部业务表、库存、锁定量保持不变');
  const after=await view();
  assert.deepEqual(sortedIds(after.allocations),[allocationBusiness.id,allocationAssistant.id,lateRejectedAllocation.id],'待商务、待助理的旧调拨必须继续显示');
- assert.deepEqual(sortedIds(after.inquiries),[inquiryBusiness.id,inquiryPurchasing.id,inquiryAssistant.id,otherTeam.id,lateRejectedInquiry.id,lateZeroInquiry.id],'三种未完成询单必须继续显示，旧终态隐藏');
- check('五个未完成阶段持续可见，已完成、已拒绝及零回复旧终态隐藏');
- const scoped=await view('operation-1');assert.ok(scoped.inquiries.every(r=>r.department==='一团'));assert.equal(scoped.inquiries.length,5);
+ assert.deepEqual(sortedIds(after.inquiries),sortedIds(initial.inquiries),'询库全部状态均不参加自动清空');
+ check('调拨未完成持续可见，询库含已完成/拒绝全部持续显示');
+ const scoped=await view('operation-1');assert.ok(scoped.inquiries.every(r=>r.department==='一团'));assert.equal(scoped.inquiries.length,8);
  check('定时处理保留原角色及团队隔离');
  const boundaryRecord=await inquiry(3);assert.equal(boundaryRecord.createdAt,'2026-09-22T13:00:00.000Z');
  await setTime('2026-09-22T13:30:00.000Z');
@@ -65,7 +65,7 @@ try{
  check('旧未完成单越过定时点后仍能按原岗位完成，调拨锁释放且询单不增加库存');
  const finishedView=await view();
  assert.deepEqual(sortedIds(finishedView.allocations),[allocationBusiness.id,allocationAssistant.id,lateRejectedAllocation.id]);
- assert.deepEqual(sortedIds(finishedView.inquiries),[inquiryBusiness.id,inquiryPurchasing.id,inquiryAssistant.id,otherTeam.id,lateRejectedInquiry.id,lateZeroInquiry.id,boundaryRecord.id]);
+ assert.deepEqual(sortedIds(finishedView.inquiries),[...sortedIds(initial.inquiries),boundaryRecord.id]);
  check('截止前创建、截止后完成/拒绝/零回复的单据仍保留在当周期列表');
  await setTime('2026-09-24T12:59:59.999Z');const justBefore=await view();assert.deepEqual(sortedIds(justBefore.allocations),sortedIds(finishedView.allocations));assert.deepEqual(sortedIds(justBefore.inquiries),sortedIds(finishedView.inquiries));
  check('下一定时点前1毫秒仍保留这些新终态记录');
@@ -73,8 +73,8 @@ try{
  check('恰在截止时间新建的记录继续可见');
  await setTime('2026-09-24T13:00:00.000Z');const beforeThursday=snapshot();await api('/api/sync');assert.equal(snapshot(),beforeThursday);
  const thursday=await view();assert.ok(thursday.inquiries.some(r=>r.id===otherTeam.id));assert.ok(thursday.inquiries.some(r=>r.id===boundaryRecord.id));
- assert.equal(thursday.allocations.length,0);assert.equal(thursday.inquiries.length,2);
- check('周四仍保留未完成旧单，前一周期已完成记录隐藏');
+ assert.equal(thursday.allocations.length,0);assert.equal(thursday.inquiries.length,10);
+ check('周四只隐藏调拨终态，询库10条全部保留');
  db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);
  check('库存恒等式与外键一致');
 }finally{await fs.writeFile(path.join(out,'http-result.json'),JSON.stringify({state,base,checks,calls},null,2));child.kill();if(child.exitCode===null)await once(child,'exit');db.close();}

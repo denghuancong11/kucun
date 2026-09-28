@@ -165,7 +165,7 @@ function StockPane({
                         </td>
                         <td>
                            <Clip text={row.fnsku || "—"} mono />
-                        </td><td>{row.warehouse || "历史仓库未确定"}{row.sourceTeam && <span className="muted"> · {row.sourceTeam}</span>}</td>
+                        </td><td>{row.shippingMethod || row.warehouse || "历史仓库未确定"}{row.sourceTeam && <span className="muted"> · {row.sourceTeam}</span>}</td>
                       </>
                     )}
                     <td className="actions-col">

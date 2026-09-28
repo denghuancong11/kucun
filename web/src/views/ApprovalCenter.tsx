@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { confirmAllocation, fetchApprovals, formatNumber, reviewAllocation, reviewInquiry } from "../api";
+import { clearInquiries, confirmAllocation, fetchApprovals, formatNumber, reviewAllocation, reviewInquiry } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment } from "../components/InquiryFulfillment";
@@ -23,7 +23,7 @@ function isMyTodo(item: ApprovalItem, role: Role) {
   if (role === "operation-1" || role === "operation-2") return item.record.department === group;
   const assistant = role === "assistant-1" || role === "assistant-2";
   if (item.kind === "allocation") return (role === "business" && item.record.approvalStatus !== "approved") || (assistant && item.record.approvalStatus === "approved");
-  return (role === "business" && item.record.status === "pending_business") || (role === "purchasing" && item.record.status === "pending_purchasing") || (assistant && item.record.status === "pending_assistant");
+  return (role === "business" && item.record.status === "pending_business") || (["purchasing","alan"].includes(role) && item.record.status === "pending_purchasing") || (role === "purchasing" && item.record.status === "pending_procurement");
 }
 function metricCoverage(value: number | null, metrics: LingxingMetrics | null) {
   if (!metrics) return "—";
@@ -40,7 +40,7 @@ function calculatedCoverage(quantity: string, metrics: LingxingMetrics | null) {
   return `${((fba.reduce((sum, value) => sum + value, 0) + approved) / metrics.sales30d).toFixed(1)} 倍`;
 }
 function progressLabel(item: ApprovalItem) {
-  if (isArchived(item)) return item.kind === "allocation" || ["assistant", "assistant-1", "assistant-2"].includes(item.record.archivedByRole ?? "") ? "已完成" : "";
+  if (isArchived(item)) return "已完成";
   if (item.kind === "inquiry") return item.record.statusText;
   if (item.record.approvalStatus === "rejected") return "已拒绝";
   if (item.record.statusCode === "pending") return item.record.approvalStatus === "approved" ? "待助理确认" : "待商务审核";
@@ -204,7 +204,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
       <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions"><button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "正在导出…" : "导出询库"}</button><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    </div><div className="page-actions">{["admin","purchasing","business"].includes(role) && <button className="btn btn-ghost" type="button" onClick={() => void clearInquiries(role, createRequestId("inquiry-clear")).then(async result => { await query.refresh(); setNotice({kind:"success",text:`已隐藏 ${result.hidden} 张终态询库，备份保留。`}); }).catch(error => setNotice({kind:"error",text:error.message}))}>询库数据流-手动清空</button>}<button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "正在导出…" : "导出询库"}</button><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}
     {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
       <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>

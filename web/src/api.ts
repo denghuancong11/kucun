@@ -17,6 +17,7 @@ import type {
   TransitStatusPreview,
   TransitStatusResult,
   UpgradeDashboardPayload,
+  UpgradeFlow, UpgradeTemplateRow, UpgradeFilePreview, Inquiry,
 } from "./types";
 
 export type ApiError = Error & { code?: string; status?: number; details?: unknown };
@@ -79,6 +80,15 @@ export function fetchAllocations(role: Role, model: string): Promise<Allocations
 export function fetchApprovals(role: Role): Promise<ApprovalsPayload> {
   return requestJson<ApprovalsPayload>("/api/approvals", role);
 }
+
+export const clearInquiries=(role:Role,requestId:string)=>requestJson<{ok:true;hidden:number}>('/api/inquiries/clear',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId})});
+export const fetchInquiryBackups=(role:Role)=>requestJson<{ok:true;records:Inquiry[];sync:SyncState}>('/api/inquiries/backups',role);
+export const recallInquiry=(role:Role,id:number,expectedRevision:number,requestId:string)=>requestJson(`/api/inquiries/${id}/recall`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision,requestId})});
+export const fetchUpgradeFlows=(role:Role)=>requestJson<{ok:true;flows:UpgradeFlow[];sync:SyncState}>('/api/upgrades/flows',role);
+export const exportUpgradeRows=(role:Role,ids:number[])=>requestJson<{ok:true;rows:UpgradeTemplateRow[]}>('/api/upgrades/template',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids})});
+export const addUpgradeDetail=(role:Role,id:number,expectedRevision:number,requestId:string)=>requestJson(`/api/upgrades/flows/${id}/details`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision,requestId})});
+export const previewUpgradeFile=(role:Role,kind:'update'|'transfer',file:File)=>requestJson<UpgradeFilePreview>(`/api/upgrades/${kind}/preview`,role,{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file});
+export const importUpgradeFile=(role:Role,kind:'update'|'transfer',preview:UpgradeFilePreview,requestId:string)=>requestJson<{ok:true;flows:UpgradeFlow[]}>(`/api/upgrades/${kind}/import`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rows:preview.rows,previewToken:preview.previewToken,requestId})});
 
 export function reviewAllocation(role: Role, id: number, payload: ApprovalReview): Promise<unknown> {
   return requestJson(`/api/allocations/${id}/review`, role, {
@@ -180,33 +190,6 @@ export function recordRelocationOperation(
 ): Promise<unknown> {
   return requestJson(`/api/upgrades/relocation-work-items/${id}/operation`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
-}
-
-export function shipRelocationUpgrade(
-  role: Role,
-  id: number,
-  payload: {
-    fbaRemainingQuantity: number;
-    externalItems: Array<{ lineId: number; quantity: number }>;
-    expectedRevision: number;
-    requestId: string;
-  },
-): Promise<unknown> {
-  return requestJson(`/api/upgrades/relocation-work-items/${id}/ship`, role, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
-}
-
-export function completeRelocationUpgrade(
-  role: Role,
-  id: number,
-  payload: { sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string },
-): Promise<unknown> {
-  return requestJson(`/api/upgrades/relocations/${id}/complete`, role, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
   });
 }
 

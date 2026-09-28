@@ -398,7 +398,7 @@
   }
 }
 
-.transit-page .visually-hidden {
+.transit-page .visually-hidden, .upgrade-template-actions .visually-hidden {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -765,3 +765,6 @@
 @media (max-width:1366px) { .relocation-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } .package-grid { grid-template-columns:1fr; } }
 
 .approval-toolbar select { height:32px; border:1px solid var(--border); border-radius:4px; padding:0 26px 0 10px; background:#fff; color:var(--text); font:inherit; font-size:13px; }
+.upgrade-history-card { padding: 18px 0; border-bottom: 1px solid var(--border, #dde2e8); }
+.upgrade-template-actions { margin-bottom: 18px; }
+.address-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; }

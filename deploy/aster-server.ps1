@@ -42,6 +42,7 @@ if (-not (Test-Path -LiteralPath $runtimeConfig -PathType Leaf)) {
   throw "缺少本地私有运行配置 $runtimeConfig；拒绝使用示例仓库名称启动"
 }
 $env:ASTER_RUNTIME_CONFIG = $runtimeConfig
+$env:ASTER_WAREHOUSE_ACCOUNTS = Join-Path $stateRoot ".local-private\warehouse-accounts.local.json"
 Remove-Item Env:ASTER_OVERSEAS_WAREHOUSES -ErrorAction SilentlyContinue
 $database = Join-Path (Join-Path $stateRoot "data") "aster-inventory.sqlite"
 if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {

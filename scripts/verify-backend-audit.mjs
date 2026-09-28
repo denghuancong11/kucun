@@ -8,6 +8,7 @@ import {once} from 'node:events';
 import {createInventoryDatabase,InventoryDatabase} from '../inventory-db.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
 
+import {prepareFlowUpdate,SAMPLE_ADDRESS} from './upgrade-test-template.mjs';
 const root=path.resolve(import.meta.dirname,'..');
 const out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/backend-audit');
 await fs.mkdir(out,{recursive:true});
@@ -27,7 +28,7 @@ async function api(route,role='admin',body,status=200){
 async function test(name,fn){try{await fn();checks.push(name);console.log('PASS '+name);}catch(e){failures.push({name,message:e.message,stack:e.stack});console.log('FAIL '+name+': '+e.message);}}
 function snapshot(){return JSON.stringify(Object.fromEntries(db.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,db.db.prepare(`SELECT * FROM "${name}"`).all()])));}
 async function receive({model='AUDIT-ITEM',team='一团',quantity=20,version='V1',pack=4,plan='AUDIT-PLAN',fnsku='AUDIT-FNSKU',warehouse='SyntheticWarehouseA',category='硒鼓'}={}){
- const csv=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},${quantity},${pack},${fnsku},${warehouse},${plan},2026-09-24,${team},${version}`;
+ const csv=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号,店铺\n${model},${quantity},${pack},${fnsku},${warehouse},${plan},2026-09-24,${team},${version},AUS`;
  const response=await fetch(base+'/api/transit/preview',{method:'POST',headers:{'x-role':'admin','x-file-name':encodeURIComponent(`${rid()}-${category}.csv`)},body:csv});
  assert.equal(response.status,200);const preview=await response.json();
  const result=await api('/api/transit/import','admin',{previewToken:preview.previewToken,fileName:preview.fileName,fileHash:preview.fileSha256,templateHash:preview.templateSha256,rows:preview.rows,requestId:rid()});
@@ -95,15 +96,15 @@ try{
    const shelf=await receive({model,team:kind==='allocation'?'一团':'二团',quantity:20,warehouse:kind==='fba'?'直发FBA':'SyntheticWarehouseA'});
    let source;
    if(kind==='allocation'){
-     let record=(await api('/api/allocations','operation-2',{sourceBatchKey:shelf.batchKey,model,plan:'AUDIT-PLAN',date:'2026-09-24',version:'V1',quantity:20,department:'二团',store:'AUDITUS',operator:'合成运营',fnsku:'AUDIT-FNSKU',asin:'AUDITASIN',requestId:rid()})).record;
+     let record=(await api('/api/allocations','operation-2',{sourceBatchKey:shelf.batchKey,model,plan:'AUDIT-PLAN',date:'2026-09-24',version:'V1',quantity:20,department:'二团',store:'AUS',operator:'合成运营',fnsku:'AUDIT-FNSKU',asin:'AUDITASIN',requestId:rid()})).record;
      record=(await api(`/api/allocations/${record.id}/review`,'business',{decision:'approve',approvedQuantity:20,expectedRevision:record.revision,requestId:rid()})).record;
      record=(await api(`/api/allocations/${record.id}/confirm`,'assistant-2',{expectedRevision:record.revision,requestId:rid()})).record;
      source={allocationId:record.id};
    }else if(kind==='inquiry'){
-     let record=(await api('/api/inquiries','operation-2',{model,quantity:20,department:'二团',store:'AUDITUS',operator:'合成运营',fnsku:'AUDIT-FNSKU',asin:'AUDITASIN',requestId:rid()})).record;
+     let record=(await api('/api/inquiries','operation-2',{model,quantity:20,department:'二团',store:'AUS',operator:'合成运营',fnsku:'AUDIT-FNSKU',asin:'AUDITASIN',requestId:rid()})).record;
      record=(await api(`/api/inquiries/${record.id}/review`,'business',{decision:'approve',approvedQuantity:20,expectedRevision:record.revision,requestId:rid()})).record;
      record=(await api(`/api/inquiries/${record.id}/reply`,'purchasing',{supplierQuantity:20,shippingWarehouse:'CA',expectedRevision:record.revision,requestId:rid()})).record;
-     record=(await api(`/api/inquiries/${record.id}/archive`,'assistant-2',{plan:'AUDIT-PLAN',date:'2026-09-24',version:'V1',expectedRevision:record.revision,requestId:rid()})).record;
+     record=(await api(`/api/inquiries/${record.id}/archive`,'purchasing',{plan:'AUDIT-PLAN',date:'2026-09-24',version:'V1',expectedRevision:record.revision,requestId:rid()})).record;
      source={inquiryId:record.id};
    }else source={fbaArchiveId:shelf.fbaArchiveId};
    const onHandBefore=db.getCatalog().models.find(m=>m.model===model).inStock;
@@ -113,34 +114,30 @@ try{
      let work=(await api('/api/upgrades/relocation-work-items','assistant-2',startBody)).workItem;
      let before=snapshot();assert.equal((await api('/api/upgrades/relocation-work-items','assistant-2',startBody)).deduped,true);assert.equal(snapshot(),before);
      before=snapshot();await api('/api/upgrades/relocation-work-items','assistant-2',{...source,requestId:rid()},409);assert.equal(snapshot(),before);
-     const procBody={rma:'RMA'+work.id,relocationAddress:'合成地址',expectedRevision:work.revision,requestId:rid()};
+     const procBody={rma:'RMA'+work.id,relocationAddress:SAMPLE_ADDRESS,expectedRevision:work.revision,requestId:rid()};
      before=snapshot();await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'operation-2',procBody,403);assert.equal(snapshot(),before);
-     work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',procBody)).workItem;
+     work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'logistics',procBody)).workItem;
      const opBody={removalOrderNo:'INTERNAL-'+work.id,expectedRevision:work.revision,requestId:rid()};
      before=snapshot();await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,'operation-1',opBody,403);assert.equal(snapshot(),before);
      work=(await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,'operation-2',opBody)).workItem;
-     const shipQuantity=sequence===1?6:12,fbaRemaining=sequence===1?12:0;
-     // 合成包裹只作为内部移仓夹具；不调用任何领星 HTTP/扩展/真实账户。
-     work=db.syncRelocationLogistics({id:work.id,role:'assistant-2',shipments:[{externalId:'FIXTURE-'+work.id,storeId:'SYNTHETIC',orderNo:work.removalOrderNo,fnsku:'AUDIT-FNSKU',quantity:shipQuantity,carrier:'SYNTHETIC',trackingNo:'TRACK-'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
-     const shipBody={fbaRemainingQuantity:fbaRemaining,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:shipQuantity}],expectedRevision:work.revision,requestId:rid()};
-     before=snapshot();await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,'operation-2',shipBody,403);assert.equal(snapshot(),before);
-     const ship=(await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,'assistant-2',shipBody));
-     before=snapshot();assert.equal((await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,'assistant-2',shipBody)).deduped,true);assert.equal(snapshot(),before);
-     let relocation=ship.upgrade.relocations.find(r=>r.sequence===sequence);
-     const completeBody={completedQuantity:shipQuantity+1,newVersion:'V2',targetWarehouse:'SyntheticWarehouseB',expectedRevision:relocation.revision,requestId:rid()};
-     before=snapshot();await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',completeBody,409);assert.equal(snapshot(),before);
-     for(const quantity of sequence===1?[2,4]:[12]){
-       const body={completedQuantity:quantity,newVersion:quantity===2?'V3':'V2',targetWarehouse:'SyntheticWarehouseB',expectedRevision:relocation.revision,requestId:rid()};
-       finalUpgrade=(await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body)).upgrade;
-       before=snapshot();assert.equal((await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body)).deduped,true);assert.equal(snapshot(),before);
-       relocation=finalUpgrade.relocations.find(r=>r.id===relocation.id);
+     const shipQuantity=sequence===1?6:14;
+     // 仅合成包裹协议，不能代替真实领星验收。
+     work=db.syncRelocationLogistics({id:work.id,role:'logistics',shipments:[{externalId:'FIXTURE-'+work.id,storeId:'SYNTHETIC',storeName:'A-US 美国',orderNo:work.removalOrderNo,fnsku:'AUDIT-FNSKU',quantity:shipQuantity,carrier:'SYNTHETIC',trackingNo:'TRACK-'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
+     const tooMuch=await prepareFlowUpdate(base,api,work.id,[{completedQuantity:shipQuantity+1,completedVersion:'V2',warehouse:'SyntheticWarehouseB',packPerBox:'4'}],0);
+     before=snapshot();await api('/api/upgrades/update/import','logistics',tooMuch,422);assert.equal(snapshot(),before);
+     for(const quantity of sequence===1?[2,6]:[14]){
+       const body=await prepareFlowUpdate(base,api,work.id,[{completedQuantity:quantity,completedVersion:'V2',warehouse:'SyntheticWarehouseB',packPerBox:'4'}],shipQuantity-quantity);
+       before=snapshot();await api('/api/upgrades/update/import','purchasing',body,403);assert.equal(snapshot(),before);
+       await api('/api/upgrades/update/import','logistics',body);
+       before=snapshot();assert.equal((await api('/api/upgrades/update/import','logistics',body)).deduped,true);assert.equal(snapshot(),before);
      }
+     finalUpgrade=db.getUpgradeDashboard().upgrades.find(u=>u.model===model&&u.kind==='relocation');
    }
-   assert.equal(finalUpgrade.status,'completed');assert.equal(finalUpgrade.completedQuantity,18);assert.equal(finalUpgrade.soldQuantity,2);assert.equal(finalUpgrade.fbaRemainingQuantity,0);
-   assert.equal(db.getCatalog().models.find(m=>m.model===model).inStock,onHandBefore+18);
-   const returned=db.db.prepare("SELECT * FROM stock_balances WHERE model=? AND version IN ('V2','V3')").all(model);
+   assert.equal(finalUpgrade.status,'completed');assert.equal(finalUpgrade.completedQuantity,20);assert.equal(finalUpgrade.soldQuantity,0);assert.equal(finalUpgrade.fbaRemainingQuantity,0);
+   assert.equal(db.getCatalog().models.find(m=>m.model===model).inStock,onHandBefore+20);
+   const returned=db.db.prepare("SELECT * FROM stock_balances WHERE model=? AND version='V2'").all(model);
    assert.ok(returned.every(b=>b.source_team===(kind==='allocation'?'一团':'二团')));
-   assert.equal(returned.reduce((sum,b)=>sum+b.on_hand,0),18);
+   assert.equal(returned.reduce((sum,b)=>sum+b.on_hand,0),20);
    const before=snapshot();await api('/api/upgrades/relocation-work-items','assistant-2',{...source,requestId:rid()},409);assert.equal(snapshot(),before);
  });
  }

@@ -18,6 +18,8 @@ const roleOptions: { value: Role; label: string }[] = [
   { value: "operation-2", label: "运营·二团" },
   { value: "purchasing", label: "采购" },
   { value: "business", label: "商务" },
+  { value: "alan", label: "Alan" },
+  { value: "logistics", label: "物流" },
 ];
 
 export function Sidebar({

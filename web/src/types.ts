@@ -1,11 +1,24 @@
 export type RequirementKey = "req1" | "req3" | "req4" | "approvals" | "audit";
 
 /* 助理与运营分别按团队办理；硒鼓库存明细和公开调拨摘要保持跨团可见。 */
-export const ROLES = ["admin", "assistant-1", "assistant-2", "operation-1", "operation-2", "purchasing", "business"] as const;
+export const ROLES = ["admin", "assistant-1", "assistant-2", "operation-1", "operation-2", "purchasing", "business", "alan", "logistics"] as const;
 export type Role = typeof ROLES[number];
 
+export interface UpgradeFlow {
+  id:number; flowId:string; revision:number; kind:'relocation'|'transfer'; model:string; category:Category;
+  documentNo:string; department:string; store:string; plan:string; date:string; fnsku:string; sourceVersion:string; packPerBox:string;
+  sourceQuantity:number; transitId:number|null; transferKey:string|null; countedQuantity:number|null; countDifference:number|null;
+  progressQuantity:number; shippedQuantity:number; otherReduction:number; completedQuantity:number; sourceRemaining:number|null;
+  status:string; statusText:string; rma:string; rawAddress:string; processedAddress:string; addressIssue:string; contact:string; street:string;
+  orderNo:string; carrier:string; trackingNo:string; details:{id:string;revision:number;quantity:number;version:string;warehouse:string;batchKey:string|null}[];
+  externalItems:{lineId:number;quantity:number;snapshot:{carrier:string;trackingNo:string;storeName:string}}[];
+  latestTask:{state:string;message:string;createdAt:string}|null;
+}
+export type UpgradeTemplateRow = Record<string,string|number|null>;
+export interface UpgradeFilePreview {ok:true;rows:UpgradeTemplateRow[];previewToken:string;fileName:string}
+
 /** 在途导入、物流更新及页面访问角色；助理数据范围仍由服务端按团队复核。 */
-export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing"];
+export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing", "logistics"];
 export const TRANSIT_SHELF_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2"];
 
 /* 有效权限：由服务端按类目与角色下发，供库存页面控制字段、展开和操作。 */
@@ -40,6 +53,7 @@ export interface ModelSummary {
 
 export interface StockDetail {
   warehouse: string;
+  shippingMethod?: string;
   sourceTeam?: string | null;
   quantity: number;
   baseQuantity: number;
@@ -56,6 +70,7 @@ export interface StockDetail {
 }
 
 export interface TransitDetail {
+  store?: string;
   id: number;
   quantity: number;
   originalQuantity?: number;
@@ -80,6 +95,7 @@ export interface TransitDetail {
 export interface TransitImportRow {
   sourceRow: number;
   data: {
+    store?: string;
     model: string;
     quantity: number;
     fnsku: string;
@@ -268,7 +284,7 @@ export interface LingxingMetrics {
   scope: "all_stores";
 }
 
-export type InquiryStatus = "pending_business" | "pending_purchasing" | "pending_assistant" | "archived" | "rejected" | "cancelled";
+export type InquiryStatus = "pending_business" | "pending_purchasing" | "pending_procurement" | "archived" | "rejected" | "cancelled";
 
 export interface InquiryShipment {
   id: number;
@@ -280,6 +296,9 @@ export interface InquiryShipment {
 }
 
 export interface Inquiry {
+  packPerBox?: string | null;
+  hiddenAt?: string | null;
+  sourceDeficit: number;
   id: number;
   documentNo: string;
   model: string;
@@ -419,6 +438,7 @@ export interface RelocationCandidate {
 
 export interface DirectUpgradeLine {
   warehouse: string;
+  shippingMethod?: string;
   sourceTeam?: string | null;
   id: number;
   sourceBatchKey: string;
@@ -635,7 +655,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "upgrade_transfer_started" | "upgrade_flow_update" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;
