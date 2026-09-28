@@ -27,8 +27,8 @@ const insertPageActiveTransit=db.db.prepare("INSERT INTO transit_batches(model,q
 const pageBatches={};
 for(const [team,warehouse] of [['一团','PAGE-ONE'],['二团','PAGE-TWO']]){
  const plan='PAGE-INK-PLAN',date='2026-09-01',version='V1',fnsku='XPAGEINK',batchKey=[pageInk,plan,date,version,warehouse].join('#');
- insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,4);
- const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,4);
+ insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,2);
+ const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,2);
  insertPageReceipt.run(Number(transit.lastInsertRowid),batchKey,500,'assistant',pageAt,`page-ink-${team}`);
  pageBatches[team]={batchKey,plan,date,version,fnsku};
 }
@@ -53,6 +53,7 @@ db.db.prepare("INSERT INTO catalog_models(model,category,base_in_stock,in_transi
 insertPageBatch.run(hiddenBatch,hiddenInk,hiddenPlan,hiddenDate,hiddenVersion,hiddenFnsku,pageAt,'PAGE-HIDDEN',4);
 const hiddenTransit=insertPageTransit.run(hiddenInk,80,0,hiddenPlan,hiddenDate,hiddenVersion,hiddenFnsku,'','','整柜','一团',pageAt,pageAt,4);
 insertPageReceipt.run(Number(hiddenTransit.lastInsertRowid),hiddenBatch,80,'assistant',pageAt,'page-hidden-ink');
+db.db.prepare("UPDATE stock_batches SET pack_per_box='1' WHERE model=?").run('SYNTH-TONER-001');
 db.createAllocation({role:'operation-2',model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity:100,department:'二团',store:'BUS',operator:'二团专属运营',fnsku:'XSECOND',asin:'BTEAM00002',requestId:crypto.randomUUID()});
 const pageFirstAllocation=db.createAllocation({role:'operation-1',model:pageInk,...pageBatches['一团'],sourceBatchKey:pageBatches['一团'].batchKey,quantity:10,department:'一团',store:'AUS',operator:'一团页面测试',asin:'BPAGE00001',requestId:crypto.randomUUID()}).record;
 db.createAllocation({role:'operation-2',model:pageInk,...pageBatches['二团'],sourceBatchKey:pageBatches['二团'].batchKey,quantity:20,department:'二团',store:'BUS',operator:'二团页面测试',asin:'BPAGE00002',requestId:crypto.randomUUID()});

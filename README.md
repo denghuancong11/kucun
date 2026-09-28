@@ -68,6 +68,8 @@ npm run migrate
 
 原运行配置中的仓库名称保存在被忽略的 `.local-private/runtime-config.local.json`。没有该本地文件时，新副本使用合成默认名称；也可通过 `ASTER_OVERSEAS_WAREHOUSES` 环境变量覆盖，多个名称以分号分隔。
 
+Windows 计划任务包装器从共享状态根读取 `.local-private/runtime-config.local.json`，并清除环境变量覆盖，确保 SYSTEM 账号启动发布目录时仍使用本机仓库配置。
+
 ## 领星扩展
 
 从仓库根目录运行 `node scripts/build-edge-extension.mjs` 可同步采集脚本并生成 `web/public/aster-lingxing-extension.zip`。也可在 Edge 的扩展管理页启用开发人员模式，加载 `edge-extension/` 目录。

@@ -271,8 +271,8 @@ try {
   assert.notEqual(batches[0].batchKey, batches[1].batchKey);
   check("同型号同计划但不同仓库分别形成库存批次");
 
-  let first = await allocate(batches[0], "一团", 50, "SyntheticOperatorA");
-  let second = await allocate(batches[0], "二团", 50, "SyntheticOperatorB");
+  let first = await allocate(batches[0], "一团", 48, "SyntheticOperatorA");
+  let second = await allocate(batches[0], "二团", 52, "SyntheticOperatorB");
   await review(first, 80, 409);
   second = (await review(second, 20)).record;
   first = (await review(first, 80)).record;
