@@ -47,17 +47,17 @@ async function fillWorkbook(file,columns,patches,name) {
   }));
   z['xl/worksheets/sheet1.xml']=strToU8(sheet);const target=path.join(out,name);await fs.writeFile(target,zipSync(z));return target;
 }
-async function download(button,name) {const waiting=page.waitForEvent('download');await button.click();const d=await waiting;const file=path.join(out,name);await d.saveAs(file);assert.ok((await fs.stat(file)).size>0);return file;}
+async function download(button,name,expectedFilename) {const waiting=page.waitForEvent('download');await button.click();const d=await waiting;if(expectedFilename)assert.equal(d.suggestedFilename(),expectedFilename);const file=path.join(out,name);await d.saveAs(file);assert.ok((await fs.stat(file)).size>0);return file;}
 const nav=label=>page.locator('.sidebar .nav-item',{hasText:label}).click();
 const mode=label=>page.getByRole('tab',{name:label,exact:true}).click();
-async function importPage(file,expectedMessage='已保存') {
+async function importPage(file,expectedMessage='(?:回填|导入)完成') {
   await page.locator('.upgrade-template-actions input[type=file]').setInputFiles(file);
   await page.getByRole('button',{name:'确认导入',exact:true}).waitFor();await page.getByRole('button',{name:'确认导入',exact:true}).click();
   await page.locator('.upgrade-template-actions').getByText(new RegExp(expectedMessage)).waitFor();
 }
 const flow=async id=>(await api('/api/upgrades/flows')).flows.find(f=>f.id===id);
 async function selectFlow(id) {const f=await flow(id);const checkbox=page.getByRole('checkbox',{name:new RegExp(f.flowId)});await checkbox.check();return f;}
-async function exportFlow(id,name) {await selectFlow(id);return download(page.getByRole('button',{name:'导出所选数据流（回填模板）',exact:true}),name);}
+async function exportFlow(id,name) {await selectFlow(id);return download(page.getByRole('button',{name:'导出回填模板',exact:true}),name,'升级回填.xlsx');}
 const origin='chrome-extension://'+'a'.repeat(32);
 const execute=(action,p={})=>api('/api/lingxing-worker/'+action,'admin',{workerId,...p},200,{origin});
 try {
@@ -65,7 +65,23 @@ try {
   await waitForOwnedServer({base,child:server,instanceId});
   browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
   page=await browser.newPage({viewport:{width:1500,height:1000},locale:'zh-CN'});page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base);await page.getByLabel('切换当前操作角色').selectOption('logistics');await nav('在途库存');
+  await page.goto(base);await page.getByLabel('切换当前操作角色').selectOption('logistics');
+  let releaseFlows;const heldFlows=new Promise(resolve=>{releaseFlows=resolve;});
+  await page.route('**/api/upgrades/flows',async route=>{await heldFlows;await route.continue();});
+  await nav('升级库存');await page.getByText('正在加载升级记录…',{exact:true}).waitFor();
+  assert.equal(await page.getByText('暂无移仓升级记录',{exact:true}).count(),0);releaseFlows();
+  await page.getByText('暂无移仓升级记录',{exact:true}).waitFor();await page.unroute('**/api/upgrades/flows');
+  await mode('转仓升级');await page.getByText('暂无转仓升级记录',{exact:true}).waitFor();
+  assert.ok((await page.locator('.upgrade-template-actions').innerText()).includes('转仓升级另填清点数量'));
+  await page.getByLabel('切换当前操作角色').selectOption('business');
+  assert.ok(!(await page.locator('.upgrade-template-actions').innerText()).includes('转仓升级另填清点数量'));
+  const failedPage=await browser.newPage();failedPage.on('pageerror',e=>errors.push(e.message));
+  await failedPage.route('**/api/upgrades/flows',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,error:'合成升级加载失败'})}));
+  await failedPage.goto(base);await failedPage.locator('.sidebar .nav-item',{hasText:'升级库存'}).click();
+  await failedPage.getByRole('alert').getByText('合成升级加载失败',{exact:true}).waitFor();
+  assert.equal(await failedPage.getByText('暂无移仓升级记录',{exact:true}).count(),0);await failedPage.close();
+  check('升级加载中、成功无记录和失败分别显示，回填岗位说明仅物流可见');
+  await page.getByLabel('切换当前操作角色').selectOption('logistics');await nav('在途库存');
   const initial=await download(page.getByRole('button',{name:'下载转仓升级模板',exact:true}),'01-转仓首次模板.xlsx');
   const values=workbookRows(await fs.readFile(initial));assert.deepEqual(values[0],TRANSFER_COLUMNS.map(c=>c[1]));assert.equal(new Set(values.slice(1).map(r=>r[0])).size,20);
   const initialFilled=await fillWorkbook(initial,TRANSFER_COLUMNS,[{model:'SYNTH-TONER-001',quantity:60,plan:'SYNTH-BROWSER',date:'2026-09-28',version:'V1',fnsku:'X123456789',team:'一团',store:'AUS',packPerBox:4}],'02-转仓首次回填.xlsx');
@@ -103,6 +119,11 @@ try {
   const transitP=await uploadPreview('transit',csv,'合成硒鼓在途.csv');assert.equal(transitP.rows[1].data.store,'BUS');
   const transitImport=await api('/api/transit/import','logistics',{previewToken:transitP.previewToken,fileName:transitP.fileName,fileHash:transitP.fileSha256,templateHash:transitP.templateSha256,rows:transitP.rows,requestId:rid()});
   const tr=transitImport.rows.find(r=>r.plan==='PARTIAL-198'),fb=transitImport.rows.find(r=>r.plan==='FUTURE-FBA');
+  for(const [key,label] of [['model','型号'],['plan','发货计划号'],['date','发货时间'],['version','原版本号'],['fnsku','FNSKU'],['team','团队'],['store','店铺'],['packPerBox','套/箱']]) {
+    assert.throws(()=>db.importTransferFlows({role:'logistics',rows:[{importId:rid(),transitId:tr.id,quantity:1,[key]:'DIFFERENT'}],requestId:rid()}),error=>error.code==='transfer_source_mismatch'&&error.message===`在途记录 ${tr.id} 的“${label}”与导入内容不一致，请核对。`);
+  }
+  assert.equal(db.getTransit(tr.id).remaining_quantity,198);
+  check('转仓来源冲突的8个字段均显示模板中文列名，拒绝后在途数量不变');
   const partial=await fillWorkbook(initial,TRANSFER_COLUMNS,[{transitId:tr.id,quantity:60}],'12-部分转仓.xlsx');
   const partialP=await uploadPreview('upgrades/transfer',await fs.readFile(partial),'12-部分转仓.xlsx');
   // 初次模板已经用于其他来源；另一次发起必须使用未用行身份。
@@ -152,12 +173,20 @@ try {
   await page.screenshot({path:path.join(out,'移仓自动任务与页面.png'),fullPage:true});check('任务保存后页面读取已发45、完成15及包裹信息');
   await page.getByLabel('切换当前操作角色').selectOption('purchasing');await nav('审批中心');
   const inquiryXlsx=await download(page.getByRole('button',{name:'导出询库',exact:true}),'14-询库实际导出.xlsx');
-  const inquiryRows=workbookRows(await fs.readFile(inquiryXlsx));assert.equal(inquiryRows[1][1],100);assert.equal(inquiryRows[1][2],100);assert.equal(inquiryRows[1][10],'已完成');check('询库实际浏览器下载内容保持审核与供应商字段，状态已完成');
-  await api('/api/inquiries/clear','alan',{requestId:rid()},403);
-  await page.getByLabel('搜索运营姓名、型号或 ASIN').fill('不存在');await page.getByRole('button',{name:'询库数据流-手动清空',exact:true}).click();
+  const inquiryRows=workbookRows(await fs.readFile(inquiryXlsx));assert.deepEqual(inquiryRows[0],['型号','商务审核数量','供应商库存回复','发货仓库','采购备注','部门','店铺','运营','FNSKU','提交时间','状态']);assert.equal(inquiryRows[1][1],100);assert.equal(inquiryRows[1][2],100);assert.equal(inquiryRows[1][10],'已完成');check('询库实际浏览器下载表头清晰，审核与供应商数量及已完成状态保持');
+  assert.equal((await api('/api/inquiries/clear','alan',{requestId:rid()},403)).error,'仅采购、商务或管理员可隐藏已完成或已拒绝的询库。');
+  await page.getByLabel('搜索型号、单号、运营或 ASIN').fill('不存在');await page.getByRole('button',{name:'隐藏已完成/已拒绝询库',exact:true}).click();
   assert.ok(!(await api('/api/approvals','purchasing')).inquiries.some(i=>i.id===inquiry.id));
-  await nav('升级库存');await mode('询库备份');await page.getByRole('button',{name:'回撤到待Alan或采购回复',exact:true}).click();
+  await nav('升级库存');await mode('询库备份');await page.getByRole('button',{name:'重新回复库存',exact:true}).click();
   assert.equal((await api('/api/approvals','purchasing')).inquiries.find(i=>i.id===inquiry.id).status,'pending_purchasing');check('搜索无结果仍清空权限内终态，备份可回撤后重新展示；Alan无清空权');
+  const forConflict=db.upgradeFlow(t.id);db.addCompletionDetail({id:t.id,role:'logistics',expectedRevision:forConflict.revision,requestId:rid()});
+  const conflictRows=db.upgradeTemplateRows([t.id]);
+  for(const [key,label] of [['flowRevision','流程数据版本'],['rma','RMA'],['rawAddress','原始移仓地址'],['contact','原文联系人片段'],['street','原文街道片段'],['store','店铺'],['packPerBox','套/箱'],['progressQuantity','升级中数量'],['countedQuantity','实际清点数量']]) {
+    const changed=conflictRows.map((row,index)=>index===1?{...row,[key]:'DIFFERENT'}:row);
+    assert.throws(()=>db.updateUpgradeFlows({role:'logistics',rows:changed,requestId:rid()}),error=>error.code==='flow_rows_disagree'&&error.message===`${forConflict.flowId} 的多行“${label}”不一致，本次未导入。`);
+  }
+  assert.equal(db.upgradeFlow(t.id).completedQuantity,5);
+  check('回填多行冲突的9个字段均显示模板中文列名，拒绝后累计完成数量不变');
   assert.deepEqual(errors,[]);db.assertInventoryInvariants();check('浏览器无脚本错误，库存恒等式与外键保持一致');
 } finally {
   await fs.writeFile(path.join(out,'result.json'),JSON.stringify({state,base,checks,calls,errors,limitations:['领星任务使用协议夹具，不替代真实网页重新采集']},null,2));

@@ -134,7 +134,7 @@ for(const rma of ['R616738','R616744','R616747']) check(`A号样例${rma}联系�
   const p=processWarehouseAddress({store:'AUS',rma,raw:raw.replace('R616738',rma)});
   assert.equal(p.processed,raw.replace('R616738',rma).replace('Mirella RW','Mirella RW-ups228').replace('12000 Magnolia Ave','12000 Magnolia Ave of 106'));
 });
-check('B27依B列A213；U缺资料明确未处理',()=>{assert.ok(processWarehouseAddress({store:'MNUS',rma:'R616738',raw}).processed.includes('of A213'));assert.ok(processWarehouseAddress({store:'UUS',rma:'R616738',raw}).issue.includes('缺失'));});
+check('B27依B列A213；U缺资料明确未处理',()=>{assert.ok(processWarehouseAddress({store:'MNUS',rma:'R616738',raw}).processed.includes('of A213'));const missing=processWarehouseAddress({store:'UUS',rma:'R616738',raw});assert.equal(missing.processed,'');assert.ok(missing.issue.includes('缺少英文简称或房间号'));});
 check('所有库存恒等式',()=>db.assertInventoryInvariants());
 await fs.writeFile(path.join(state,'results.json'),JSON.stringify({checks:results,state,limitations:['全部写入隔离库；真实领星未验证。浏览器下载与文件往返另有此前保存的独立证据，本脚本不控制浏览器。']},null,2));
 db.close();console.log(JSON.stringify({state,checks:results.length}));

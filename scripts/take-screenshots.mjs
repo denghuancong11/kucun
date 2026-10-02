@@ -28,7 +28,7 @@ async function nav(p, title) { await p.locator('.sidebar .nav-item').filter({ ha
 async function upload(p, id, text, name) { await p.locator(id).setInputFiles({ name, mimeType: 'text/csv', buffer: Buffer.from(text) }); }
 async function approval(p, model) {
   await nav(p, '审批中心');
-  await p.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill(model);
+  await p.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill(model);
   const button = p.locator('.approval-model-toggle').filter({ hasText: model });
   await button.waitFor(); if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
   await p.locator('.approval-record').last().waitFor();

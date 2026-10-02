@@ -12,7 +12,7 @@ export interface UpgradeFlow {
   status:string; statusText:string; rma:string; rawAddress:string; processedAddress:string; addressIssue:string; contact:string; street:string;
   orderNo:string; carrier:string; trackingNo:string; details:{id:string;revision:number;quantity:number;version:string;warehouse:string;batchKey:string|null}[];
   externalItems:{lineId:number;quantity:number;snapshot:{carrier:string;trackingNo:string;storeName:string}}[];
-  latestTask:{state:string;message:string;createdAt:string}|null;
+  latestTask:{id:number;state:string;message:string;createdAt:string}|null;
 }
 export type UpgradeTemplateRow = Record<string,string|number|null>;
 export interface UpgradeFilePreview {ok:true;rows:UpgradeTemplateRow[];previewToken:string;fileName:string}

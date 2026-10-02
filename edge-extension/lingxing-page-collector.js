@@ -328,7 +328,7 @@
         const stableRemaining = 750 - stableFor;
         await state.waitForChange(state.loadingSeen && !loading && stableRemaining > 0 ? Math.min(remaining, stableRemaining) : remaining);
       }
-      throw new Error(`${asin} 近${days}天报表20秒内未完成刷新（页面可见性${document.visibilityState ?? '未知'}），查询未采集`);
+      throw new Error(`领星近${days}天报表未加载完成，请在部署电脑检查后重新同步。`);
     } finally { state.observer.disconnect(); }
   }
 

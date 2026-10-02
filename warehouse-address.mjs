@@ -3,11 +3,11 @@ import path from 'node:path';
 
 const file = process.env.ASTER_WAREHOUSE_ACCOUNTS || path.join(import.meta.dirname,'.local-private','warehouse-accounts.local.json');
 export function accountForStore(store) {
-  if (!fs.existsSync(file)) return {issue:'缺少海外仓账号资料文件'};
+  if (!fs.existsSync(file)) return {issue:'缺少海外仓账号资料，请联系管理员补充。'};
   const accounts=JSON.parse(fs.readFileSync(file,'utf8')).accounts;
   const account=accounts.find(row=>row.stores.includes(String(store || '').trim()));
-  if (!account) return {issue:`店铺“${store || '未填写'}”尚未对应公司账号`};
-  if (!account.shortName || !account.room) return {issue:`${account.account} 的B列英文简称或房间号缺失`};
+  if (!account) return {issue:String(store || '').trim() ? `店铺‘${store}’未配置公司账号，请联系管理员核对。` : '请补充来源店铺。'};
+  if (!account.shortName || !account.room) return {issue:`账号 ${account.account} 缺少英文简称或房间号，请联系管理员补充。`};
   return account;
 }
 

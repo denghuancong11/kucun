@@ -545,15 +545,16 @@ async function handleApprovalsApi(request, response, pathname) {
     const model = inventory.getModel(modelName);
     if (!model) throw new BusinessError(400, "unknown_model", `未知型号“${modelName}”`);
     await requireActions(role, model.category);
-    const department = requireNonBlank(payload, "department", "调拨部门");
-    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "调拨部门仅限一团 / 二团");
+    const department = String(payload.department ?? "").trim();
+    if (!department) throw new BusinessError(400, "missing_department", "请选择询库部门");
+    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "询库部门仅限一团或二团");
     ensureDocumentVisibility({ department }, role);
     sendJson(response, 200, approvalResultForRole(inventory.createInquiry({
       role, model: modelName, department,
       quantity: requirePositiveInteger(payload.quantity, "询库数量"),
       store: requireValidStoreCode(payload.store),
-      operator: requireNonBlank(payload, "operator", "调拨运营"),
-      fnsku: requireNonBlank(payload, "fnsku", "已贴 FNSKU"),
+      operator: requireNonBlank(payload, "operator", "询库运营"),
+      fnsku: requireNonBlank(payload, "fnsku", " FNSKU"),
       asin: requireNonBlank(payload, "asin", "ASIN").toUpperCase(),
       operatorNote: String(payload.operatorNote ?? "").trim(),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
@@ -1111,12 +1112,12 @@ function selectHeaderRow(rows, groups, candidates = []) {
   const scored = rows.map((row, index) => ({ index, score: headerScore(row, groups), nonEmpty: row.filter((value) => String(value ?? "").trim() !== "").length })).filter((item) => item.nonEmpty > 0);
   const max = Math.max(0, ...scored.map((item) => item.score));
   if (max < groups.length) {
+    const headers = rows[scored.find((item) => item.score === max)?.index] ?? [];
+    const missing = groups.filter((group) => !headerHas(headers, group)).map((group) => group[0]);
     if (groups === TRANSIT_IMPORT_HEADER_GROUPS) {
-      const headers = rows[scored.find((item) => item.score === max)?.index] ?? [];
-      const missing = groups.filter((group) => !headerHas(headers, group)).map((group) => group[0]);
       throw new BusinessError(422, "missing_headers", `缺少在途导入必需字段：${missing.join("、")}`, { required: groups.map((group) => group[0]), missing, candidates });
     }
-    throw new BusinessError(422, "missing_headers", "未找到包含全部必需字段的表头", { required: groups.map((group) => group[0]), candidates });
+    throw new BusinessError(422, "missing_headers", `物流表缺少必需列：${missing.join("、")}。请补全后重新上传。`, { required: groups.map((group) => group[0]), candidates });
   }
   const best = scored.filter((item) => item.score === max);
   if (best.length > 1) {
@@ -1274,7 +1275,7 @@ function parseTransitImportRows(buffer, fileName, { sheetName = "", dateYear = u
       if (!value) rowErrors.push({ row: sourceRow, field, code: "missing_value", message: `第 ${sourceRow} 行“${field}”不能为空` });
     }
     if (!data.date && data.rawDate) rowErrors.push({ row: sourceRow, field: "出货时间", code: isShortTransitDate(data.rawDate) && !dateYear ? "date_year_required" : "invalid_date", message: isShortTransitDate(data.rawDate) && !dateYear ? `第 ${sourceRow} 行日期只有月日，请先选择年份` : `第 ${sourceRow} 行出货时间无效` });
-    if (!Number.isInteger(orderQuantity) || orderQuantity <= 0) rowErrors.push({ row: sourceRow, field: "数量", code: "invalid_quantity", message: `第 ${sourceRow} 行订单数量请填写大于 0 的整数` });
+    if (!Number.isInteger(orderQuantity) || orderQuantity <= 0) rowErrors.push({ row: sourceRow, field: "数量", code: "invalid_quantity", message: `第 ${sourceRow} 行‘${quantityHeader}’须为正整数。` });
     if (checkQuantityHeader && valueAt(checkQuantityHeader) !== "" && parseQuantity(valueAt(checkQuantityHeader)) !== orderQuantity) rowErrors.push({ row: sourceRow, field: "数量", code: "quantity_conflict", message: `第 ${sourceRow} 行“数量”与“订单数量”不一致` });
     if (!data.team) rowErrors.push({ row: sourceRow, field: "团队", code: "missing_team", message: `第 ${sourceRow} 行团队为空，请修改源文件后重新上传` });
     if (!data.version) rowErrors.push({ row: sourceRow, field: "版本号", code: "missing_version", message: `第 ${sourceRow} 行版本号为空，请修改源文件后重新上传` });
@@ -1309,7 +1310,7 @@ function parseTransitStatusRows(buffer, fileName, { sheetName = "", dateYear = u
     status: findHeader(headers, ["物流状态", "状态", "订单部更新物流状态", "物流部更新状态", "状态更新"]),
   };
   const errors = duplicateHeaderErrors(headers, headerIndex + 1, STATUS_HEADER_GROUPS);
-  if (Object.values(aliases).some((header) => !header)) throw new BusinessError(422, "missing_headers", "未找到包含全部物流状态更新必需字段的表头", { required: STATUS_HEADER_GROUPS.map((group) => group[0]), sheetName: table.sheetName });
+  if (Object.values(aliases).some((header) => !header)) throw new BusinessError(422, "missing_headers", `物流表缺少必需列：${STATUS_HEADER_GROUPS.filter((group) => !headerHas(headers, group)).map((group) => group[0]).join("、")}。请补全后重新上传。`, { required: STATUS_HEADER_GROUPS.map((group) => group[0]), sheetName: table.sheetName });
   const rawEntries = [];
   const dataRows = rows.slice(headerIndex + 1);
   dataRows.forEach((raw, offset) => {

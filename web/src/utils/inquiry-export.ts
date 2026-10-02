@@ -3,8 +3,8 @@ import type { Inquiry } from "../types";
 import { displayTime } from "../components/ui";
 
 const HEADERS = [
-  "型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注",
-  "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况",
+  "型号", "商务审核数量", "供应商库存回复", "发货仓库", "采购备注",
+  "部门", "店铺", "运营", "FNSKU", "提交时间", "状态",
 ] as const;
 const CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 

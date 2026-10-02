@@ -32,7 +32,7 @@ r.tabs.delete(42);r.context.chrome.tabs.create=async()=>{throw new Error('禁止
 r.context.fetch=async(url,options)=>({ok:true,json:async()=>({job:{id:3,message:JSON.parse(options.body).error}})});
 r.context.job={id:3,requestId:'missing',target:{action:'metrics'}};
 await r.eval('begin(state,job)');
-assert.match(r.local.connectionStatus,/执行页未打开.*重新打开/s);assert.ok(r.local.connectionStatus.includes(metrics+marker));
+assert.equal(r.local.connectionStatus,`领星同步页面未打开，请在部署电脑的 Edge 打开 ${metrics+marker}，然后重新同步。`);
 assert.equal(r.tabs.size,1);assert.equal(r.tabs.get(41).url,metrics);
 check('指定页关闭后通过原任务状态提示完整重开地址，零新页且不接管日常页');
 
@@ -58,7 +58,7 @@ assert.ok(pageProgress&&Number.isFinite(Date.parse(pageProgress.pageAt))&&pagePr
 assert.equal(messages.filter(m=>m.type==='report-result').length,0);
 assert.throws(()=>context.asterStartReport({...request,requestId:'next'}),/尚未结束/);
 finishCleanup();await context.asterStopReport('停止');
-assert.match(context.asterReportState.payload.error,/超过180000毫秒/);assert.equal(context.asterReportState.settled,true);
+assert.equal(context.asterReportState.payload.error,'BFIXTURE01：领星查询超时，请在部署电脑检查报表后重新同步。');assert.equal(context.asterReportState.settled,true);
 context.asterLingxing.collectAsins=async()=>({items:[{asin:'BFIXTURE01'}],source:{captures:[]}});
 context.asterStartReport({...request,requestId:'next'});
 await new Promise(resolve=>setImmediate(resolve));
@@ -90,10 +90,11 @@ r.context.chrome.scripting.executeScript=async options=>{
 const inspected=r.eval('inspect(state)');
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(finishes.length,0);assert.ok(r.local.activeJob);assert.equal(context.asterReportState.payload,null);
+assert.match(r.local.activeJob.lastTabState.value,/active=false.*frozen=true/);
 finishCleanup();await inspected;
-assert.equal(finishes.length,1);assert.match(finishes[0].error,/页面执行期限已到/);
+assert.equal(finishes.length,1);assert.equal(finishes[0].error,'BFIXTURE01：领星查询超时，请在部署电脑检查报表后重新同步。');
 assert.equal(r.local.activeJob,undefined);assert.equal(r.tabs.get(42).url,metrics+marker);
-assert.ok(progressMessages.some(message=>message.includes('frozen=true')&&message.includes('active=false')));
+assert.ok(progressMessages.includes('正在检查领星页面…'));
 check('后台采样标签冻结状态但不激活；deadline超时仍先等待页内finally，再保存失败并保留同一报表');
 r.tabs.set(42,{id:42,url:'https://login.example.invalid/',status:'complete'});
 r.context.state.activeJob={job:{...request,id:5,requestId:'login-redirect'},workerId:null,databaseId:'isolated',tabId:42,started:true};

@@ -15,7 +15,7 @@ import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel"
 import { Icon } from "./Icon";
 import { InquiryEntry } from "./InquiryEntry";
 import { operationGroups } from "../utils/roles";
-import { Badge, Clip, Segmented, Spinner } from "./ui";
+import { Clip, Segmented, Spinner } from "./ui";
 
 export type DetailTab = "stock" | "transit";
 
@@ -41,6 +41,7 @@ interface CommonProps {
     batch: AllocationBatchContext,
     entry: AllocationEntry,
   ) => Promise<{ error: string; code?: string; status?: number } | null>;
+  onRefresh: () => Promise<unknown>;
   onShelf: (row: TransitDetail) => Promise<string | null>;
 }
 
@@ -78,6 +79,7 @@ function StockPane({
   activeBatchKey,
   onSelectBatchKey,
   onEntry,
+  onRefresh,
 }: CommonProps) {
   if (stockRows.length === 0) {
     return (
@@ -92,6 +94,7 @@ function StockPane({
   }
 
   const showFields = perm.detail;
+  const canSubmitAllocation = ["admin", "operation-1", "operation-2"].includes(role);
   /* 明细表始终显示在库件数、预锁定和可用件数；权限只控制批次身份字段。 */
   const colCount = showFields ? 10 : 4;
   const sum = stockRows.reduce((total, row) => total + row.quantity, 0);
@@ -115,7 +118,7 @@ function StockPane({
                   <th>发货计划号</th>
                   <th>发货时间</th>
                   <th>版本号</th>
-                  <th>已贴 FNSKU</th><th>发货方式（所属海外仓）</th>
+                  <th>FNSKU</th><th>发货方式（所属海外仓）</th>
                 </>
               )}
               <th className="actions-col">调拨</th>
@@ -170,7 +173,6 @@ function StockPane({
                     )}
                     <td className="actions-col">
                       <div className="row-actions">
-                        {row.isLegacyPlaceholder ? null : locked > 0 && <Badge label={`预锁定 ${formatNumber(locked)}`} tone="blue" />}
                         <button
                           type="button"
                           className={`alloc-toggle${open ? " open" : ""}`}
@@ -180,13 +182,13 @@ function StockPane({
                             !perm.actions
                                 ? "当前角色没有调拨操作权限"
                                 : open
-                                  ? "收起调拨表单"
-                                  : `填写调拨表单（当前可用 ${formatNumber(available)} 件）`
+                                  ? canSubmitAllocation ? "收起调拨表单" : "收起批次库存"
+                                  : canSubmitAllocation ? `填写调拨表单（当前可用 ${formatNumber(available)} 件）` : `查看批次库存（可用 ${formatNumber(available)} 件）`
                           }
                           onClick={() => onSelectBatchKey(open ? null : key)}
                         >
                           <Icon name="chevron" size={13} className="alloc-toggle-caret" />
-                          <span>调拨</span>
+                          <span>{canSubmitAllocation ? "调拨" : "查看批次库存"}</span>
                         </button>
                       </div>
                     </td>
@@ -201,6 +203,7 @@ function StockPane({
                           actionsAllowed={perm.actions}
                           busy={allocBusy}
                           onEntry={onEntry}
+                          onRefresh={onRefresh}
                         />
                       </td>
                     </tr>
@@ -262,11 +265,11 @@ function TransitPane({ model, transitRows, perm, role, onShelf }: CommonProps) {
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   return <div className="detail-pane pane-transit"><div className="table-wrap scroll-x"><table className="data-table sub">
-    <thead><tr><th>在途件数</th>{perm.detail && <><th>套/箱</th><th>发货计划号</th><th>发货时间</th><th>版本号</th><th>已贴 FNSKU</th><th>发货方式</th><th>团队</th><th>物流状态</th></>}<th>是否上架</th></tr></thead>
+    <thead><tr><th>在途件数</th>{perm.detail && <><th>套/箱</th><th>发货计划号</th><th>发货时间</th><th>版本号</th><th>FNSKU</th><th>发货方式</th><th>团队</th><th>物流状态</th></>}<th>是否上架</th></tr></thead>
     <tbody>{transitRows.map(row => <tr key={row.id}><td>{formatNumber(row.quantity)}</td>{perm.detail && <><td>{row.packPerBox || "—"}</td><td>{row.plan}</td><td>{row.date}</td><td>{row.version}</td><td>{row.fnsku}</td><td>{row.shippingMethod}</td><td>{row.team}</td><td>{row.status}</td></>}<td>
       {TRANSIT_SHELF_ROLE_SET.has(role) && (!operationGroups[role] || row.team === operationGroups[role]) && perm.actions && row.statusCode === "in_transit" && !row.isLegacyPlaceholder ? <button className="btn btn-primary btn-sm" disabled={busy !== null} onClick={async () => {
         setBusy(row.id); setError(null); const failure = await onShelf(row); setBusy(null); if (failure) setError(failure);
-      }}>{busy === row.id ? "提交中…" : row.shippingMethod === "直发FBA" ? "yes" : "确认上架"}</button> : row.statusCode === "on_shelf" && row.shippingMethod === "直发FBA" ? null : <span>{row.onShelf}</span>}
+      }}>{busy === row.id ? "提交中…" : row.shippingMethod === "直发FBA" ? "确认 FBA 上架" : "确认上架"}</button> : <span>{row.statusCode === "on_shelf" ? row.shippingMethod === "直发FBA" ? "已归档" : "已上架" : row.onShelf}</span>}
     </td></tr>)}<SubtotalRow sum={transitRows.reduce((sum,row) => sum + row.quantity,0)} reference={model.inTransit} referenceLabel="在途库存" span={perm.detail ? 9 : 1} /></tbody>
   </table></div>{error && <p className="dialog-error" role="alert">{error}</p>}</div>;
 }

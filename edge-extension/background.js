@@ -20,14 +20,14 @@ async function connect(state) {
     try {
       await api(state,'heartbeat',{version:chrome.runtime.getManifest().version});
       const {connectionStatus}=await chrome.storage.local.get('connectionStatus');
-      if(connectionStatus?.startsWith('连接暂时不可用'))await chrome.storage.local.set({connectionStatus:`已恢复连接，端口 ${state.port}\n后台等待库存系统的同步请求。`});
+      if(connectionStatus?.startsWith('连接暂时不可用'))await chrome.storage.local.set({connectionStatus:`已恢复连接，端口 ${state.port}`});
       return;
     }
     catch(error) {if(error.code!=='worker_disconnected')throw error;}
   }
   const connected=await api(state,'connect',{version:chrome.runtime.getManifest().version});
   state.connection={workerId:connected.workerId,databaseId:connected.databaseId,host:connected.host};
-  await chrome.storage.local.set({connection:state.connection,connectionStatus:`已连接部署电脑 ${connected.host}，端口 ${state.port}\n后台等待库存系统的同步请求。`});
+  await chrome.storage.local.set({connection:state.connection,connectionStatus:`已连接部署电脑 ${connected.host}，端口 ${state.port}`});
 }
 async function ownedTab(state) {
   let tab;
@@ -55,7 +55,7 @@ async function stopReport(active, message) {
 async function begin(state, job) {
   const tab=await ownedTab(state);
   if(!tab) {
-    const receipt=await api(state,'finish',{id:job.id,error:`领星执行页未打开，请重新打开 ${urls.metrics+marker} 后再次同步。`});
+    const receipt=await api(state,'finish',{id:job.id,error:`领星同步页面未打开，请在部署电脑的 Edge 打开 ${urls.metrics+marker}，然后重新同步。`});
     await complete(state,receipt.job);
     return;
   }
@@ -67,31 +67,31 @@ async function begin(state, job) {
   await chrome.storage.local.set({activeJob:state.activeJob});
   const switching=(tab.url ?? '').split(/[?#]/)[0]!==urls[job.target.action];
   await editTab('update',tab.id,{...(switching?{url:urls[job.target.action]+marker}:{}),autoDiscardable:false});
-  await api(state,'progress',{id:job.id,message:switching?'正在原执行页切换领星报表':'正在复用已打开的领星报表'});
+  await api(state,'progress',{id:job.id,message:switching?'正在切换领星报表…':'正在准备领星报表…'});
   if(!switching && tab.status==='complete') await inspect(state);
 }
 async function complete(state, job) {
   await stopReport(state.activeJob);
   await chrome.storage.local.remove('activeJob');
   state.activeJob=null;
-  await chrome.storage.local.set({connectionStatus:`#${job.id} ${job.message}\n连接保持中，后台等待下一次请求。`});
+  await chrome.storage.local.set({connectionStatus:job.message});
 }
 async function recordTabState(state, active, tab) {
   const value=tab ? `status=${tab.status??'unknown'},active=${tab.active===true},discarded=${typeof tab.discarded==='boolean'?tab.discarded:'unknown'},frozen=${typeof tab.frozen==='boolean'?tab.frozen:'unknown'}` : '执行页不存在';
   if(active.lastTabState?.value===value)return;
   const sampledAt=new Date().toISOString();
-  await api(state,'progress',{id:active.job.id,message:`扩展采样执行页状态：${value}；采样时间=${sampledAt}`});
+  await api(state,'progress',{id:active.job.id,message:'正在检查领星页面…'});
   active.lastTabState={value,at:sampledAt};
   await chrome.storage.local.set({activeJob:active});
 }
 async function inspect(state) {
   const active=state.activeJob;
-  if(active.databaseId!==state.connection.databaseId) throw new Error('库存数据库身份已改变，原任务结果未提交，请核对连接端口。');
+  if(active.databaseId!==state.connection.databaseId) throw new Error('当前连接的库存数据库已改变，无法确认原同步结果。请核对连接端口。');
   const {job}=await api(state,'resume',{id:active.job.id,jobWorkerId:active.workerId});
   if(job.state!=='running') {await complete(state,job);return;}
   const tab=await ownedTab(state);
   await recordTabState(state,active,tab);
-  if(!tab || tab.id!==active.tabId) active.payload={error:`领星执行页已关闭，本次同步未完成。请重新打开 ${urls.metrics+marker} 后再次同步。`};
+  if(!tab || tab.id!==active.tabId) active.payload={error:`领星同步页面已关闭，本次同步未完成。请在部署电脑的 Edge 打开 ${urls.metrics+marker}，然后重新同步。`};
   if(!active.payload && tab.status==='complete') {
     if((tab.url ?? '').split(/[?#]/)[0]!==urls[job.target.action]) active.payload={error:'领星尚未登录、登录已过期或需要验证，请在部署电脑的 Edge 主动登录后重新同步。'};
     else if(!active.started) {
@@ -102,14 +102,14 @@ async function inspect(state) {
     } else {
       const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:async()=>{
         const report=globalThis.asterReportState;
-        if(report && !report.payload && Date.now()>report.deadline) await globalThis.asterStopReport(`页面执行期限已到；最后阶段“${report.lastProgress??'未知'}”；页面可见性${report.pageVisibility??'未知'}`);
+        if(report && !report.payload && Date.now()>report.deadline) await globalThis.asterStopReport('领星查询超时，请在部署电脑检查报表后重新同步。');
         return report ?? null;
       }});
       const report=result.result;
-      if(!report || report.key!==job.requestId) active.payload={error:'插件后台报表已刷新，本次采集中断，请重新发起。'};
+      if(!report || report.key!==job.requestId) active.payload={error:'领星查询已中断，请重新同步。'};
       else if(report.payload) active.payload=report.payload;
     }
-  } else if(!active.payload && Date.now()-active.openedAt>30000) active.payload={error:`执行页30秒内未就绪（status=${tab?.status??'unknown'}, discarded=${typeof tab?.discarded==='boolean'?tab.discarded:'unknown'}, frozen=${typeof tab?.frozen==='boolean'?tab.frozen:'unknown'}），未开始采集`};
+  } else if(!active.payload && Date.now()-active.openedAt>30000) active.payload={error:'30 秒内未能读取领星报表，请在部署电脑检查页面后重新同步。'};
   if(active.payload) {
     // 先保存同一次采集结果。回执丢失后先 resume，成功结果不重复写入。
     await chrome.storage.local.set({activeJob:active});
@@ -147,11 +147,8 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
       const state=await chrome.storage.local.get(['port','enabled','connection','activeJob']);
       if(!state.enabled || state.activeJob?.tabId!==sender.tab?.id || state.activeJob.job.requestId!==message.key) return;
       if(message.type==='report-progress') {
-        const sample=state.activeJob.lastTabState;
-        const tabState=sample ? `${sample.value}；采样时间=${sample.at}` : '未采样';
-        const detail=`${message.text}（页面时间：${message.pageAt??'未记录'}；可见性：${message.pageVisibility??'未记录'}；标签状态：${tabState}）`;
-        await chrome.storage.local.set({connectionStatus:`#${state.activeJob.job.id} ${detail}`});
-        await api(state,'progress',{id:state.activeJob.job.id,message:detail});
+        await chrome.storage.local.set({connectionStatus:message.text});
+        await api(state,'progress',{id:state.activeJob.job.id,message:message.text});
       } else await pulse();
     }).then(()=>respond({ok:true}),error=>respond({error:error.message}));
     return true;

@@ -389,7 +389,7 @@ try {
   }
   const stale = await openFixture("no-refresh");
   const noRefresh = await stale.evaluate(() => asterLingxing.collectAsins(['BFIXTURE01']).catch(error=>error.message));
-  check("没有观察到查询刷新时拒绝读取既有表格", typeof noRefresh === "string" && noRefresh.includes("20秒内未完成刷新"));
+  check("没有观察到查询刷新时拒绝读取既有表格", noRefresh === "领星近30天报表未加载完成，请在部署电脑检查后重新同步。");
   await stale.close();
   const cancelled = await openFixture();
   const cancellation = await cancelled.evaluate(async () => {

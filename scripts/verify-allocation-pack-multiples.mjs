@@ -83,7 +83,7 @@ try {
     const rejected = await api('/api/allocations', 'operation-1', allocationBody(batch4Probe, 'operation-1', 5, 'bad-four'), null);
     assert.equal(rejected.status, 400, JSON.stringify(rejected));
     assert.equal(rejected.code, 'allocation_pack_multiple');
-    assert.equal(rejected.error, '本批次套/箱为 4，调拨数量须为 4 的整数倍。');
+    assert.equal(rejected.error, '套/箱为 4，调拨数量须为 4 的整数倍。');
     assert.equal(snapshot(), before);
   });
 
@@ -115,7 +115,7 @@ try {
     const rejected = await api('/api/allocations', 'operation-2', allocationBody(batch6Probe, 'operation-2', 8, 'bad-six'), null);
     assert.equal(rejected.status, 400);
     assert.equal(rejected.code, 'allocation_pack_multiple');
-    assert.equal(rejected.error, '本批次套/箱为 6，调拨数量须为 6 的整数倍。');
+    assert.equal(rejected.error, '套/箱为 6，调拨数量须为 6 的整数倍。');
     assert.equal(snapshot(), before);
   });
   const batch6 = await receive({ model, plan: 'PACK6', quantity: 30, pack: '6', team: '二团' });
@@ -132,7 +132,7 @@ try {
     const missingResult = await api('/api/allocations', 'operation-1', allocationBody(missing, 'operation-1', 4, 'missing-pack'), null);
     assert.equal(missingResult.status, 400);
     assert.equal(missingResult.code, 'invalid_pack_per_box');
-    assert.equal(missingResult.error, '本批次套/箱未维护或不是正整数，请补齐后再调拨。');
+    assert.equal(missingResult.error, '本批次的‘套/箱’须为正整数，补全后才能调拨。');
     assert.equal(snapshot(), beforeMissing);
 
     db.db.prepare("UPDATE stock_batches SET pack_per_box = '0' WHERE batch_key = ?").run(missing.batchKey);
@@ -170,7 +170,7 @@ try {
     }, null);
     assert.equal(nonMultiple.status, 400, JSON.stringify(nonMultiple));
     assert.equal(nonMultiple.code, 'allocation_pack_multiple');
-    assert.equal(nonMultiple.error, '来源批次套/箱为 4，审核数量须为 4 的整数倍。');
+    assert.equal(nonMultiple.error, '套/箱为 4，审核数量须为 4 的整数倍。');
     assert.equal(snapshot(), before);
 
     const approvalBody = {
@@ -198,7 +198,7 @@ try {
     }, null);
     assert.equal(rejected.status, 400, JSON.stringify(rejected));
     assert.equal(rejected.code, 'allocation_pack_multiple');
-    assert.equal(rejected.error, '来源批次套/箱为 6，审核数量须为 6 的整数倍。');
+    assert.equal(rejected.error, '套/箱为 6，审核数量须为 6 的整数倍。');
     assert.equal(snapshot(), before);
     const overAvailable = await api(`/api/allocations/${submitted.record.id}/review`, 'business', {
       decision: 'approve', approvedQuantity: 24, packPerBox: '4', businessNote: '', expectedRevision: submitted.record.revision, requestId: requestId(),
@@ -236,7 +236,7 @@ try {
       }, null);
       assert.equal(rejected.status, 400, JSON.stringify(rejected));
       assert.equal(rejected.code, 'invalid_pack_per_box');
-      assert.equal(rejected.error, '来源批次套/箱未维护或不是正整数，请补齐后再批准。');
+      assert.equal(rejected.error, '来源批次的‘套/箱’须为正整数，补全后才能批准。');
       assert.equal(snapshot(), before);
     });
   }

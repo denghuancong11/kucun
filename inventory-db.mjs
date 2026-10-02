@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { migrateRequirementsV30 } from "./migrations/requirements-5-9.mjs";
 import { accountForStore, processWarehouseAddress, lingxingStoreCode } from './warehouse-address.mjs';
+import { TRANSFER_COLUMNS, UPGRADE_COLUMNS } from './upgrade-template.mjs';
 
 export const INVENTORY_SCHEMA_VERSION = 30;
 function loadLocalRuntimeConfig() {
@@ -112,7 +113,7 @@ export function transitCategoryFromFileName(fileName) {
   const hasToner = name.includes("硒鼓");
   const hasInk = name.includes("墨盒");
   if (hasToner === hasInk) {
-    throw new BusinessError(422, "transit_category_unrecognized", "文件名无法唯一识别类目（硒鼓或墨盒）");
+    throw new BusinessError(422, "transit_category_unrecognized", "请在文件名中注明‘硒鼓’或‘墨盒’，只保留其中一种。");
   }
   return hasToner ? "硒鼓" : "墨盒";
 }
@@ -3245,20 +3246,20 @@ function auditResult(operation, payload = {}) {
   if (operation === "review") return "商务已批准";
   if (operation === "reject") return "商务已拒绝";
   if (operation === "import_stage") return "已暂存";
-  if (operation === "transit_import") return "在途已入账";
+  if (operation === "transit_import") return "在途导入完成";
   if (operation === "transit_import_revert") return "在途导入已撤销";
   if (operation === "transit_status") return "物流状态已更新";
-  if (operation === "transit_on_shelf") return payload.disposition === 'fba_archive' ? "直发FBA已归档，未增加本地在库" : "已转为在库";
+  if (operation === "transit_on_shelf") return payload.disposition === 'fba_archive' ? "直发 FBA 已归档" : "已转为在库";
   if (operation === "transit_off_shelf") return "已下架转回在途";
   if (operation === "transit_merge") return "在途记录已合并";
   if (operation === "transit_delete") return "在途记录已删除";
   if (operation === "transit_team_corrected") return "已修正团队归属，库存数量不变";
   if (operation === "transit_manual") return "单条在途录入";
   if (operation === "legacy_placeholder_removed") return "历史占位批次已清理";
-  if (operation === "upgrade_direct_start") return "在库库存已预锁定升级";
-  if (operation === "upgrade_direct_complete") return "在库库存已完成版本转换";
+  if (operation === "upgrade_direct_start") return "已锁定库存，待升级";
+  if (operation === "upgrade_direct_complete") return "在库升级完成";
   if (operation === "upgrade_relocation_created") return "已登记移仓发货";
-  if (operation === "upgrade_relocation_complete") return payload.completionId ? "升级完成明细已按累计量更新" : "移仓库存已完成升级入库";
+  if (operation === "upgrade_relocation_complete") return payload.completionId ? "累计完成数量已更新" : "升级完成，已入库";
   if (operation === "upgrade_transfer_started") return "已发起转仓升级";
   if (operation === "upgrade_flow_update") return "升级资料及进度已更新";
   if (operation === "upgrade_relocation_started") return "已发起移仓流程";
@@ -3768,7 +3769,7 @@ export class InventoryDatabase {
     return this.idempotent(`inquiry:archive:${id}`, requestId, { id, role, ...fields, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_procurement"]);
       const remaining = this.relocationSourceQuantity(null, id);
-      if (remaining < 0) throw new BusinessError(409, 'inquiry_source_deficit', `新回复比既有已发及其他减少少 ${-remaining} 件，请核对差额后再归档`, { deficit: -remaining });
+      if (remaining < 0) throw new BusinessError(409, 'inquiry_source_deficit', `移仓已发货量与其他减少量合计比供应商回复多 ${-remaining} 件，请核对后再归档。`, { deficit: -remaining });
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET plan = ?, ship_date = ?, version = ?, status = 'archived',
         archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
@@ -3792,12 +3793,12 @@ export class InventoryDatabase {
   }
 
   recallInquiry({ id, role, expectedRevision, requestId }) {
-    if (!['purchasing','business'].includes(role)) throw new BusinessError(403,'inquiry_recall_forbidden','仅采购或商务可回撤询库');
+    if (!['purchasing','business'].includes(role)) throw new BusinessError(403,'inquiry_recall_forbidden','仅采购或商务可重新处理询库');
     return this.idempotent(`inquiry:recall:${id}`,requestId,{id,role,expectedRevision},()=>{
       const row=this.inquiryForUpdate(id,expectedRevision,['archived','rejected','pending_procurement','pending_purchasing','pending_business']);
-      if(role==='purchasing' && row.status==='pending_business') throw new BusinessError(409,'inquiry_business_review_required','商务回撤后须先完成商务重审，采购不能回撤跳过审核');
+      if(role==='purchasing' && row.status==='pending_business') throw new BusinessError(409,'inquiry_business_review_required','请先完成商务审核，再重新回复库存。');
       if (!['archived','rejected'].includes(row.status) && !this.db.prepare("SELECT 1 FROM inquiry_events WHERE inquiry_id=? AND event_type='backup_snapshot'").get(id)) {
-        throw new BusinessError(409,'inquiry_not_backed_up','询库尚无终态备份，不能回撤');
+        throw new BusinessError(409,'inquiry_not_backed_up','该询库没有已完成或已拒绝时的备份，无法重新处理。');
       }
       const at=new Date().toISOString();
       if (['archived','rejected'].includes(row.status)) this.backupInquiry(id,role,at);
@@ -3812,7 +3813,7 @@ export class InventoryDatabase {
   }
 
   hideInquiries({ role, ids, requestId }) {
-    if (!['admin','purchasing','business'].includes(role)) throw new BusinessError(403,'inquiry_clear_forbidden','仅采购、商务或管理员可手动清空询库');
+    if (!['admin','purchasing','business'].includes(role)) throw new BusinessError(403,'inquiry_clear_forbidden','仅采购、商务或管理员可隐藏已完成或已拒绝的询库。');
     return this.idempotent('inquiry:hide',requestId,{role,ids},()=>{
       const at=new Date().toISOString(); let hidden=0;
       for (const id of ids) {
@@ -4013,7 +4014,7 @@ export class InventoryDatabase {
         sourceVersion: row.source_version,
         newVersion: row.new_version,
         status: cancelled ? "cancelled" : row.status,
-        statusText: cancelled ? "已撤销发起" : row.status === "completed" ? "升级完成" : "升级中，预锁定",
+        statusText: cancelled ? "已撤销发起" : row.status === "completed" ? "升级完成" : "升级中（已锁定）",
         initiatedByRole: row.initiated_by_role,
         initiatedAt: row.initiated_at,
         revision: Number(row.revision),
@@ -4147,7 +4148,7 @@ export class InventoryDatabase {
         row[field] = String(item?.[field] ?? "").trim();
       }
       if (!["externalId", "storeId", "orderNo", "fnsku"].every((field) => row[field])) throw new BusinessError(400, "missing_external_shipment_identity", "领星包裹缺少商品记录编号、店铺编号、移除订单号或 FNSKU，请在部署电脑核对报表");
-      if (typeof item?.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity < 0) throw new BusinessError(400, "invalid_external_shipment_quantity", "领星包裹数量请填写 0 或正整数");
+      if (typeof item?.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity < 0) throw new BusinessError(400, "invalid_external_shipment_quantity", "领星包裹数量须为 0 或正整数，请在领星核对后重新同步。");
       row.quantity = item.quantity;
       return row;
     });
@@ -4399,7 +4400,7 @@ export class InventoryDatabase {
         return {
           ...row, lines, initialQuantity, completedQuantity, inProgressQuantity,
           status: cancelled ? "cancelled" : inProgressQuantity === 0 ? "completed" : "active",
-          statusText: cancelled ? row.statusText : inProgressQuantity === 0 ? "升级完成" : "升级中，预锁定",
+          statusText: cancelled ? row.statusText : inProgressQuantity === 0 ? "升级完成" : "升级中（已锁定）",
           newVersion: latestCompletion?.new_version ?? null,
         };
       })
@@ -4560,7 +4561,7 @@ export class InventoryDatabase {
 
   applyCapturedShipments(id,rows,role,at,requestId) {
     const work=this.db.prepare('SELECT * FROM upgrade_relocation_work_items WHERE id=?').get(id);
-    if(!['awaiting_shipping','shipped'].includes(work.status)) throw new BusinessError(409,'logistics_step_changed','当前流程不在移仓和升级中，缓存已保存但未更新已发');
+    if(!['awaiting_shipping','shipped'].includes(work.status)) throw new BusinessError(409,'logistics_step_changed','该记录不处于移仓和升级中，请刷新查看进度。');
     const source=this.flowSource(work),account=accountForStore(source.store_name);
     if(account.issue) throw new BusinessError(422,'store_mapping_missing',account.issue);
     const expected=account.stores.find(s=>lingxingStoreCode(s));
@@ -4571,23 +4572,23 @@ export class InventoryDatabase {
     for(const r of matches) {
       const line=all.find(l=>l.storeId===r.storeId && l.externalId===r.externalId);
       if(line.availableQuantity<=0) continue;
-      if(!line.carrier||!line.trackingNo) throw new BusinessError(422,'external_shipment_logistics_missing','匹配包裹缺少承运商或运单号，缓存已保存但未更新已发');
+      if(!line.carrier||!line.trackingNo) throw new BusinessError(422,'external_shipment_logistics_missing','匹配包裹缺少承运商或运单号。');
       increments.push({line,quantity:line.availableQuantity});
     }
     const delta=increments.reduce((sum,r)=>sum+r.quantity,0);
-    if(!delta) return {businessApplied:true,shippedDelta:0,shippedQuantity:Number(work.shipped_quantity||0),businessMessage:'匹配包裹已采纳，已发数量未重复增加'};
+    if(!delta) return {businessApplied:true,shippedDelta:0,shippedQuantity:Number(work.shipped_quantity||0),businessMessage:`移仓已发货数量未变，累计 ${Number(work.shipped_quantity||0)} 件。`};
     const total=Number(work.shipped_quantity||0)+delta;
     const others=Number(this.db.prepare(`SELECT COALESCE(SUM(shipped_quantity+sold_quantity),0) AS n FROM upgrade_relocations
       WHERE status='active' AND (allocation_document_id=? OR inquiry_id=? OR fba_archive_id=?) AND id<>?`)
       .get(work.allocation_document_id,work.inquiry_id,work.fba_archive_id,work.relocation_id||0).n);
-    if(total+Number(work.sold_quantity)+others>Number(source.quantity)) throw new BusinessError(409,'logistics_source_exceeded','匹配包裹超过启动来源扣除既有消耗后的数量，缓存已保存，请核对来源和订单');
+    if(total+Number(work.sold_quantity)+others>Number(source.quantity)) throw new BusinessError(409,'logistics_source_exceeded','本次增加的移仓已发货数量超过来源余量，请核对来源单据和订单号。');
     const relocation=this.ensureFlowRelocation(work,total,role,at,requestId);
     for(const {line,quantity} of increments) this.db.prepare('INSERT INTO upgrade_relocation_external_items(relocation_id,line_id,quantity,snapshot_json,created_at) VALUES(?,?,?,?,?)')
       .run(relocation.id,line.lineId,quantity,JSON.stringify(line),at);
     const adopted=this.relocationExternalItems(relocation.id);
     const carrier=[...new Set(adopted.map(r=>r.snapshot.carrier))].join('、'),tracking=[...new Set(adopted.map(r=>r.snapshot.trackingNo))].join('、');
     const remaining=Number(work.source_quantity_before)-total-Number(work.sold_quantity);
-    if(remaining<0) throw new BusinessError(409,'logistics_source_exceeded','累计已发超过本流程启动数量，缓存已保存，请核对');
+    if(remaining<0) throw new BusinessError(409,'logistics_source_exceeded','累计移仓已发货和 FBA 其他减少超过发起时来源数量，请核对来源单据。');
     this.db.prepare(`UPDATE upgrade_relocations SET shipped_quantity=?,fba_remaining_quantity=?,carrier=?,tracking_no=?,external_sync_status='synced',revision=revision+1,updated_at=? WHERE id=?`)
       .run(total,remaining,carrier,tracking,at,relocation.id);
     this.db.prepare(`UPDATE upgrade_relocation_work_items SET shipped_quantity=?,fba_remaining_quantity=?,carrier=?,tracking_no=?,status='shipped',
@@ -4598,7 +4599,7 @@ export class InventoryDatabase {
     this.addUpgradeOperation({upgradeId:relocation.upgrade_id,relocationId:relocation.id,type:'relocation_shipment',quantity:delta,eventId,requestId,role,at,
       metadata:{flowId:work.work_no,externalItems:increments.map(x=>({lineId:x.line.lineId,quantity:x.quantity}))}});
     this.refreshUpgradeJobState(relocation.upgrade_id,at);
-    return {businessApplied:true,shippedDelta:delta,shippedQuantity:total,businessMessage:`已发增加 ${delta} 件，累计 ${total} 件`};
+    return {businessApplied:true,shippedDelta:delta,shippedQuantity:total,businessMessage:`移仓已发货增加 ${delta} 件，累计 ${total} 件。`};
   }
 
   flowSource(work) { return JSON.parse(work.source_snapshot_json); }
@@ -4647,7 +4648,7 @@ export class InventoryDatabase {
           if(qty>Number(t.remaining_quantity)) throw new BusinessError(409,'transfer_quantity_exceeded',`在途记录 ${transitId} 仅余 ${t.remaining_quantity} 件`);
           for(const [key,column] of Object.entries({model:'model',plan:'plan',date:'ship_date',version:'version',fnsku:'fnsku',team:'team',store:'store_name',packPerBox:'pack_per_box'})) {
             if(input[key]!=='' && input[key]!=null && t[column]!=null && t[column]!=='' && String(input[key])!==String(t[column]))
-              throw new BusinessError(409,'transfer_source_mismatch',`在途记录 ${transitId} 的 ${key} 与模板不一致`);
+              throw new BusinessError(409,'transfer_source_mismatch',`在途记录 ${transitId} 的“${TRANSFER_COLUMNS.find(column=>column[0]===key)[1]}”与导入内容不一致，请核对。`);
           }
         }
         const source={model:t?.model||input.model,plan:t?.plan||input.plan,ship_date:t?.ship_date||input.date,version:t?.version||input.version,
@@ -4697,8 +4698,8 @@ export class InventoryDatabase {
       processedAddress:w.processed_address || '',addressIssue:w.address_issue || '',contact:w.address_contact || '',street:w.address_street || '',
       orderNo:w.removal_order_no || '',carrier:w.carrier || '',trackingNo:w.tracking_no || '',
       externalItems:w.relocation_id?this.relocationExternalItems(w.relocation_id):[],details,
-      latestTask:(()=>{const task=this.db.prepare("SELECT state,message,created_at FROM lingxing_sync_jobs WHERE json_extract(target_json,'$.workId')=? ORDER BY id DESC LIMIT 1").get(w.id);
-        return task?{state:task.state,message:task.message,createdAt:task.created_at}:null;})(),
+      latestTask:(()=>{const task=this.db.prepare("SELECT id,state,message,created_at FROM lingxing_sync_jobs WHERE json_extract(target_json,'$.workId')=? ORDER BY id DESC LIMIT 1").get(w.id);
+        return task?{id:task.id,state:task.state,message:task.message,createdAt:task.created_at}:null;})(),
       allocationId:w.allocation_document_id,inquiryId:w.inquiry_id,fbaArchiveId:w.fba_archive_id,updatedAt:w.updated_at};
   }
 
@@ -4776,7 +4777,7 @@ export class InventoryDatabase {
     const source=this.flowSource(work), first=items[0];
     const fields=['flowRevision','rma','rawAddress','contact','street','store','packPerBox','progressQuantity','countedQuantity'];
     for(const row of items) for(const field of fields) if(String(row[field]??'')!==String(first[field]??''))
-      throw new BusinessError(422,'flow_rows_disagree',`${work.work_no} 多行的${field}不一致，整份未保存`);
+      throw new BusinessError(422,'flow_rows_disagree',`${work.work_no} 的多行“${UPGRADE_COLUMNS.find(column=>column[0]===field)[1]}”不一致，本次未导入。`);
     const number=(value,label)=>{ if(value==null || String(value).trim()==='' || !Number.isSafeInteger(Number(value)) || Number(value)<0)
       throw new BusinessError(422,'invalid_quantity',`${label}须填写0或正整数（件）`); return Number(value); };
     const previous=this.upgradeFlow(work.id);
@@ -5105,10 +5106,10 @@ export class InventoryDatabase {
         const packText = String(batch.pack_per_box ?? "").trim();
         const pack = Number(packText);
         if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
-          throw new BusinessError(400, "invalid_pack_per_box", "本批次套/箱未维护或不是正整数，请补齐后再调拨。");
+          throw new BusinessError(400, "invalid_pack_per_box", "本批次的‘套/箱’须为正整数，补全后才能调拨。");
         }
         if (quantity % pack !== 0) {
-          throw new BusinessError(400, "allocation_pack_multiple", `本批次套/箱为 ${pack}，调拨数量须为 ${pack} 的整数倍。`);
+          throw new BusinessError(400, "allocation_pack_multiple", `套/箱为 ${pack}，调拨数量须为 ${pack} 的整数倍。`);
         }
       }
       const key = batch.batch_key;
@@ -5149,10 +5150,10 @@ export class InventoryDatabase {
         const packText = String(sourceBatch?.pack_per_box ?? "").trim();
         const pack = Number(packText);
         if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
-          throw new BusinessError(400, "invalid_pack_per_box", "来源批次套/箱未维护或不是正整数，请补齐后再批准。");
+          throw new BusinessError(400, "invalid_pack_per_box", "来源批次的‘套/箱’须为正整数，补全后才能批准。");
         }
         if (approved % pack !== 0) {
-          throw new BusinessError(400, "allocation_pack_multiple", `来源批次套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`);
+          throw new BusinessError(400, "allocation_pack_multiple", `套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`);
         }
       }
       const at = new Date().toISOString();

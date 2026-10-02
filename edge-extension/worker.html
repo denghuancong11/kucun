@@ -1,9 +1,9 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Aster 领星后台同步设置</title>
 <style>body{font:16px system-ui;max-width:860px;margin:48px auto;color:#202536;padding:20px}button,input{font:inherit;padding:10px}button{cursor:pointer}p{line-height:1.8;overflow-wrap:anywhere}.hint{color:#555}pre{white-space:pre-wrap;background:#f1f3f8;padding:20px}</style>
 <h1>部署电脑 · 领星后台同步</h1>
-<p>在部署库存系统的电脑配置。首次连接后自动恢复连接，可关闭此页，保持 Edge 运行。</p>
+<p>在部署电脑连接库存服务。连接后可关闭此设置页，请保持 Edge 运行。</p>
 <label>本机库存服务端口 <input id="port" type="number" value="4173" min="1" max="65535"></label>
 <button id="connect">连接库存服务</button><button id="disconnect" disabled>断开连接</button>
-<p class="hint">断开会停止自动连接，任务结束后可修改端口。<span id="version"></span></p>
-<p class="hint">同步复用已打开的指定领星执行页，指标与物流在同页切换。请保持该页打开；页面关闭时按同步状态中的地址重新打开。领星登录过期或需要验证码时，请在此 Edge 主动登录，再从库存系统重新同步。</p>
+<p class="hint">断开后停止自动连接，可修改端口；同步期间不能断开。<span id="version"></span></p>
+<p class="hint">请保持指定的领星同步页面打开。页面关闭后，按状态提示中的地址重新打开；登录过期或需要验证时，请在部署电脑的 Edge 完成登录，再回到库存系统重新同步。</p>
 <pre id="status" role="status">尚未连接</pre><script src="worker.js"></script></html>

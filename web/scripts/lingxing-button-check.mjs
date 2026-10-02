@@ -42,7 +42,7 @@ const finishMetric=(id,sales=777)=>execute('finish',{id,capture:{items:[metric(s
 const label=async(container,text,enabled)=>{const button=container.getByRole('button',{name:text,exact:true});await button.waitFor();if(enabled!==undefined)assert.equal(await button.isEnabled(),enabled);};
 const nav=async(page,name)=>{await page.locator('.sidebar .nav-item',{hasText:name}).click();await page.waitForLoadState('networkidle');};
 const role=async(page,value)=>{await page.getByLabel('切换当前操作角色',{exact:true}).selectOption(value);await page.waitForLoadState('networkidle');};
-const filter=async(page,value)=>{await page.getByLabel('搜索运营姓名、型号或 ASIN',{exact:true}).fill(value);};
+const filter=async(page,value)=>{await page.getByLabel('搜索型号、单号、运营或 ASIN',{exact:true}).fill(value);};
 const submit=async(page,container,name)=>{const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/lingxing/jobs'&&r.request().method()==='POST');await container.getByRole('button',{name,exact:true}).click();return (await(await response).json()).job;};
 const newPage=async(context)=>{
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
@@ -111,7 +111,7 @@ try {
  let lost=true,blockStatus=true;
  await a.route('**/api/lingxing/jobs**',async route=>{if(route.request().method()==='GET'&&blockStatus)return route.abort();if(route.request().method()==='POST'&&lost){lost=false;await route.fetch();return route.abort();}return route.continue();});
  const postCount=posts.length;await sync(a).getByRole('button',{name:'同步完成',exact:true}).click();await label(sync(a),'重试确认',true);
- assert.ok((await sync(a).innerText()).includes('尚未取得'));const lostKey=posts.at(-1).requestId;assert.equal(posts.length,postCount+1);
+ assert.ok((await sync(a).innerText()).includes('同步结果尚未确认'));const lostKey=posts.at(-1).requestId;assert.equal(posts.length,postCount+1);
  const confirmed=await submit(a,sync(a),'重试确认');assert.equal(confirmed.requestId,lostKey);await label(sync(a),'同步中',false);
  await execute('claim');await finishMetric(confirmed.id,781);blockStatus=false;await a.unroute('**/api/lingxing/jobs**');await label(sync(a),'同步完成',true);
  assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(lostKey).n,1);check('网络未知结果不误报成功或失败，同一请求重试不重复执行');

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { BusinessError } from './inventory-db.mjs';
 
-const disconnected = '部署电脑领星插件未连接。已启用的插件会自动恢复，请保持 Edge 运行；首次使用请在插件中连接库存服务。';
+const disconnected = '领星扩展未连接，请在部署电脑检查 Edge 和扩展连接。';
 const active = state => state === 'queued' || state === 'running';
 const now = () => new Date().toISOString();
 
@@ -15,7 +15,7 @@ export class LingxingHost {
     this.leaseMs = leaseMs;
     this.worker = null;
     this.db.prepare(`UPDATE lingxing_sync_jobs SET state='failed',message=?,finished_at=? WHERE state IN ('queued','running')`)
-      .run('库存服务重启使本次同步中断；插件自动恢复连接后，可重新发起同步。', now());
+      .run('库存服务已重启，本次同步中断。扩展连接恢复后，请重新同步。', now());
     this.timer = setInterval(() => this.expire(), 5000);
     this.timer.unref();
   }
@@ -88,7 +88,7 @@ export class LingxingHost {
     if (this.db.prepare('SELECT id FROM lingxing_sync_jobs WHERE request_id=?').get(requestId)) return this.submit(role,requestId,request,requestedFrom);
     const available = this.status().connected;
     const id = this.db.prepare(`INSERT INTO lingxing_sync_jobs(request_id,role,request_json,requested_from,target_json,state,message,created_at,finished_at)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,json,requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待部署电脑按顺序执行':disconnected,now(),available?null:now()).lastInsertRowid;
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,json,requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待同步…':disconnected,now(),available?null:now()).lastInsertRowid;
     return { ok: true, job: this.publicJob(this.raw(id)) };
   }
   async list(role, action, workId, requestId, latest = false) {
@@ -116,7 +116,7 @@ export class LingxingHost {
     catch (error) { this.fail(row.id,error.message); return { ok: true, job: null }; }
     if (!this.worker || this.worker.id !== workerId) return {ok:true,job:null};
     // 权限读取期间可能有另一条领取请求；条件更新与唯一运行索引一起避免双领。
-    const changed = this.db.prepare(`UPDATE lingxing_sync_jobs SET state='running',worker_id=?,started_at=?,message='部署电脑正在取数'
+    const changed = this.db.prepare(`UPDATE lingxing_sync_jobs SET state='running',worker_id=?,started_at=?,message='正在读取领星数据…'
       WHERE id=? AND state='queued' AND NOT EXISTS(SELECT 1 FROM lingxing_sync_jobs WHERE state='running')`).run(workerId,now(),row.id).changes;
     return { ok: true, job: changed ? this.publicJob(this.raw(row.id)) : null };
   }
@@ -145,7 +145,9 @@ export class LingxingHost {
         if (!this.worker || this.worker.id !== workerId || this.raw(id).state !== 'running') throw new BusinessError(409,'worker_disconnected',disconnected);
         const onSaved = result => {
           this.db.prepare("UPDATE lingxing_sync_jobs SET state='succeeded',message=?,capture_json=?,result_json=?,finished_at=? WHERE id=?")
-            .run(`已保存 ${result.updated} ${target.action==='metrics'?'个 ASIN':`条包裹商品记录；${result.businessMessage}`}`,JSON.stringify(capture),JSON.stringify({updated:result.updated,capturedAt:result.capturedAt,cacheSaved:result.cacheSaved,businessApplied:result.businessApplied,businessMessage:result.businessMessage,shippedDelta:result.shippedDelta,shippedQuantity:result.shippedQuantity}),now(),id);
+            .run(target.action==='metrics' ? `已保存 ${result.updated} 个 ASIN` : result.businessApplied
+              ? `物流已同步，${result.businessMessage}`
+              : `已保存 ${result.updated} 条领星包裹商品记录；移仓已发货数量未更新。${result.businessMessage}`,JSON.stringify(capture),JSON.stringify({updated:result.updated,capturedAt:result.capturedAt,cacheSaved:result.cacheSaved,businessApplied:result.businessApplied,businessMessage:result.businessMessage,shippedDelta:result.shippedDelta,shippedQuantity:result.shippedQuantity}),now(),id);
         };
         const args = {role:row.role,capturedAt:capture?.capturedAt,requestId:`lingxing-host-${id}`,onSaved};
         if (target.action === 'metrics') this.inventory.syncLingxing({...args,items:capture?.items});

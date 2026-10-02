@@ -15,7 +15,7 @@ import { createTestInstanceId, freePort, waitForOwnedServer } from "../../script
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aster-inquiry-export-"));
 const roles = ["admin", "assistant-1", "assistant-2", "business", "operation-1", "operation-2", "purchasing"];
-const headers = ["型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
+const headers = ["型号", "商务审核数量", "供应商库存回复", "发货仓库", "采购备注", "部门", "店铺", "运营", "FNSKU", "提交时间", "状态"];
 let server;
 let browser;
 let base;
@@ -246,9 +246,9 @@ async function resetFilters() {
   await page.getByLabel("按需求类型筛选", { exact: true }).selectOption("all");
   await page.getByRole("group", { name: "按类目筛选", exact: true }).getByRole("button", { name: "全部类目", exact: true }).click();
   await page.getByLabel("筛选审批进度", { exact: true }).selectOption("all");
-  const todo = page.getByRole("button", { name: /^我的待办/ });
+  const todo = page.getByRole("button", { name: /^(我的待办|本团处理中)/ });
   if (await todo.getAttribute("aria-pressed") === "true") await todo.click();
-  await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).fill("");
+  await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).fill("");
 }
 
 try {
@@ -331,9 +331,9 @@ try {
   await page.getByLabel("按需求类型筛选", { exact: true }).selectOption("allocation");
   await page.getByRole("group", { name: "按类目筛选", exact: true }).getByRole("button", { name: "墨盒", exact: true }).click();
   await page.getByLabel("筛选审批进度", { exact: true }).selectOption("active");
-  await page.getByRole("button", { name: /^我的待办/ }).click();
+  await page.getByRole("button", { name: /^(我的待办|本团处理中)/ }).click();
   await page.getByLabel("筛选审批进度", { exact: true }).selectOption("active");
-  await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).fill("筛选后没有匹配");
+  await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).fill("筛选后没有匹配");
   const snapshotBeforeExport = businessSnapshot();
   const adminExport = await exportDownload();
   const adminWorkbook = await checkWorkbookMatchesResponse(adminExport.download, adminExport.response, page);
@@ -370,8 +370,8 @@ try {
   assert.deepEqual([
     await page.getByLabel("按需求类型筛选", { exact: true }).inputValue(),
     await page.getByLabel("筛选审批进度", { exact: true }).inputValue(),
-    await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).inputValue(),
-    await page.getByRole("button", { name: /^我的待办/ }).getAttribute("aria-pressed"),
+    await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).inputValue(),
+    await page.getByRole("button", { name: /^(我的待办|本团处理中)/ }).getAttribute("aria-pressed"),
     await page.getByRole("group", { name: "按类目筛选", exact: true }).getByRole("button", { name: "墨盒", exact: true }).getAttribute("aria-pressed"),
   ], ["allocation", "active", "筛选后没有匹配", "true", "true"], "导出不改变类型、进度、搜索、待办和类目筛选状态");
   check("实际 xlsx 严格 11 列，保留两类/多单、数值空值/0、历史差异、状态、特殊文本与最新回复");
@@ -415,7 +415,7 @@ try {
   approvalMode = "empty";
   const beforeEmpty = downloadCount;
   await page.getByRole("button", { name: "导出询库", exact: true }).click();
-  await page.getByText("当前角色没有可导出的询库单据", { exact: true }).waitFor();
+  await page.getByText("暂无可导出的询库单。", { exact: true }).waitFor();
   assert.equal(downloadCount, beforeEmpty, "空结果不下载空表或旧缓存");
   approvalMode = "failure";
   await page.getByRole("button", { name: "导出询库", exact: true }).click();

@@ -6,6 +6,7 @@ import type {
   AuditPayload,
   AuditQuery,
   DocumentHistory,
+  DirectUpgrade,
   EffectivePermissions,
   InventoryCatalogPayload,
   Role,
@@ -34,7 +35,7 @@ export function fetchLingxingJobs(role:Role,target:LingxingTarget,requestId:stri
 }
 
 
-async function requestJson<T>(url: string, role: Role, init?: RequestInit): Promise<T> {
+async function requestJson<T>(url: string, role: Role, init?: RequestInit, purpose: 'read' | 'save' | 'preview' | 'export' = init?.method === 'POST' ? 'save' : 'read'): Promise<T> {
   let response: Response;
   let raw: string;
   try {
@@ -46,7 +47,12 @@ async function requestJson<T>(url: string, role: Role, init?: RequestInit): Prom
     });
     raw = await response.text();
   } catch (error) {
-    const reason = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)
+    const timedOut = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
+    if (purpose === 'preview' || purpose === 'export') {
+      const reason = timedOut ? "库存服务响应超时" : "库存服务连接中断";
+      throw new Error(`${reason}，${purpose === 'preview' ? "未能取得文件预览，请重新上传文件。" : "未能取得回填模板，请重新导出。"}`);
+    }
+    const reason = timedOut
       ? "等待库存服务响应超时"
       : "与库存服务的连接中断";
     throw new Error(init?.method === "POST"
@@ -54,10 +60,14 @@ async function requestJson<T>(url: string, role: Role, init?: RequestInit): Prom
       : `${reason}，请检查网络和部署电脑的库存服务后重新加载。`);
   }
   let result: any = null;
-  try { result = raw ? JSON.parse(raw) : null; } catch { /* 非 JSON 响应由下方保留可诊断文本 */ }
+  try { result = raw ? JSON.parse(raw) : null; } catch { /* 无法读取响应时按本次操作显示提示。 */ }
   if (!response.ok || !result?.ok) {
     /* 服务端业务错误码（如 duplicate）随异常抛出，调用方据此走二次确认分支 */
-    const error = new Error(result?.error || (raw.trim() ? `请求失败（HTTP ${response.status}）：${raw.trim().slice(0, 160)}` : `请求失败（HTTP ${response.status}）`)) as ApiError;
+    const fallback = purpose === 'preview' ? "未能取得文件预览，请重新上传文件。"
+      : purpose === 'export' ? "未能取得回填模板，请重新导出。"
+      : purpose === 'save' ? "尚未确认是否保存，请保留当前填写内容并核对记录。"
+      : "未能读取库存数据，请重新加载。";
+    const error = new Error(result?.error || fallback) as ApiError;
     if (result?.code) error.code = result.code;
     error.status = response.status;
     if (result?.details !== undefined) error.details = result.details;
@@ -85,9 +95,9 @@ export const clearInquiries=(role:Role,requestId:string)=>requestJson<{ok:true;h
 export const fetchInquiryBackups=(role:Role)=>requestJson<{ok:true;records:Inquiry[];sync:SyncState}>('/api/inquiries/backups',role);
 export const recallInquiry=(role:Role,id:number,expectedRevision:number,requestId:string)=>requestJson(`/api/inquiries/${id}/recall`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision,requestId})});
 export const fetchUpgradeFlows=(role:Role)=>requestJson<{ok:true;flows:UpgradeFlow[];sync:SyncState}>('/api/upgrades/flows',role);
-export const exportUpgradeRows=(role:Role,ids:number[])=>requestJson<{ok:true;rows:UpgradeTemplateRow[]}>('/api/upgrades/template',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids})});
+export const exportUpgradeRows=(role:Role,ids:number[])=>requestJson<{ok:true;rows:UpgradeTemplateRow[]}>('/api/upgrades/template',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ids})},'export');
 export const addUpgradeDetail=(role:Role,id:number,expectedRevision:number,requestId:string)=>requestJson(`/api/upgrades/flows/${id}/details`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expectedRevision,requestId})});
-export const previewUpgradeFile=(role:Role,kind:'update'|'transfer',file:File)=>requestJson<UpgradeFilePreview>(`/api/upgrades/${kind}/preview`,role,{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file});
+export const previewUpgradeFile=(role:Role,kind:'update'|'transfer',file:File)=>requestJson<UpgradeFilePreview>(`/api/upgrades/${kind}/preview`,role,{method:'POST',headers:{'content-type':'application/octet-stream','x-file-name':encodeURIComponent(file.name)},body:file},'preview');
 export const importUpgradeFile=(role:Role,kind:'update'|'transfer',preview:UpgradeFilePreview,requestId:string)=>requestJson<{ok:true;flows:UpgradeFlow[]}>(`/api/upgrades/${kind}/import`,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rows:preview.rows,previewToken:preview.previewToken,requestId})});
 
 export function reviewAllocation(role: Role, id: number, payload: ApprovalReview): Promise<unknown> {
@@ -142,7 +152,7 @@ export function fetchUpgradeDashboard(role: Role): Promise<UpgradeDashboardPaylo
 export function createDirectUpgrade(
   role: Role,
   payload: { model: string; sourceVersion: string; requestId: string },
-): Promise<unknown> {
+): Promise<{ ok: true; upgrade: DirectUpgrade }> {
   return requestJson("/api/upgrades/direct", role, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -201,7 +211,7 @@ async function requestUpload<T>(url: string, role: Role, file: File, options: { 
       "x-date-year": String(options.dateYear),
     },
     body: file,
-  });
+  }, 'preview');
 }
 
 export function previewTransitImport(role: Role, file: File, options: { dateYear: number }): Promise<TransitImportPreview> {

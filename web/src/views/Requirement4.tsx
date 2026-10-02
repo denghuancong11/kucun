@@ -33,7 +33,7 @@ function RelocationSources({role}:{role:Role}) {
   const requests=useRef(new Map<string,string>());
   return <Panel title="发起移仓升级"><label className="field"><span>筛选来源单号或型号</span><input value={search} onChange={e=>setSearch(e.target.value)}/></label>
     {query.error&&<p role="alert">{query.error.message}</p>}{error&&<p role="alert">{error}</p>}
-    <div className="table-wrap"><table className="data-table"><thead><tr><th>来源单号</th><th>型号 / 原版本</th><th>店铺 / 团队</th><th>来源推算余量</th><th>操作</th></tr></thead><tbody>
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>来源单号</th><th>型号 / 原版本</th><th>店铺 / 团队</th><th>移仓来源余量</th><th>操作</th></tr></thead><tbody>
     {(query.data?.relocationCandidates||[]).filter(r=>!search||[r.documentNo,r.model].some(v=>v.includes(search))).map(r=><tr key={r.documentNo}>
       <td>{r.documentNo}</td><td>{r.model} / {r.sourceVersion}</td><td>{r.store||'待补录'} / {r.department}</td><td>{r.fbaRemainingQuantity}</td>
       <td>{!['business','alan'].includes(role)&&<button className="btn btn-primary btn-sm" disabled={busy} onClick={()=>{
@@ -56,7 +56,7 @@ function DirectView({role}:{role:Role}) {
   const directVersions=[...new Set((dashboard?.directSources||[]).filter(r=>r.model===directModel).map(r=>r.sourceVersion))];
   const selectedDirectSource=dashboard?.directSources.find(r=>r.model===directModel&&r.sourceVersion===directVersion);
   const directHistory=(dashboard?.upgrades||[]).filter((r):r is DirectUpgrade=>r.kind==='direct');
-  const refreshAfterWrite=()=>queryClient.invalidateQueries();
+  const refreshAfterWrite=()=>queryClient.invalidateQueries({}, {throwOnError:true});
   const submitDirect = async () => {
     if (!selectedDirectSource || selectedDirectSource.available <= 0 || busy || role === "business") return;
     const payload = { model: selectedDirectSource.model, sourceVersion: selectedDirectSource.sourceVersion };
@@ -64,10 +64,10 @@ function DirectView({role}:{role:Role}) {
     setBusy("direct-create");
     setNotice(null);
     try {
-      await createDirectUpgrade(role, { ...payload, requestId });
+      const result = await createDirectUpgrade(role, { ...payload, requestId });
       directRequest.current = null;
-      await refreshAfterWrite();
-      setNotice({ kind: "success", text: `已锁定 ${formatNumber(selectedDirectSource.available)} 件可用库存，等待采购登记升级完成数量。` });
+      const refreshed = await refreshAfterWrite().then(() => true, () => false);
+      setNotice({ kind: "success", text: `已锁定 ${formatNumber(result.upgrade.initialQuantity)} 件，待采购登记完成。${refreshed ? "" : " 页面刷新失败，请刷新页面。"}` });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -98,12 +98,12 @@ function DirectView({role}:{role:Role}) {
       setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
       setDirectCompleteDrafts((current) => ({ ...current, [job.id]: { quantity: "", version: request.newVersion } }));
       const refreshed = await refreshAfterWrite().then(() => true, () => false);
-      setNotice({ kind: "success", text: `已将 ${formatNumber(request.completedQuantity)} 件从 ${job.sourceVersion} 转入 ${request.newVersion}；型号在库总量不变。${refreshed ? "" : "已保存，但页面刷新失败，请重新加载查看。"}` });
+      setNotice({ kind: "success", text: `已登记 ${formatNumber(request.completedQuantity)} 件升级完成：${job.sourceVersion} → ${request.newVersion}。${refreshed ? "" : " 页面刷新失败，请刷新页面。"}` });
     } catch (error) {
       const status = (error as ApiError)?.status;
       const rejected = status !== undefined && status >= 400 && status < 500;
       if (rejected) setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
-      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 请点击“重试确认”查看这笔完成记录的结果。"}` });
+      setNotice({ kind: "error", text: rejected ? error instanceof Error ? error.message : String(error) : "本次操作结果尚未确认，请点击“重试确认”。" });
     } finally {
       completing.current = false;
       setBusy(null);
@@ -112,7 +112,7 @@ function DirectView({role}:{role:Role}) {
 
 
   if(query.isLoading) return <SkeletonTable/>;
-  if(query.error) return <p role="alert">{query.error.message}</p>;
+  if(query.error) return <><p role="alert">{query.error.message}</p><Notice notice={notice} onClose={()=>setNotice(null)}/></>;
   return <><Panel title="发起在库升级"><div className="form-grid">
     <label className="field"><span>型号</span><select value={directModel} onChange={e=>{setDirectModel(e.target.value);setDirectVersion('');}}><option value="">请选择型号</option>{directModels.map(v=><option key={v}>{v}</option>)}</select></label>
     <label className="field"><span>原版本号</span><select value={directVersion} onChange={e=>setDirectVersion(e.target.value)}><option value="">请选择原版本</option>{directVersions.map(v=><option key={v}>{v}</option>)}</select></label>
@@ -155,9 +155,9 @@ function DirectHistory({
               <Badge label={job.statusText} tone={job.status === "completed" ? "green" : "blue"} />
             </div>
             <div className="upgrade-kpis compact">
-              <span>初始锁定 <strong>{formatNumber(job.initialQuantity)}</strong></span>
+              <span>发起时锁定 <strong>{formatNumber(job.initialQuantity)}</strong></span>
               <span>升级完成 <strong>{formatNumber(job.completedQuantity)}</strong></span>
-              <span className="primary">升级中 / 锁定 <strong>{formatNumber(job.inProgressQuantity)}</strong></span>
+              <span className="primary">升级中（已锁定） <strong>{formatNumber(job.inProgressQuantity)}</strong></span>
 
               <span>发起岗位 <strong>{ROLE_LABELS[job.initiatedByRole]}</strong></span>
             </div>
@@ -175,8 +175,8 @@ function DirectHistory({
             {job.status === "active" && role !== "purchasing" && <div className="form-hint">等待采购登记完成数量和新版本。</div>}
             <div className="table-wrap">
               <table className="data-table sub">
-                <thead><tr><th>型号</th><th>发货计划号</th><th>发货时间</th><th>原版本</th><th>已贴 FNSKU</th><th>来源海外仓</th><th className="num">发起时在库</th><th>状况</th><th className="num">升级完成</th><th className="num">升级中</th><th>升级完成版本</th></tr></thead>
-                <tbody>{job.lines.map((line) => <tr key={line.id}><td className="mono">{job.model}</td><td className="mono">{line.plan}</td><td className="date-cell">{line.shipDate}</td><td><span className="ver-chip">{line.sourceVersion}</span></td><td className="mono">{line.fnsku}</td><td>{line.warehouse || "历史仓库未确定"}</td><td className="num">{formatNumber(line.initialQuantity)}</td><td><Badge label={line.inProgressQuantity > 0 ? "升级中，预锁定" : "升级完成"} tone={line.inProgressQuantity > 0 ? "blue" : "green"} /></td><td className="num">{formatNumber(line.completedQuantity)}</td><td className="num strong">{formatNumber(line.inProgressQuantity)}</td><td>{line.completions.map(item => `${item.version} / ${item.warehouse || "历史仓库未确定"}：${item.quantity}`).join("、") || "-"}</td></tr>)}</tbody>
+                <thead><tr><th>型号</th><th>发货计划号</th><th>发货时间</th><th>原版本</th><th>FNSKU</th><th>来源海外仓</th><th className="num">发起时在库</th><th>状态</th><th className="num">升级完成</th><th className="num">升级中</th><th>升级完成版本</th></tr></thead>
+                <tbody>{job.lines.map((line) => <tr key={line.id}><td className="mono">{job.model}</td><td className="mono">{line.plan}</td><td className="date-cell">{line.shipDate}</td><td><span className="ver-chip">{line.sourceVersion}</span></td><td className="mono">{line.fnsku}</td><td>{line.warehouse || "历史仓库未确定"}</td><td className="num">{formatNumber(line.initialQuantity)}</td><td><Badge label={line.inProgressQuantity > 0 ? "升级中（已锁定）" : "升级完成"} tone={line.inProgressQuantity > 0 ? "blue" : "green"} /></td><td className="num">{formatNumber(line.completedQuantity)}</td><td className="num strong">{formatNumber(line.inProgressQuantity)}</td><td>{line.completions.map(item => `${item.version} / ${item.warehouse || "历史仓库未确定"}：${item.quantity}`).join("、") || "-"}</td></tr>)}</tbody>
               </table>
             </div>
           </article>

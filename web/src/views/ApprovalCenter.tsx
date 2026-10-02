@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { clearInquiries, confirmAllocation, fetchApprovals, formatNumber, reviewAllocation, reviewInquiry } from "../api";
+import { clearInquiries, confirmAllocation, fetchApprovals, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment } from "../components/InquiryFulfillment";
@@ -27,12 +27,12 @@ function isMyTodo(item: ApprovalItem, role: Role) {
 }
 function metricCoverage(value: number | null, metrics: LingxingMetrics | null) {
   if (!metrics) return "—";
-  if (metrics.sales30d === 0) return "无销量";
+  if (metrics.sales30d === 0) return "近30天无销量";
   return value === null ? "—" : `${value.toFixed(1)} 倍`;
 }
 function calculatedCoverage(quantity: string, metrics: LingxingMetrics | null) {
   if (!metrics) return "—";
-  if (metrics.sales30d === 0) return "无销量";
+  if (metrics.sales30d === 0) return "近30天无销量";
   const approved = Number(quantity);
   if (!quantity.trim() || !Number.isInteger(approved) || approved <= 0 || !Number.isFinite(metrics.sales30d)) return "—";
   const fba = [metrics.fbaAvailable, metrics.fbaPendingTransfer, metrics.fbaTransferring, metrics.fbaInbound];
@@ -60,11 +60,11 @@ const METRIC_COLUMNS: ApprovalColumn[] = [
 ];
 
 const DOCUMENT_COLUMNS: ApprovalColumn[] = [
-  { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "商务部备注", width: 230 },
+  { label: "申请数量", width: 100 }, { label: "商务审核数量", width: 140 }, { label: "商务备注", width: 230 },
   { label: "供应商库存回复", width: 140 }, { label: "发货仓库", width: 130 }, { label: "采购备注", width: 230 },
-  { label: "调拨部门", width: 100 }, { label: "调拨店铺", width: 160 }, { label: "调拨运营", width: 110 },
-  { label: "已贴FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
-  { label: "提交时间", width: 160 }, { label: "状况", width: 135 },
+  { label: "部门", width: 100 }, { label: "店铺", width: 160 }, { label: "运营", width: 110 },
+  { label: "FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
+  { label: "提交时间", width: 160 }, { label: "状态", width: 135 },
 ];
 const COVERAGE_COLUMNS: ApprovalColumn[] = [{ label: "调货前倍数", width: 130 }, { label: "调货后倍数", width: 130 }];
 
@@ -91,9 +91,9 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       const packText = String(item.record.packPerBox ?? "").trim();
       const pack = Number(packText);
       if (!/^\d+(?:\.0+)?$/.test(packText) || !Number.isSafeInteger(pack) || pack <= 0) {
-        setError("来源批次套/箱未维护或不是正整数，请补齐后再批准。"); return;
+        setError("来源批次的‘套/箱’须为正整数，补全后才能批准。"); return;
       }
-      if (approvedQuantity % pack !== 0) { setError(`来源批次套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`); return; }
+      if (approvedQuantity % pack !== 0) { setError(`套/箱为 ${pack}，审核数量须为 ${pack} 的整数倍。`); return; }
     }
     const payload = { decision, ...(decision === "approve" ? { approvedQuantity } : {}), businessNote: businessNote.trim(), expectedRevision: row.revision, requestId: createRequestId(`${item.kind}-review`) };
     void perform({ execute: () => item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload), message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
@@ -123,7 +123,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.documentNo}`} onSubmit={event => event.preventDefault()}>
         <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" value={quantity} disabled={busy || uncertain} onChange={event => setQuantity(event.target.value)} /></label>
         {item.kind === "allocation" && <label className="field"><span>套/箱</span><input type="text" value={item.record.packPerBox?.trim() ? item.record.packPerBox : "未维护"} readOnly /></label>}
-        <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
+        <label className="field approval-calculated-coverage"><span>预计调货后倍数</span><output aria-label={`预计调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
         <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
         <button className="btn btn-primary" type="button" disabled={busy || uncertain} onClick={() => review("approve")}>批准</button>
         <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>拒绝</button>
@@ -138,6 +138,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
 
 export function ApprovalCenterView({ role }: { role: Role }) {
   const query = useApprovals(role);
+  const isOperation = role === "operation-1" || role === "operation-2";
   const inventory = useInventoryCatalog(role);
   const [type, setType] = useState<TypeFilter>("all");
   const [category, setCategory] = useState<"all" | Category>("all");
@@ -176,7 +177,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
         return;
       }
       if (payload.inquiries.length === 0) {
-        setNotice({ kind: "warning", text: "当前角色没有可导出的询库单据" });
+        setNotice({ kind: "warning", text: "暂无可导出的询库单。" });
         return;
       }
       const workbook = buildInquiryWorkbook(payload.inquiries);
@@ -188,7 +189,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setNotice({ kind: "success", text: `已导出 ${payload.inquiries.length} 张询库单据` });
+      setNotice({ kind: "success", text: `已生成包含 ${payload.inquiries.length} 张询库单的导出文件。` });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "未知错误";
       setNotice({ kind: "error", text: `生成询库文件失败：${reason}` });
@@ -196,17 +197,35 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       setExporting(false);
     }
   };
+  const hideCompletedInquiries = async () => {
+    let result: { hidden: number };
+    try {
+      result = await clearInquiries(role, createRequestId("inquiry-clear"));
+    } catch (failure) {
+      const error = failure as ApiError;
+      const rejected = error.status !== undefined && error.status >= 400 && error.status < 500;
+      setNotice({ kind: rejected ? "error" : "warning", text: rejected ? error.message : "隐藏结果尚未确认，请刷新审批中心查看。" });
+      return;
+    }
+    const message = result.hidden > 0 ? `已隐藏 ${result.hidden} 张询库单。` : "没有可隐藏的询库单。";
+    try {
+      await query.refresh();
+      setNotice({ kind: result.hidden > 0 ? "success" : "warning", text: message });
+    } catch {
+      setNotice({ kind: "warning", text: `${message} 页面刷新失败，请刷新页面。` });
+    }
+  };
   return <div className="approval-page"><Panel>
     <div className="approval-toolbar"><div className="filter-bar">
-      <label className="search-input approval-search"><Icon name="search" size={15} /><input aria-label="搜索运营姓名、型号或 ASIN" placeholder="型号 / 单号 / 运营 / ASIN" value={search} onChange={event => setSearch(event.target.value)} /></label>
+      <label className="search-input approval-search"><Icon name="search" size={15} /><input aria-label="搜索型号、单号、运营或 ASIN" placeholder="型号 / 单号 / 运营 / ASIN" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <select aria-label="按需求类型筛选" value={type} onChange={event => setType(event.target.value as TypeFilter)}><option value="all">全部类型</option><option value="allocation">调拨</option><option value="inquiry">询库</option></select>
       <Segmented<"all" | Category> ariaLabel="按类目筛选" value={category} onChange={setCategory} items={[{ value: "all", label: "全部类目" }, { value: "硒鼓", label: "硒鼓" }, { value: "墨盒", label: "墨盒" }]} />
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
-      <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
+      <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>{isOperation ? "本团处理中" : "我的待办"} <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions">{["admin","purchasing","business"].includes(role) && <button className="btn btn-ghost" type="button" onClick={() => void clearInquiries(role, createRequestId("inquiry-clear")).then(async result => { await query.refresh(); setNotice({kind:"success",text:`已隐藏 ${result.hidden} 张终态询库，备份保留。`}); }).catch(error => setNotice({kind:"error",text:error.message}))}>询库数据流-手动清空</button>}<button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "正在导出…" : "导出询库"}</button><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    </div><div className="page-actions">{["admin","purchasing","business"].includes(role) && <button className="btn btn-ghost" type="button" title="按当前权限处理，不受筛选影响；隐藏对所有岗位生效。" onClick={() => void hideCompletedInquiries()}>隐藏已完成/已拒绝询库</button>}<button className="btn btn-ghost" type="button" title="导出权限范围内未隐藏的询库，不受当前筛选影响。" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "正在导出…" : "导出询库"}</button><LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh().catch(() => {})}>刷新</button></div></div>
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}
-    {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
+    {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? isOperation ? "本团暂无处理中记录" : "当前岗位暂无待办" : isOperation ? "当前筛选下没有处理中记录" : "当前筛选下没有待办" : items.length === 0 ? "暂无审批记录" : "没有符合筛选条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
       <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>
       <thead><tr><th aria-label="展开或收起型号" />{["型号", "在库库存", "申请数量合计", "商务审核数量合计"].map(label => <th key={label}>{label}</th>)}</tr></thead>
       {groups.map(([model, records]) => {

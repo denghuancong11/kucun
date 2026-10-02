@@ -79,7 +79,7 @@ async function openAllocation(batch) {
 async function fillAllocation(panel, { quantity, operator }) {
   await panel.locator('input[type="number"]').fill(String(quantity));
   for (const [label, value] of Object.entries({
-    '调拨店铺': 'AUS', '调拨运营': operator, '已贴 FNSKU': 'XPACK00001', 'ASIN（必填）': 'BPACK00001',
+    '调拨店铺': 'AUS', '调拨运营': operator, 'FNSKU': 'XPACK00001', 'ASIN（必填）': 'BPACK00001',
   })) await panel.getByLabel(label, { exact: true }).fill(value);
 }
 
@@ -106,8 +106,8 @@ try {
 
   const fourForm = await openAllocation(batch4);
   await fillAllocation(fourForm, { quantity: 5, operator: 'ui-pack-four-reject' });
-  await fourForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
-  const fourWarning = '本批次套/箱为 4，调拨数量须为 4 的整数倍。';
+  await fourForm.getByRole('button', { name: '提交调拨', exact: true }).click();
+  const fourWarning = '套/箱为 4，调拨数量须为 4 的整数倍。';
   await fourForm.getByRole('alert').filter({ hasText: fourWarning }).waitFor();
   assert.equal(await fourForm.locator('input[type="number"]').inputValue(), '5');
   assert.equal(allocationRequests.length, 0);
@@ -115,7 +115,7 @@ try {
   check('所选套/箱4的非倍数5显示明确警告、保留输入并在前端阻止请求');
 
   await fourForm.locator('input[type="number"]').fill('8');
-  await fourForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  await fourForm.getByRole('button', { name: '提交调拨', exact: true }).click();
   await fourForm.getByRole('status').waitFor();
   assert.equal(allocationRequests.length, 1);
   assert.equal(allocationRequests[0].sourceBatchKey, batch4.batchKey);
@@ -125,13 +125,13 @@ try {
 
   const sixForm = await openAllocation(batch6);
   await fillAllocation(sixForm, { quantity: 8, operator: 'ui-pack-six-reject' });
-  const sixWarning = '本批次套/箱为 6，调拨数量须为 6 的整数倍。';
-  await sixForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  const sixWarning = '套/箱为 6，调拨数量须为 6 的整数倍。';
+  await sixForm.getByRole('button', { name: '提交调拨', exact: true }).click();
   await sixForm.getByRole('alert').filter({ hasText: sixWarning }).waitFor();
   assert.equal(allocationRequests.length, 1);
   assert.equal(await sixForm.locator('input[type="number"]').inputValue(), '8');
   await sixForm.locator('input[type="number"]').fill('12');
-  await sixForm.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+  await sixForm.getByRole('button', { name: '提交调拨', exact: true }).click();
   await sixForm.getByRole('status').waitFor();
   assert.equal(allocationRequests.length, 2);
   assert.equal(allocationRequests[1].sourceBatchKey, batch6.batchKey);
@@ -142,9 +142,9 @@ try {
   for (const [batch, operator] of [[missing, 'ui-pack-missing'], [invalid, 'ui-pack-invalid']]) {
     const form = await openAllocation(batch);
     await fillAllocation(form, { quantity: 4, operator });
-    const warning = '本批次套/箱未维护或不是正整数，请补齐后再调拨。';
+    const warning = '本批次的‘套/箱’须为正整数，补全后才能调拨。';
     await form.getByRole('alert').filter({ hasText: warning }).waitFor();
-    await form.getByRole('button', { name: '录入并预锁定', exact: true }).click();
+    await form.getByRole('button', { name: '提交调拨', exact: true }).click();
     assert.equal(allocationRequests.length, 2);
     assert.equal(db.db.prepare('SELECT id FROM allocation_documents WHERE operator_name = ?').get(operator), undefined);
   }
@@ -198,7 +198,7 @@ try {
   assert.equal(await fourPackField.evaluate(element => element.readOnly), true);
   await reviewFourForm.getByLabel('审核数量', { exact: true }).fill('7');
   await reviewFourForm.getByRole('button', { name: '批准', exact: true }).click();
-  await fourRecord.getByRole('alert').filter({ hasText: '来源批次套/箱为 4，审核数量须为 4 的整数倍。' }).waitFor();
+  await fourRecord.getByRole('alert').filter({ hasText: '套/箱为 4，审核数量须为 4 的整数倍。' }).waitFor();
   assert.equal(reviewRequests.length, 0);
   assert.equal(await reviewFourForm.getByLabel('审核数量', { exact: true }).inputValue(), '7');
   await reviewFourForm.getByLabel('审核数量', { exact: true }).fill('5.5');
@@ -222,7 +222,7 @@ try {
   assert.equal(await reviewSixForm.getByLabel('套/箱', { exact: true }).inputValue(), '6');
   await reviewSixForm.getByLabel('审核数量', { exact: true }).fill('8');
   await reviewSixForm.getByRole('button', { name: '批准', exact: true }).click();
-  await sixRecord.getByRole('alert').filter({ hasText: '来源批次套/箱为 6，审核数量须为 6 的整数倍。' }).waitFor();
+  await sixRecord.getByRole('alert').filter({ hasText: '套/箱为 6，审核数量须为 6 的整数倍。' }).waitFor();
   assert.equal(reviewRequests.length, 1);
   await reviewSixForm.getByLabel('审核数量', { exact: true }).fill('12');
   await reviewSixForm.getByRole('button', { name: '批准', exact: true }).click();
@@ -236,7 +236,7 @@ try {
   assert.equal(await missingForm.getByLabel('套/箱', { exact: true }).inputValue(), '未维护');
   await missingForm.getByLabel('审核数量', { exact: true }).fill('4');
   await missingForm.getByRole('button', { name: '批准', exact: true }).click();
-  await missingRecord.getByRole('alert').filter({ hasText: '来源批次套/箱未维护或不是正整数，请补齐后再批准。' }).waitFor();
+  await missingRecord.getByRole('alert').filter({ hasText: '来源批次的‘套/箱’须为正整数，补全后才能批准。' }).waitFor();
   assert.equal(reviewRequests.length, 2);
   await missingForm.getByRole('button', { name: '拒绝', exact: true }).click();
   await missingForm.waitFor({ state: 'detached' });
@@ -248,7 +248,7 @@ try {
   assert.equal(await invalidForm.getByLabel('套/箱', { exact: true }).inputValue(), '0');
   await invalidForm.getByLabel('审核数量', { exact: true }).fill('4');
   await invalidForm.getByRole('button', { name: '批准', exact: true }).click();
-  await invalidRecord.getByRole('alert').filter({ hasText: '来源批次套/箱未维护或不是正整数，请补齐后再批准。' }).waitFor();
+  await invalidRecord.getByRole('alert').filter({ hasText: '来源批次的‘套/箱’须为正整数，补全后才能批准。' }).waitFor();
   assert.equal(reviewRequests.length, 3);
   check('缺失或无效套/箱时商务页面阻止批准但允许拒绝');
 

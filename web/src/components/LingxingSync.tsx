@@ -5,7 +5,7 @@ import { canSyncLingxing, lingxingTargetKey, type LingxingTarget } from '../ling
 import type { Role } from '../types';
 import { createRequestId } from '../utils/ids';
 
-type Props = {role:Role;target:LingxingTarget;sourceKey?:string;disabled?:boolean;onSynced:()=>Promise<unknown>};
+type Props = {role:Role;target:LingxingTarget;sourceKey?:string;disabled?:boolean;displayedTask?:{id:number;message:string}|null;onSynced:()=>Promise<unknown>};
 
 export function LingxingSync(props: Props) {
   if (!canSyncLingxing(props.role, props.target.action)) return null;
@@ -13,7 +13,7 @@ export function LingxingSync(props: Props) {
   return <SyncButton key={key} {...props} storageKey={`aster-lingxing-request:${key}`} />;
 }
 
-function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storageKey:string}) {
+function SyncButton({role,target,disabled,displayedTask,onSynced,storageKey}: Props & {storageKey:string}) {
   // 各按钮持有自己提交的请求；其他窗口的新任务不会覆盖当前按钮。
   // 本机保留请求编号，重新打开时向服务器查询该任务的真实结果。
   const [requestId,setRequestId] = useState(() => sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey));
@@ -36,7 +36,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storage
   useEffect(() => {
     if (job?.state!=='succeeded' || refreshed.current===job.id) return;
     refreshed.current=job.id;
-    void onSynced().catch(()=>setRefreshError('数据已保存，页面刷新失败，请重新加载页面。'));
+    void onSynced().catch(()=>setRefreshError('数据已保存，页面刷新失败，请刷新页面。'));
   }, [job?.id,job?.state,onSynced]);
 
   async function sync() {
@@ -56,19 +56,17 @@ function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storage
         if (sessionStorage.getItem(storageKey)===id) sessionStorage.removeItem(storageKey);
         setRequestId(null);setSubmitError(failure.message);
       } else {
-        setSubmitError(failure.status ? '库存服务暂时未返回同步结果，请重试确认。'
-          : failure.message.includes('超时') ? '等待库存服务响应超时，尚未取得结果，请重试确认。'
-          : '与库存服务连接中断，尚未取得结果，请重试确认。');
+        setSubmitError('同步结果尚未确认，请点击“重试确认”。');
       }
     } finally {sending.current=false;setSubmitting(false);}
   }
 
   const busy = submitting || active || checking;
-  const label = busy ? '同步中' : job?.state==='succeeded' ? '同步完成'
+  const label = busy ? '同步中' : job?.state==='succeeded' ? target.action==='logistics' && job.result?.businessApplied===false ? '数量未更新' : '同步完成'
     : job?.state==='failed' || (!requestId && submitError) ? '同步失败'
     : uncertain ? '重试确认' : target.action==='metrics' ? '同步领星指标' : '同步领星物流';
-  const error = submitting ? '' : job?.state==='failed' ? job.message
-    : uncertain ? submitError || '尚未取得同步结果，请重试确认。'
+  const error = submitting ? '' : job?.state==='failed' ? displayedTask?.id===job.id && displayedTask.message===job.message ? '' : job.message
+    : uncertain ? submitError || '同步结果尚未确认，请点击“重试确认”。'
     : active && jobs.isError ? '暂时无法读取同步进度，尚未取得结果。'
     : !job ? submitError : refreshError;
   return <div className="lingxing-sync">
