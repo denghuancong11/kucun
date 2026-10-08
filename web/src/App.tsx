@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchSync, type ApiError } from "./api";
+import { PendingBusinessRequests } from "./components/PendingBusinessRequests";
 import { Sidebar, Topbar } from "./components/Sidebar";
 import { requirements } from "./data";
 import { TRANSIT_ROLES, type RequirementKey, type Role, type SyncState } from "./types";
@@ -67,7 +68,7 @@ export default function App() {
     <Sidebar view={view} role={role} onNavigate={navigate} />
     <div className="main">
       <Topbar view={view} tabs={tabs} onNavigate={navigate} onClose={closeTab} role={role} onRoleChange={changeRole} />
-      <main className="content" id="main-content" tabIndex={-1}><div className="breadcrumb">Unismar耗材库存系统 <span>›</span> {meta.label}</div><div className="view-enter" key={`${view}-${role}`}><h1 className="page-title">{meta.label}</h1>
+      <main className="content" id="main-content" tabIndex={-1}><div className="breadcrumb">Unismar耗材库存系统 <span>›</span> {meta.label}</div><PendingBusinessRequests key={`pending-${view}-${role}`} role={role} /><div className="view-enter" key={`${view}-${role}`}><h1 className="page-title">{meta.label}</h1>
         {view === "req1" && <Requirement1View role={role} />}
         {view === "req3" && TRANSIT_ROLES.includes(role) && <Requirement3View role={role} />}
         {view === "req4" && <Requirement4View role={role} />}

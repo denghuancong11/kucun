@@ -291,7 +291,27 @@ try {
     let r=(await call("POST","/api/inquiries","operation-1",{...allocationBody(150,`reply-${qty}`),model:batch.model})).record;
     r=(await call("POST",`/api/inquiries/${r.id}/review`,"business",reviewBody(r,90))).record;
     r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:qty?"东莞仓":"",expectedRevision:r.revision,requestId:requestId("supplier")})).record;
-    check(`供应商回复${qty}覆盖申请量并按最终量处理`,r.requestedQuantity===qty && r.quantity===qty && r.status===(qty===0?"archived":"pending_assistant"));
+    check(`供应商回复${qty}覆盖申请量并按最终量处理`,r.requestedQuantity===qty && r.quantity===qty && r.status==="pending_assistant" && r.archivedAt===null);
+    if(qty===0) {
+      const zeroBalance=await balance();
+      const zeroLedger=read("SELECT * FROM inventory_ledger ORDER BY id");
+      check("零回复保留采购回复事件，不冒充已归档", r.events.at(-1).type === "reply" && r.archivedByRole===null);
+      check("零回复在助理待办可见", (await call("GET", "/api/approvals", "assistant-1")).inquiries.some(item=>item.id===r.id && item.status==="pending_assistant"));
+      await call("POST",`/api/inquiries/${r.id}/archive`,"purchasing",{plan:"ZERO-PLAN",date:"2026-09-24",version:"V1",expectedRevision:r.revision,requestId:requestId("zero-denied")},403);
+      const zeroArchive={plan:"ZERO-PLAN",date:"2026-09-24",version:"V1",expectedRevision:r.revision,requestId:requestId("zero-archive")};
+      const zeroBeforeMissing=read("SELECT * FROM inquiry_documents WHERE id=?",r.id);
+      const zeroEventsBeforeMissing=read("SELECT * FROM inquiry_events WHERE inquiry_id=? ORDER BY id",r.id);
+      for(const field of ["plan","date","version"]) await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",{...zeroArchive,[field]:"",requestId:requestId(`zero-missing-${field}`)},400);
+      check("零回复归档计划、日期、版本缺一均拒绝，单据与事件不变",JSON.stringify(read("SELECT * FROM inquiry_documents WHERE id=?",r.id))===JSON.stringify(zeroBeforeMissing)
+        && JSON.stringify(read("SELECT * FROM inquiry_events WHERE inquiry_id=? ORDER BY id",r.id))===JSON.stringify(zeroEventsBeforeMissing));
+      r=(await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",zeroArchive)).record;
+      check("助理明确归档零回复并留下归档事件和人员",r.status==="archived" && r.quantity===0 && r.archivedByRole==="assistant-1" && r.events.at(-1).type==="archive" && r.events.at(-1).payload.quantity===0);
+      check("零回复归档重放不重复",(await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",zeroArchive)).deduped===true);
+      check("零回复全程不新增在库/锁定/调拨流水且不成为升级来源",JSON.stringify(await balance())===JSON.stringify(zeroBalance)
+        && JSON.stringify(read("SELECT * FROM inventory_ledger ORDER BY id"))===JSON.stringify(zeroLedger)
+        && !(await call("GET","/api/upgrades","assistant-1")).relocationCandidates.some(item=>item.inquiryId===r.id));
+      await call("POST","/api/upgrades/relocation-work-items","assistant-1",{inquiryId:r.id,requestId:requestId("zero-source")},409);
+    }
   }
   for (const route of ["/api/admin/withdrawals","/api/features","/api/transit/1/off-shelf","/api/inquiries/1/ship"]) await call(route.includes("ship")?"POST":"GET",route,"admin",undefined,404);
   const beforeRetired=read('SELECT * FROM stock_balances ORDER BY batch_key');

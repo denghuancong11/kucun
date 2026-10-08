@@ -763,3 +763,5 @@
 @media (max-width:1366px) { .relocation-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } .package-grid { grid-template-columns:1fr; } }
 
 .approval-toolbar select { height:32px; border:1px solid var(--border); border-radius:4px; padding:0 26px 0 10px; background:#fff; color:var(--text); font:inherit; font-size:13px; }
+
+.pending-business{border:1px solid var(--border-strong);background:var(--surface);padding:16px;margin-bottom:16px;border-radius:8px}.pending-business p{margin:8px 0}.pending-business-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px}.pending-business-row button{padding:8px 12px;border-radius:6px}

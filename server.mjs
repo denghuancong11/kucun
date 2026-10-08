@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
-import { BusinessError, InventoryDatabase, INVENTORY_SCHEMA_VERSION, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
+import { BusinessError, InventoryDatabase, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { LingxingHost } from './lingxing-host.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -252,6 +252,15 @@ async function requireActions(role, category) {
   }
 }
 
+async function requireTransitRowActions(role, fileName, rows) {
+  const fallbackCategory = transitCategoryFromFileName(fileName);
+  const categories = new Set(rows.map(item => {
+    const data = item?.data ?? item;
+    const model = String(data?.model ?? data?.ITEM ?? "").trim();
+    return inventory.getModel(model)?.category ?? fallbackCategory;
+  }));
+  for (const category of categories) await requireActions(role, category);
+}
 function requireRole(request) {
   const role = requestRole(request);
   if (!role) throw new BusinessError(403, "invalid_demo_role", "缺少有效角色，无法执行该操作");
@@ -609,6 +618,7 @@ async function handleUpgradesApi(request, response, pathname) {
     sendJson(response, 200, {
       ok: true,
       ...dashboard,
+      overseasWarehouses: OVERSEAS_WAREHOUSES,
       securityMode: "demo-role-header-not-authentication",
     });
     return;
@@ -1358,14 +1368,13 @@ async function authorizeLingxingTarget(role, target, requireActive) {
   if (target.action === 'metrics') {
     if (!['business','admin'].includes(role)) throw new BusinessError(403,'lingxing_sync_forbidden','仅商务或管理员可同步领星指标');
     if (!Array.isArray(target.documents) || !target.documents.length) throw new BusinessError(400,'empty_sync_scope','当前筛选下没有可同步单据');
-    const cutoff = inventory.refreshApprovalDisplay();
+    inventory.refreshApprovalDisplay();
     const documents = [], asins = new Set();
     for (const ref of target.documents) {
       if (!['allocation','inquiry'].includes(ref.kind) || !Number.isInteger(ref.id) || ref.id<=0) throw new BusinessError(400,'invalid_sync_document','同步范围中的单据编号无效');
       const record = ref.kind==='allocation' ? inventory.getDocument(ref.id) : inventory.getInquiry(ref.id);
       if (!record) throw new BusinessError(404,'sync_document_missing','同步单据不存在');
       await readable(record);
-      if (requireActive && cutoff && record.createdAt < cutoff) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已移出审批中心，请刷新后重新同步');
       if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
       if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.documentNo} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
       documents.push({kind:ref.kind,id:ref.id});asins.add(record.asin);
@@ -1491,6 +1500,7 @@ const server = http.createServer(async (request, response) => {
       const fileName = decodeFileNameHeader(request.headers["x-file-name"], "upload.xlsx");
       await requireActions(role, transitCategoryFromFileName(fileName));
       const parsed = parseTransitImportRows(body, fileName, { sheetName: sheetNameHeader(request), dateYear: dateYearHeader(request) });
+      await requireTransitRowActions(role, fileName, parsed.rows);
       inventory.requireTransitImportTeams(role, parsed.rows);
       const fileSha256 = hashBuffer(body);
       const templateSha256 = hashTemplate(parsed.headers);
@@ -1509,6 +1519,7 @@ const server = http.createServer(async (request, response) => {
       const payload = await parseJsonRequest(request);
       await requireActions(role, transitCategoryFromFileName(payload.fileName));
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      await requireTransitRowActions(role, payload.fileName, rows);
       const result = inventory.transitImport({
         role,
         previewToken: requirePreviewToken(payload),
@@ -1585,6 +1596,7 @@ const server = http.createServer(async (request, response) => {
       code: business ? error.code : "internal_error",
       error: business ? error.message : "库存服务处理出错，尚未确认本次操作结果。请重新加载查看记录；仍有问题时，请在部署电脑检查库存服务日志。",
       ...(business && error.details !== undefined ? { details: approvalErrorDetailsForRole(error.details, requestRole(request)) } : {}),
+      ...(business && error.requestNotApplied === true ? { requestNotApplied: true } : {}),
     });
   }
 });

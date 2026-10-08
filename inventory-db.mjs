@@ -3287,7 +3287,10 @@ export class InventoryDatabase {
         this.db.exec("COMMIT");
         return result;
       } catch (error) {
-        try { this.db.exec("ROLLBACK"); } catch { /* preserve original error */ }
+        try {
+          this.db.exec("ROLLBACK");
+          if (error instanceof BusinessError) error.transactionRolledBack = true;
+        } catch { /* preserve original error */ }
         if (/SQLITE_BUSY|database is locked/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`)) {
           throw new BusinessError(409, "database_busy", "库存数据库正被其他操作占用，请刷新后重试");
         }
@@ -3570,9 +3573,9 @@ export class InventoryDatabase {
   approvalView() {
     const cutoff = this.refreshApprovalDisplay();
     return {
-      allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
+      allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (status = 'pending' OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
         .map((row) => this.documentRecord(row)),
-      inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE (? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff).map((row) => this.inquiryRecord(row)),
+      inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE (status IN ('pending_business', 'pending_purchasing', 'pending_assistant') OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff).map((row) => this.inquiryRecord(row)),
     };
   }
 
@@ -3681,13 +3684,10 @@ export class InventoryDatabase {
     return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, status = ?,
-        replied_by_role = ?, replied_at = ?, archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?,
-        revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, warehouse, quantity === 0 ? "archived" : "pending_assistant", role, at,
-          quantity === 0 ? role : null, quantity === 0 ? at : null,
-          quantity === 0 ? JSON.stringify(this.lingxingForDocument(row)) : null, at, id);
-      this.addInquiryEvent(id, quantity === 0 ? "reply_no_stock_archive" : "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse });
+      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, status = 'pending_assistant',
+        replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+        .run(quantity, quantity, warehouse, role, at, at, id);
+      this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
@@ -4775,22 +4775,32 @@ export class InventoryDatabase {
     if (!key) throw new BusinessError(400, "missing_request_id", "本次提交信息不完整，请重新打开表单后提交");
     if (key.length > 200) throw new BusinessError(400, "invalid_request_id", "本次提交编号无效，请重新打开表单后提交");
     const requestHash = sha256(stableJson(payload));
-    return this.transaction(() => {
-      const existing = this.db.prepare("SELECT * FROM idempotency_requests WHERE scope = ? AND request_id = ?").get(scope, key);
-      if (existing) {
-        if (existing.request_hash !== requestHash) {
-          throw new BusinessError(409, "idempotency_conflict", "本次提交的内容与上次不同，未保存新内容。请先查看上次结果，再重新填写", { requestId: key });
+    let cacheMiss = false;
+    try {
+      return this.transaction(() => {
+        const existing = this.db.prepare("SELECT * FROM idempotency_requests WHERE scope = ? AND request_id = ?").get(scope, key);
+        if (existing) {
+          if (existing.request_hash !== requestHash) {
+            throw new BusinessError(409, "idempotency_conflict", "本次提交的内容与上次不同，未保存新内容。请先查看上次结果，再重新填写", { requestId: key });
+          }
+          return this.inventoryResultForRole({ ...JSON.parse(existing.response_json), deduped: true }, payload.role);
         }
-        return this.inventoryResultForRole({ ...JSON.parse(existing.response_json), deduped: true }, payload.role);
+        cacheMiss = true;
+        const result = operation();
+        const response = { ...result, sync: this.bumpVersion() };
+        this.db.prepare(`
+          INSERT INTO idempotency_requests(scope, request_id, request_hash, response_status, response_json, created_at)
+          VALUES (?, ?, ?, 200, ?, ?)
+        `).run(scope, key, requestHash, JSON.stringify(response), new Date().toISOString());
+        return this.inventoryResultForRole(response, payload.role);
+      });
+    } catch (error) {
+      if (error instanceof BusinessError && error.status >= 400 && error.status < 500
+          && cacheMiss && error.transactionRolledBack === true) {
+        error.requestNotApplied = true;
       }
-      const result = operation();
-      const response = { ...result, sync: this.bumpVersion() };
-      this.db.prepare(`
-        INSERT INTO idempotency_requests(scope, request_id, request_hash, response_status, response_json, created_at)
-        VALUES (?, ?, ?, 200, ?, ?)
-      `).run(scope, key, requestHash, JSON.stringify(response), new Date().toISOString());
-      return this.inventoryResultForRole(response, payload.role);
-    });
+      throw error;
+    }
   }
 
 
