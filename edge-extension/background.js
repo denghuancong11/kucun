@@ -40,7 +40,7 @@ async function ownedTab(state) {
   if(tab && !url.startsWith('about:blank') && (session.reportTab===tab.id ||
     (url.startsWith('https://erp.lingxing.com/') && url.endsWith(marker)))) return tab;
   // 只认本插件标记，不接管其他日常领星页，也不自动补建执行页。
-  return (await chrome.tabs.query({})).find(tab=>Object.values(urls).some(url=>(tab.url ?? tab.pendingUrl)===(url+marker))) ?? null;
+  return (await chrome.tabs.query({})).find(tab=>Object.values(urls).some(url=>[tab.url,tab.pendingUrl].includes(url+marker))) ?? null;
 }
 async function stopReport(active, message) {
   if(!active?.tabId) return;
@@ -65,7 +65,8 @@ async function begin(state, job) {
   await stopReport({tabId:tab.id});
   state.activeJob={job,workerId:state.connection.workerId,databaseId:state.connection.databaseId,tabId:tab.id,started:false,openedAt:Date.now()};
   await chrome.storage.local.set({activeJob:state.activeJob});
-  const switching=(tab.url ?? '').split(/[?#]/)[0]!==urls[job.target.action];
+  const pendingReportUrl=Object.values(urls).find(url=>tab.pendingUrl===url+marker);
+  const switching=(pendingReportUrl ?? (tab.url ?? '').split(/[?#]/)[0])!==urls[job.target.action];
   await editTab('update',tab.id,{...(switching?{url:urls[job.target.action]+marker}:{}),autoDiscardable:false});
   await api(state,'progress',{id:job.id,message:switching?'正在原执行页切换领星报表':'正在复用已打开的领星报表'});
   if(!switching && tab.status==='complete') await inspect(state);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aster 领星同步",
-  "version": "2.1.7",
+  "version": "2.1.8",
   "minimum_chrome_version": "120",
   "description": "仅部署电脑执行领星同步，其他电脑通过库存服务提交请求。",
   "permissions": [

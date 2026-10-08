@@ -16,11 +16,16 @@ export function LingxingSync(props: Props) {
 function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storageKey:string}) {
   // 各按钮持有自己提交的请求；其他窗口的新任务不会覆盖当前按钮。
   // 本机保留请求编号，重新打开时向服务器查询该任务的真实结果。
-  const [requestId,setRequestId] = useState(() => sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey));
+  const [initial] = useState(() => {
+    try { return {requestId:sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey),error:''}; }
+    catch { return {requestId:null,error:'浏览器无法读取同步请求记录，暂未发起新同步。请恢复浏览器存储后重试。'}; }
+  });
+  const [requestId,setRequestId] = useState(initial.requestId);
   const [submitting,setSubmitting] = useState(false);
-  const [submitError,setSubmitError] = useState('');
+  const [submitError,setSubmitError] = useState(initial.error);
   const [refreshError,setRefreshError] = useState('');
   const sending = useRef(false);
+  const storageRecovery = useRef(Boolean(initial.error));
   const refreshed = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const queryKey = (id:string|null) => ['lingxing-jobs',role,lingxingTargetKey(target),id];
@@ -42,19 +47,39 @@ function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storage
   async function sync() {
     if (sending.current || active) return;
     sending.current=true;setSubmitting(true);setSubmitError('');setRefreshError('');
-    const id = uncertain ? requestId! : createRequestId('lingxing');
-    sessionStorage.setItem(storageKey,id);localStorage.setItem(storageKey,id);setRequestId(id);
+    let id = requestId;
+    let sent = false;
     try {
+      const savedId = sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey);
+      if (!requestId && savedId && storageRecovery.current) {
+        storageRecovery.current=false;
+        setRequestId(savedId);setSubmitError('已找回原同步编号，尚未取得结果，请重试确认。');
+        return;
+      }
+      id = uncertain ? requestId! : createRequestId('lingxing');
+      sessionStorage.setItem(storageKey,id);localStorage.setItem(storageKey,id);setRequestId(id);
+      storageRecovery.current=false;
+      sent = true;
       const result = await requestLingxingSync(role,target,id);
       await queryClient.cancelQueries({queryKey:queryKey(id)});
       queryClient.setQueryData(queryKey(id),{ok:true,jobs:[result.job]});
       void queryClient.invalidateQueries({queryKey:queryKey(id)});
     } catch(cause) {
       const failure=cause as ApiError;
-      if (failure.status && failure.status>=400 && failure.status<500) {
-        if (localStorage.getItem(storageKey)===id) localStorage.removeItem(storageKey);
-        if (sessionStorage.getItem(storageKey)===id) sessionStorage.removeItem(storageKey);
-        setRequestId(null);setSubmitError(failure.message);
+      if (!sent) {
+        storageRecovery.current=true;
+        setSubmitError('浏览器无法读取或保存同步请求编号，本次未发送。请恢复浏览器存储后重试。');
+      } else if (failure.status && failure.status>=400 && failure.status<500 && !uncertain) {
+        try {
+          if (localStorage.getItem(storageKey)===id) localStorage.removeItem(storageKey);
+          if (sessionStorage.getItem(storageKey)===id) sessionStorage.removeItem(storageKey);
+          setRequestId(null);setSubmitError(failure.message);
+        } catch {
+          setSubmitError(`${failure.message}；浏览器无法清除请求编号，请恢复浏览器存储后重试确认。`);
+        }
+      } else if (failure.status && failure.status>=400 && failure.status<500) {
+        // 重放的权限或范围拒绝不能证明原任务未保存，继续持有原编号。
+        setSubmitError(`${failure.message}；原同步结果仍未核对，请恢复办理条件后重试确认。`);
       } else {
         setSubmitError(failure.status ? '库存服务暂时未返回同步结果，请重试确认。'
           : failure.message.includes('超时') ? '等待库存服务响应超时，尚未取得结果，请重试确认。'
@@ -62,7 +87,6 @@ function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storage
       }
     } finally {sending.current=false;setSubmitting(false);}
   }
-
   const busy = submitting || active || checking;
   const label = busy ? '同步中' : job?.state==='succeeded' ? '同步完成'
     : job?.state==='failed' || (!requestId && submitError) ? '同步失败'

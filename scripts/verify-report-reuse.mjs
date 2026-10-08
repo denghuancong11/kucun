@@ -36,6 +36,50 @@ assert.match(r.local.connectionStatus,/执行页未打开.*重新打开/s);asser
 assert.equal(r.tabs.size,1);assert.equal(r.tabs.get(41).url,metrics);
 check('指定页关闭后通过原任务状态提示完整重开地址，零新页且不接管日常页');
 
+// Tabs.url is the last committed address; pendingUrl is an uncommitted navigation target.
+// Exact extension ownership remains required even while the dedicated report is loading.
+for(const currentUrl of [undefined,'','about:blank',metrics]){
+  const ordinary={id:41,url:metrics,status:'complete',windowId:1};
+  const pending={id:42,...(currentUrl===undefined?{}:{url:currentUrl}),pendingUrl:metrics+marker,status:'loading',windowId:1};
+  const next=await runtime({local:{enabled:false,port:4174},tabs:new Map([[41,ordinary],[42,pending]])});
+  next.context.state={port:4174,connection:{workerId:null,databaseId:'isolated'}};
+  next.context.job={id:10,requestId:'pending-url',target:{action:'metrics'}};
+  await next.eval('begin(state,job)');
+  assert.equal(next.local.reportTab,42);assert.equal(next.session.reportTab,42);assert.equal(next.local.activeJob.tabId,42);
+  assert.equal(next.calls.filter(call=>call.method==='create').length,0);
+  assert.equal(next.calls.filter(call=>call.method==='update'&&call.args[1].url).length,0,'same marked pending report must not be navigated again');
+  assert.deepEqual(next.tabs.get(41),ordinary);assert.equal(next.tabs.size,2);
+}
+check('空URL/about:blank/旧已提交URL下精确marked pendingUrl识别原执行页，同报表待导航不重开，普通页不动');
+for(const pendingUrl of [metrics,metrics+'#aster-sync='+'b'.repeat(32),metrics+marker+'&other=1',metrics+'?other=1'+marker]){
+  const next=await runtime({local:{enabled:false,port:4174},tabs:new Map([[42,{id:42,url:'about:blank',pendingUrl,status:'loading'}]])});
+  next.context.state={};assert.equal(await next.eval('ownedTab(state)'),null);
+  assert.equal(next.calls.some(call=>['create','update','remove'].includes(call.method)),false);
+}
+check('普通页、其他扩展标记和非精确地址的pendingUrl不授予归属，零创建/接管/关闭');
+{
+  const ordinary={id:41,url:metrics,status:'complete',windowId:1};
+  const next=await runtime({local:{enabled:false,port:4174},tabs:new Map([[41,ordinary],[42,{id:42,url:metrics+marker,pendingUrl:logistics+marker,status:'loading',windowId:1}]])});
+  next.context.state={port:4174,connection:{workerId:null,databaseId:'isolated'}};
+  next.context.job={id:11,requestId:'pending-switch',target:{action:'metrics'}};
+  await next.eval('begin(state,job)');
+  const navigations=next.calls.filter(call=>call.method==='update'&&call.args[1].url);
+  assert.equal(navigations.length,1);assert.equal(navigations[0].args[0],42);assert.equal(navigations[0].args[1].url,metrics+marker);
+  assert.equal(next.calls.filter(call=>call.method==='create').length,0);assert.deepEqual(next.tabs.get(41),ordinary);assert.equal(next.tabs.size,2);
+}
+check('自有页正在导航到另一报表时按pending目标切换原标签，不误沿用旧URL或操作普通页');
+
+{
+  const next=await runtime({local:{enabled:false,port:4174},tabs:new Map([[42,{id:42,url:metrics+marker,pendingUrl:'https://erp.lingxing.com/erp/unmarked-user-page',status:'loading'}]])});
+  next.context.state={port:4174,connection:{workerId:null,databaseId:'isolated'}};
+  next.context.job={id:12,requestId:'unmarked-pending',target:{action:'metrics'}};
+  await next.eval('begin(state,job)');
+  assert.equal(next.local.reportTab,42);
+  assert.equal(next.calls.some(call=>['create','remove'].includes(call.method)),false);
+  assert.equal(next.calls.filter(call=>call.method==='update'&&call.args[1].url).length,0);
+}
+check('pending导航切换仅依据两个精确本标记报表，未标记pending不改变旧已提交URL判定');
+
 // 用真实runner复现：超时后采集仍在finally中，下一任务必须等待。
 let finishCleanup,aborted=false;const messages=[];
 const element={getBoundingClientRect:()=>({width:1,height:1})};
