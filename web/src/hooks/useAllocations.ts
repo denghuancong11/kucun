@@ -21,18 +21,16 @@ export function useAllocations(role: Role, model: string | null, enabled = true)
       batch: { key: string; model: string; plan: string; date: string; version: string };
       entry: AllocationEntry;
     }) => createAllocation(role, batch, entry),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["allocations", role, model] });
+      void queryClient.invalidateQueries({ queryKey: ["inventory", "catalog", role] });
+      void queryClient.invalidateQueries({ queryKey: ["audit"] });
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
   });
-
-  const refreshAfterWrite = () => Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["allocations", role, model] }, { throwOnError: true }),
-    queryClient.invalidateQueries({ queryKey: ["inventory", "catalog", role] }, { throwOnError: true }),
-    queryClient.invalidateQueries({ queryKey: ["audit"] }, { throwOnError: true }),
-    queryClient.invalidateQueries({ queryKey: ["approvals"] }, { throwOnError: true }),
-  ]);
 
   return {
     ...query,
     createMutation,
-    refreshAfterWrite,
   };
 }

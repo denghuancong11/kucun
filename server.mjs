@@ -8,7 +8,6 @@ import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
 import { BusinessError, InventoryDatabase, INVENTORY_SCHEMA_VERSION, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { LingxingHost } from './lingxing-host.mjs';
-import { UPGRADE_COLUMNS, TRANSFER_COLUMNS } from './upgrade-template.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const webDist = process.env.ASTER_WEB_DIST ? path.resolve(process.env.ASTER_WEB_DIST) : path.join(root, "web", "dist");
@@ -97,8 +96,6 @@ function defaultPermissions() {
       "operation-1": byRole(true, true, true, true),
       "operation-2": byRole(true, true, true, true),
       purchasing: byRole(true, true, true, true),
-      alan: byRole(true, true, true, true),
-      logistics: byRole(true, true, true, true),
       business: byRole(true, true, true, true),
     };
   }
@@ -167,9 +164,6 @@ async function loadPermissions() {
         && !Object.prototype.hasOwnProperty.call(parsed[category], "business")) {
         parsed[category].business = { ...openPermissions };
       }
-      for (const role of ['alan','logistics']) if (parsed?.[category] && !Object.prototype.hasOwnProperty.call(parsed[category],role)) {
-        parsed[category][role]={...parsed[category].purchasing};
-      }
     }
     return validatePermissions(parsed);
   } catch (error) {
@@ -183,19 +177,14 @@ function requestRole(request) {
   return roles.includes(role) ? role : null;
 }
 
-const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing", "alan", "logistics"]);
+const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing"]);
 
 function approvalDocumentForRole(document, role) {
-  if (!document || !grossProfitHiddenRoles.has(role)) return document;
-  const result={...document};
-  if(document.lingxing) {result.lingxing={...document.lingxing};delete result.lingxing.orderGrossProfit;}
-  if(document.events) result.events=document.events.map(event=>{
-    const snapshot=event.payload?.snapshot;
-    if(!snapshot?.lingxing_snapshot_json) return event;
-    const metrics=JSON.parse(snapshot.lingxing_snapshot_json);if(metrics) delete metrics.orderGrossProfit;
-    return {...event,payload:{...event.payload,snapshot:{...snapshot,lingxing_snapshot_json:JSON.stringify(metrics)}}};
-  });
-  return result;
+  if (!document || !grossProfitHiddenRoles.has(role) || !document.lingxing
+    || !Object.hasOwn(document.lingxing, "orderGrossProfit")) return document;
+  const lingxing = { ...document.lingxing };
+  delete lingxing.orderGrossProfit;
+  return { ...document, lingxing };
 }
 
 function approvalResultForRole(result, role) {
@@ -261,16 +250,6 @@ async function requireActions(role, category) {
   if (!(await categoryPermissions(role, category)).actions) {
     throw new BusinessError(403, "action_forbidden", `当前角色在“${category}”类目无后续操作权限`);
   }
-}
-
-async function requireTransitImportActions(role, fileName, rows) {
-  await requireActions(role, transitCategoryFromFileName(fileName));
-  // 已有型号沿用库存类目，文件名不能绕过它的操作权限。
-  const categories = new Set(rows.map(item => {
-    const data = item?.data ?? item;
-    return inventory.getModel(String(data?.model ?? data?.ITEM ?? "").trim())?.category;
-  }).filter(Boolean));
-  for (const category of categories) await requireActions(role, category);
 }
 
 function requireRole(request) {
@@ -545,16 +524,15 @@ async function handleApprovalsApi(request, response, pathname) {
     const model = inventory.getModel(modelName);
     if (!model) throw new BusinessError(400, "unknown_model", `未知型号“${modelName}”`);
     await requireActions(role, model.category);
-    const department = String(payload.department ?? "").trim();
-    if (!department) throw new BusinessError(400, "missing_department", "请选择询库部门");
-    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "询库部门仅限一团或二团");
+    const department = requireNonBlank(payload, "department", "调拨部门");
+    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "调拨部门仅限一团 / 二团");
     ensureDocumentVisibility({ department }, role);
     sendJson(response, 200, approvalResultForRole(inventory.createInquiry({
       role, model: modelName, department,
       quantity: requirePositiveInteger(payload.quantity, "询库数量"),
       store: requireValidStoreCode(payload.store),
-      operator: requireNonBlank(payload, "operator", "询库运营"),
-      fnsku: requireNonBlank(payload, "fnsku", " FNSKU"),
+      operator: requireNonBlank(payload, "operator", "调拨运营"),
+      fnsku: requireNonBlank(payload, "fnsku", "已贴 FNSKU"),
       asin: requireNonBlank(payload, "asin", "ASIN").toUpperCase(),
       operatorNote: String(payload.operatorNote ?? "").trim(),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
@@ -562,28 +540,12 @@ async function handleApprovalsApi(request, response, pathname) {
     return true;
   }
 
-  if(pathname==='/api/inquiries/backups' && request.method==='GET') {
-    const rows=inventory.inquiryBackups({visibleGroup:operationGroups[role]||null}), visible=[];
-    for(const row of rows) {
-      const p=await categoryPermissions(role,inventory.getModel(row.model).category);
-      if(p.summary&&p.detail&&p.expand) visible.push(approvalDocumentForRole(row,role));
-    }
-    sendJson(response,200,{ok:true,records:visible,sync:inventory.syncState()});return true;
-  }
-  if(pathname==='/api/inquiries/clear' && request.method==='POST') {
-    const payload=await parseJsonRequest(request),ids=[];
-    for(const row of inventory.inquiryBackups({visibleGroup:operationGroups[role]||null})) {
-      const p=await categoryPermissions(role,inventory.getModel(row.model).category);
-      if(p.summary&&p.detail&&p.expand&&p.actions) ids.push(row.id);
-    }
-    sendJson(response,200,inventory.hideInquiries({role,ids,requestId:requireNonBlank(payload,'requestId','提交编号')}));return true;
-  }
-  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|reply|archive|recall)$/);
+  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|reply|archive)$/);
   if (match && request.method === "POST") {
     const id = Number(match[1]);
     const action = match[2];
-    const allowed = {review:['business'],reply:['purchasing','alan'],archive:['purchasing'],recall:['purchasing','business']}[action];
-    if (!allowed.includes(role)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
+    const requiredRole = { review: "business", reply: "purchasing" }[action];
+    if ((action === "archive" && !assistantRoleSet.has(role)) || (requiredRole && role !== requiredRole)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
     await getInquiryForRole(id, role);
     const payload = await parseJsonRequest(request);
     const common = {
@@ -591,24 +553,19 @@ async function handleApprovalsApi(request, response, pathname) {
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     };
     let result;
-    if (action === 'recall') result=inventory.recallInquiry(common);
-    else if (action === "review") {
+    if (action === "review") {
       result = inventory.reviewInquiry({
         ...common, decision: requireNonBlank(payload, "decision", "审核结果"),
         approvedQuantity: payload.decision === "reject" ? null : requirePositiveInteger(payload.approvedQuantity, "审核数量"),
         businessNote: String(payload.businessNote ?? "").trim(),
       });
     } else if (action === "reply") {
-      if (payload.supplierQuantity == null || (typeof payload.supplierQuantity === "string" && payload.supplierQuantity.trim() === "")) {
+      if (payload.supplierQuantity == null || payload.supplierQuantity === "") {
         throw new BusinessError(400, "missing_supplier_quantity", "请填写供应商库存回复，有货填数量，无货填 0");
-      }
-      if (typeof payload.supplierQuantity !== "number" && typeof payload.supplierQuantity !== "string") {
-        throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
       }
       result = inventory.replyInquiry({
         ...common, supplierQuantity: requireNonNegativeInteger(payload.supplierQuantity, "供应商库存回复"),
         shippingWarehouse: String(payload.shippingWarehouse ?? "").trim(),
-        purchaseNote: String(payload.purchaseNote ?? "").trim(),
       });
     } else if (action === "archive") {
       result = inventory.archiveInquiry({
@@ -625,11 +582,6 @@ async function handleApprovalsApi(request, response, pathname) {
 }
 
 async function requireRelocationSourceVisibility(source, role) {
-  if(source.workNo) {
-    await requireActions(role,source.category);
-    ensureDocumentVisibility(source,role);
-    return;
-  }
   if (source.fbaArchiveId != null) {
     const archive = inventory.relocationSource(null, null, source.fbaArchiveId);
     if (!archive) throw new BusinessError(404, "fba_archive_not_found", "找不到直发FBA归档");
@@ -647,65 +599,6 @@ async function handleUpgradesApi(request, response, pathname) {
   const role = requireRole(request);
   const visibleGroup = operationGroups[role] ?? null;
   const scopeDirectByTeam = Boolean(operationGroups[role]);
-  const requireFlow = async id => {
-    const flow=inventory.upgradeFlow(id);
-    if(!flow) throw new BusinessError(404,'flow_not_found','升级流程不存在');
-    await requireActions(role,flow.category);ensureDocumentVisibility(flow,role);return flow;
-  };
-  if(pathname==='/api/upgrades/flows' && request.method==='GET') {
-    const permissions=await loadPermissions();
-    const flows=inventory.getUpgradeFlows({visibleGroup}).filter(f=>{const p=permissions[f.category]?.[role]??openPermissions;return p.summary&&p.detail&&p.expand;});
-    sendJson(response,200,{ok:true,flows,sync:inventory.syncState()});return;
-  }
-  if(pathname==='/api/upgrades/template' && request.method==='POST') {
-    const payload=await parseJsonRequest(request),ids=Array.isArray(payload.ids)?payload.ids.map(Number):[];
-    for(const id of ids) await requireFlow(id);
-    sendJson(response,200,{ok:true,rows:inventory.upgradeTemplateRows(ids),sync:inventory.syncState()});return;
-  }
-  const detailMatch=pathname.match(/^\/api\/upgrades\/flows\/(\d+)\/details$/);
-  if(detailMatch && request.method==='POST') {
-    const id=Number(detailMatch[1]);await requireFlow(id);const p=await parseJsonRequest(request);
-    sendJson(response,200,inventory.addCompletionDetail({id,role,expectedRevision:Number(p.expectedRevision),requestId:requireNonBlank(p,'requestId','提交编号')}));return;
-  }
-  const templateMatch=pathname.match(/^\/api\/upgrades\/(update|transfer)\/(preview|import)$/);
-  if(templateMatch && request.method==='POST') {
-    if(role!=='logistics') throw new BusinessError(403,'logistics_required','仅物流可导入升级模板');
-    const transfer=templateMatch[1]==='transfer',kind=transfer?'transfer':'upgrade';
-    if(templateMatch[2]==='preview') {
-      const bytes=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'升级.xlsx');
-      const columns=transfer?TRANSFER_COLUMNS:UPGRADE_COLUMNS;
-      const table=readTableRows(bytes,fileName,{headerGroups:columns.map(c=>[c[1]])});
-      const headerIndex=table.rows.findIndex(r=>columns.every(c=>r.includes(c[1])));
-      if(headerIndex<0) throw new BusinessError(422,'missing_headers','请使用系统导出的同一模板，保留全部表头');
-      const header=table.rows[headerIndex];
-      if(new Set(header.filter(Boolean)).size!==header.filter(Boolean).length) throw new BusinessError(422,'duplicate_headers','模板表头不能重复');
-      const rows=table.rows.slice(headerIndex+1).filter(r=>transfer?String(r[header.indexOf('转出数量')]??'').trim()!=='':r.some(v=>String(v??'').trim()))
-        .map(r=>Object.fromEntries(columns.map(([key,label])=>[key,r[header.indexOf(label)]??''])));
-      if(!rows.length) throw new BusinessError(422,'empty_template','文件没有填写的数据行');
-      for(const row of rows) {
-        if(row.date) row.date=normalizeTransitDate(row.date,undefined,table.date1904);
-        if(!transfer) {
-          const w=inventory.db.prepare('SELECT id FROM upgrade_relocation_work_items WHERE work_no=?').get(row.flowId);
-          if(!w) throw new BusinessError(404,'flow_not_found',`找不到流程 ${row.flowId}`); await requireFlow(w.id);
-        } else {
-          const t=row.transitId?inventory.db.prepare('SELECT model FROM transit_batches WHERE id=?').get(Number(row.transitId)):null;
-          const model=inventory.getModel(t?.model||row.model);
-          if(!model) throw new BusinessError(422,'unknown_model','找不到转仓来源型号');await requireActions(role,model.category);
-        }
-      }
-      const proof=inventory.createTransitPreviewToken({kind,role,fileName,fileHash:hashBuffer(bytes),templateHash:hashTemplate(header),payload:{rows}});
-      sendJson(response,200,{ok:true,rows,previewToken:proof.token,fileName});return;
-    }
-    const p=await parseJsonRequest(request);
-    // 提交仍逐行复核当前类目权限，预览凭证只证明原文件内容。
-    for(const row of p.rows||[]) {
-      if(!transfer) {const w=inventory.db.prepare('SELECT id FROM upgrade_relocation_work_items WHERE work_no=?').get(row.flowId);await requireFlow(w?.id);}
-      else {const t=row.transitId?inventory.db.prepare('SELECT model FROM transit_batches WHERE id=?').get(Number(row.transitId)):null;
-        const model=inventory.getModel(t?.model||row.model);if(!model) throw new BusinessError(422,'unknown_model','型号不存在');await requireActions(role,model.category);}
-    }
-    const args={role,rows:p.rows,previewToken:requirePreviewToken(p),requestId:requireNonBlank(p,'requestId','提交编号')};
-    sendJson(response,200,transfer?inventory.importTransferFlows(args):inventory.updateUpgradeFlows(args));return;
-  }
 
   if (pathname === "/api/upgrades" && request.method === "GET") {
     const dashboard = inventory.getUpgradeDashboard({ visibleGroup, scopeDirectByTeam });
@@ -801,8 +694,46 @@ async function handleUpgradesApi(request, response, pathname) {
       expectedRevision: Number(payload.expectedRevision),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     });
-    const task=await lingxingHost.submit(role,`order-${workId}-${payload.requestId}`,{action:'logistics',workId},'保存订单号自动抓取');
-    result.syncJob=task.job;
+    sendJson(response, 200, result);
+    return;
+  }
+
+  const shippingMatch = pathname.match(/^\/api\/upgrades\/relocation-work-items\/(\d+)\/ship$/);
+  if (shippingMatch && request.method === "POST") {
+    const workId = Number(shippingMatch[1]);
+    const work = inventory.getRelocationWorkItem(workId);
+    if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
+    await requireRelocationSourceVisibility(work, role);
+    const payload = await parseJsonRequest(request);
+    if (payload.externalItems != null && !Array.isArray(payload.externalItems)) throw new BusinessError(400, "invalid_external_items", "请选择要用于本次移仓的领星包裹");
+    const result = inventory.shipRelocationUpgrade({
+      id: workId,
+      role,
+      fbaRemainingQuantity: requireNonNegativeInteger(payload.fbaRemainingQuantity, "FBA 剩余库存"),
+      externalItems: payload.externalItems,
+      expectedRevision: Number(payload.expectedRevision),
+      requestId: requireNonBlank(payload, "requestId", "提交编号"),
+    });
+    sendJson(response, 200, result);
+    return;
+  }
+
+  const relocationCompleteMatch = pathname.match(/^\/api\/upgrades\/relocations\/(\d+)\/complete$/);
+  if (relocationCompleteMatch && request.method === "POST") {
+    const relocationId = Number(relocationCompleteMatch[1]);
+    const row = inventory.getUpgradeRelocation(relocationId);
+    if (!row) throw new BusinessError(404, "relocation_not_found", `找不到移仓记录 ${relocationId}`);
+    await requireRelocationSourceVisibility({ allocationId: row.allocation_document_id, inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id }, role);
+    const payload = await parseJsonRequest(request);
+    const result = inventory.completeRelocationUpgrade({
+      id: relocationId,
+      role,
+      completedQuantity: requirePositiveInteger(payload.completedQuantity, "升级完成数量"),
+      newVersion: requireNonBlank(payload, "newVersion", "升级完成版本号"),
+      targetWarehouse: requireNonBlank(payload, "targetWarehouse", "目标海外仓"),
+      expectedRevision: Number(payload.expectedRevision),
+      requestId: requireNonBlank(payload, "requestId", "提交编号"),
+    });
     sendJson(response, 200, result);
     return;
   }
@@ -1112,12 +1043,12 @@ function selectHeaderRow(rows, groups, candidates = []) {
   const scored = rows.map((row, index) => ({ index, score: headerScore(row, groups), nonEmpty: row.filter((value) => String(value ?? "").trim() !== "").length })).filter((item) => item.nonEmpty > 0);
   const max = Math.max(0, ...scored.map((item) => item.score));
   if (max < groups.length) {
-    const headers = rows[scored.find((item) => item.score === max)?.index] ?? [];
-    const missing = groups.filter((group) => !headerHas(headers, group)).map((group) => group[0]);
     if (groups === TRANSIT_IMPORT_HEADER_GROUPS) {
+      const headers = rows[scored.find((item) => item.score === max)?.index] ?? [];
+      const missing = groups.filter((group) => !headerHas(headers, group)).map((group) => group[0]);
       throw new BusinessError(422, "missing_headers", `缺少在途导入必需字段：${missing.join("、")}`, { required: groups.map((group) => group[0]), missing, candidates });
     }
-    throw new BusinessError(422, "missing_headers", `物流表缺少必需列：${missing.join("、")}。请补全后重新上传。`, { required: groups.map((group) => group[0]), candidates });
+    throw new BusinessError(422, "missing_headers", "未找到包含全部必需字段的表头", { required: groups.map((group) => group[0]), candidates });
   }
   const best = scored.filter((item) => item.score === max);
   if (best.length > 1) {
@@ -1264,7 +1195,6 @@ function parseTransitImportRows(buffer, fileName, { sheetName = "", dateYear = u
       model,
       quantity: Number.isInteger(orderQuantity) && orderQuantity > 0 ? orderQuantity : 0,
       packPerBox: valueAt(packPerBoxHeader),
-      store: valueAt(findHeader(headers,['店铺','调拨店铺'])),
       fnsku: valueAt(fnskuHeader), shippingMethod: valueAt(shippingHeader),
       plan: valueAt(planHeader),
       date: normalizeTransitDate(rawDate, dateYear, table.date1904), rawDate,
@@ -1275,7 +1205,7 @@ function parseTransitImportRows(buffer, fileName, { sheetName = "", dateYear = u
       if (!value) rowErrors.push({ row: sourceRow, field, code: "missing_value", message: `第 ${sourceRow} 行“${field}”不能为空` });
     }
     if (!data.date && data.rawDate) rowErrors.push({ row: sourceRow, field: "出货时间", code: isShortTransitDate(data.rawDate) && !dateYear ? "date_year_required" : "invalid_date", message: isShortTransitDate(data.rawDate) && !dateYear ? `第 ${sourceRow} 行日期只有月日，请先选择年份` : `第 ${sourceRow} 行出货时间无效` });
-    if (!Number.isInteger(orderQuantity) || orderQuantity <= 0) rowErrors.push({ row: sourceRow, field: "数量", code: "invalid_quantity", message: `第 ${sourceRow} 行‘${quantityHeader}’须为正整数。` });
+    if (!Number.isInteger(orderQuantity) || orderQuantity <= 0) rowErrors.push({ row: sourceRow, field: "数量", code: "invalid_quantity", message: `第 ${sourceRow} 行订单数量请填写大于 0 的整数` });
     if (checkQuantityHeader && valueAt(checkQuantityHeader) !== "" && parseQuantity(valueAt(checkQuantityHeader)) !== orderQuantity) rowErrors.push({ row: sourceRow, field: "数量", code: "quantity_conflict", message: `第 ${sourceRow} 行“数量”与“订单数量”不一致` });
     if (!data.team) rowErrors.push({ row: sourceRow, field: "团队", code: "missing_team", message: `第 ${sourceRow} 行团队为空，请修改源文件后重新上传` });
     if (!data.version) rowErrors.push({ row: sourceRow, field: "版本号", code: "missing_version", message: `第 ${sourceRow} 行版本号为空，请修改源文件后重新上传` });
@@ -1310,7 +1240,7 @@ function parseTransitStatusRows(buffer, fileName, { sheetName = "", dateYear = u
     status: findHeader(headers, ["物流状态", "状态", "订单部更新物流状态", "物流部更新状态", "状态更新"]),
   };
   const errors = duplicateHeaderErrors(headers, headerIndex + 1, STATUS_HEADER_GROUPS);
-  if (Object.values(aliases).some((header) => !header)) throw new BusinessError(422, "missing_headers", `物流表缺少必需列：${STATUS_HEADER_GROUPS.filter((group) => !headerHas(headers, group)).map((group) => group[0]).join("、")}。请补全后重新上传。`, { required: STATUS_HEADER_GROUPS.map((group) => group[0]), sheetName: table.sheetName });
+  if (Object.values(aliases).some((header) => !header)) throw new BusinessError(422, "missing_headers", "未找到包含全部物流状态更新必需字段的表头", { required: STATUS_HEADER_GROUPS.map((group) => group[0]), sheetName: table.sheetName });
   const rawEntries = [];
   const dataRows = rows.slice(headerIndex + 1);
   dataRows.forEach((raw, offset) => {
@@ -1435,7 +1365,8 @@ async function authorizeLingxingTarget(role, target, requireActive) {
       const record = ref.kind==='allocation' ? inventory.getDocument(ref.id) : inventory.getInquiry(ref.id);
       if (!record) throw new BusinessError(404,'sync_document_missing','同步单据不存在');
       await readable(record);
-      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : record.hiddenAt || !['pending_business','pending_purchasing','pending_procurement'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
+      if (requireActive && cutoff && record.createdAt < cutoff) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已移出审批中心，请刷新后重新同步');
+      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
       if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.documentNo} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
       documents.push({kind:ref.kind,id:ref.id});asins.add(record.asin);
     }
@@ -1448,7 +1379,7 @@ async function authorizeLingxingTarget(role, target, requireActive) {
     await requireRelocationSourceVisibility(work,role); await readable(work);
     if (requireActive && ['cancelled','withdrawn'].includes(work.status)) throw new BusinessError(409,'relocation_cancelled','本次移仓已取消或撤销，不能再发起同步');
     if (!work.removalOrderNo || !work.fnsku) throw new BusinessError(400,'missing_removal_order','请先由运营填写移除订单号，并核对归档来源的 FNSKU');
-    return {action:'logistics',workId:work.id,orderNo:work.removalOrderNo,fnsku:work.fnsku,store:work.store};
+    return {action:'logistics',workId:work.id,orderNo:work.removalOrderNo,fnsku:work.fnsku};
   }
   throw new BusinessError(400,'invalid_sync_action','未知领星同步类型');
 }
@@ -1560,7 +1491,6 @@ const server = http.createServer(async (request, response) => {
       const fileName = decodeFileNameHeader(request.headers["x-file-name"], "upload.xlsx");
       await requireActions(role, transitCategoryFromFileName(fileName));
       const parsed = parseTransitImportRows(body, fileName, { sheetName: sheetNameHeader(request), dateYear: dateYearHeader(request) });
-      await requireTransitImportActions(role, fileName, parsed.rows);
       inventory.requireTransitImportTeams(role, parsed.rows);
       const fileSha256 = hashBuffer(body);
       const templateSha256 = hashTemplate(parsed.headers);
@@ -1577,8 +1507,8 @@ const server = http.createServer(async (request, response) => {
       const role = requireRole(request);
       if (!transitRoleSet.has(role)) throw new BusinessError(403, "transit_import_forbidden", "当前角色无权导入在途库存");
       const payload = await parseJsonRequest(request);
+      await requireActions(role, transitCategoryFromFileName(payload.fileName));
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      await requireTransitImportActions(role, payload.fileName, rows);
       const result = inventory.transitImport({
         role,
         previewToken: requirePreviewToken(payload),

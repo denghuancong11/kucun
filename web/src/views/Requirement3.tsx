@@ -3,7 +3,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
-import { UpgradeTemplates } from '../components/UpgradeTemplates';
 import { createRequestId } from "../utils/ids";
 
 
@@ -45,6 +44,8 @@ export function Requirement3View({ role }: { role: Role }) {
       const result = await previewTransitImport(role, file, { dateYear: new Date().getFullYear() });
       if (!isCurrentContext(generation)) return;
       setPreview(result);
+      const errors = result.validation.errors;
+      if (errors.length > 0) setNotice({ kind: "error", text: errors[0].message });
     } catch (error) {
       if (isCurrentContext(generation)) { setPreview(null); setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
     } finally { if (isCurrentContext(generation)) { setBusy(null); if (fileInput.current) fileInput.current.value = ""; } }
@@ -59,6 +60,7 @@ export function Requirement3View({ role }: { role: Role }) {
       const result = await previewTransitStatus(role, file, { dateYear: new Date().getFullYear() });
       if (!isCurrentContext(generation)) return;
       setStatusPreview(result);
+      if (result.errors.length > 0) setNotice({ kind: "error", text: result.errors[0].message });
     } catch (error) {
       if (isCurrentContext(generation)) { setStatusPreview(null); setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
     } finally {
@@ -88,13 +90,8 @@ export function Requirement3View({ role }: { role: Role }) {
       if (!isCurrentContext(generation)) return;
       statusRequestRef.current = null;
       setStatusPreview(null);
-      const message = `物流状态已保存，涉及 ${result.updatedDetailCount} 条在途记录。${result.unmatchedPlanCount > 0 ? ` ${result.unmatchedPlanCount} 个计划未匹配，未更新。` : ""}`;
-      setNotice({ kind: "success", text: message });
-      try {
-        await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, { throwOnError: true }), queryClient.invalidateQueries({ queryKey: ["audit"] }, { throwOnError: true })]);
-      } catch {
-        if (isCurrentContext(generation)) setNotice({ kind: "warning", text: `${message} 页面刷新失败，请刷新页面。` });
-      }
+      setNotice({ kind: "success", text: `已处理 ${result.processedPlanCount} 个计划，更新 ${result.updatedDetailCount} 条在途记录，${result.unmatchedPlanCount} 个计划未匹配。` });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }), queryClient.invalidateQueries({ queryKey: ["audit"] })]);
     } catch (error) {
       if (isCurrentContext(generation)) { setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
     } finally { if (isCurrentContext(generation)) setBusy(null); }
@@ -126,15 +123,15 @@ export function Requirement3View({ role }: { role: Role }) {
         return;
       }
       if (!isCurrentContext(generation)) return;
-      const message = `导入完成，涉及 ${result.rowCount} 条在途记录。`;
-      setNotice({ kind: "success", text: message });
+      setNotice({ kind: "success", text: `已导入 ${result.rowCount} 条在途记录。` });
       setPreview(null); 
       importRequestRef.current = null;
       try {
-        await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, { throwOnError: true }), queryClient.invalidateQueries({ queryKey: ["audit"] }, { throwOnError: true })]);
-      } catch {
+        await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }), queryClient.invalidateQueries({ queryKey: ["audit"] })]);
+      } catch (error) {
         if (isCurrentContext(generation)) {
-          setNotice({ kind: "warning", text: `${message} 页面刷新失败，请刷新页面。` });
+          const message = error instanceof Error ? error.message : String(error);
+          setNotice({ kind: "warning", text: `导入已成功，但库存刷新失败：${message}` });
         }
       }
     } finally {
@@ -146,12 +143,11 @@ export function Requirement3View({ role }: { role: Role }) {
 
   return (
     <div className="transit-page">
-      {role==='logistics' && <UpgradeTemplates role={role} transfer />}
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
       <div className="transit-toolbar">
         <label className="btn btn-primary" htmlFor="transit-import-file">{busy === "preview" ? "读取中…" : "导入在途表格"}</label>
         <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
-        <label className="btn btn-ghost" htmlFor="transit-status-file">{busy === "status-preview" ? "读取中…" : "导入物流状态表"}</label>
+        <label className="btn btn-ghost" htmlFor="transit-status-file">{busy === "status-preview" ? "读取中…" : "导入更新物流表格"}</label>
         <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
       </div>
 
@@ -165,15 +161,13 @@ export function Requirement3View({ role }: { role: Role }) {
         {statusPreview && <div className="transit-status-preview">
           {statusPreview.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{statusPreview.errors.map((error, index) => <li key={`${error.row}-${error.code}-${index}`}>{error.message}</li>)}</ul></div>}
           <div className="transit-status-summary" aria-label="物流状态预览统计">
-            <span>文件数据 <strong>{statusPreview.totalRows}</strong> 行</span>
-            <span>已匹配 <strong>{statusPreview.matchedPlanCount}</strong> 个计划</span>
-            <span>未匹配 <strong>{statusPreview.unmatchedPlanCount}</strong> 个计划</span>
+            <span>计划编号 <strong>{statusPreview.totalRows}</strong> 条</span>
+            <span>匹配计划编号 <strong>{statusPreview.matchedPlanCount}</strong> 条</span>
+            <span>未匹配计划编号 <strong>{statusPreview.unmatchedPlanCount}</strong> 个</span>
           </div>
           {statusPreview.duplicatePlanCount > 0 && <div className="callout callout-warn">
-            <div>{statusPreview.duplicatePlanCount} 个计划重复，将采用各计划最后一条非空物流状态。</div>
-            <ul>{statusPreview.duplicatePlans.map((item) => <li key={item.plan}>{item.finalSourceRow == null
-              ? `计划号 ${item.plan}：第 ${item.sourceRows.join("、")} 行均未填写物流状态。`
-              : `计划号 ${item.plan}：第 ${item.sourceRows.join("、")} 行重复，采用第 ${item.finalSourceRow} 行。`}</li>)}</ul>
+            <div>有 {statusPreview.duplicatePlanCount} 个计划重复，采用文件中最后一条非空物流状态。</div>
+            <ul>{statusPreview.duplicatePlans.map((item) => <li key={item.plan}>计划编号 {item.plan}（文件行号 {item.sourceRows.join("、")}），最终采用第 {item.finalSourceRow ?? "—"} 行</li>)}</ul>
           </div>}
           {statusPreview.unmatchedPlanCount > 0 && <div className="callout callout-warn">
             <div>以下 {statusPreview.unmatchedPlanCount} 个计划没有可更新的在途记录</div>
@@ -181,7 +175,7 @@ export function Requirement3View({ role }: { role: Role }) {
           </div>}
           <div className="table-wrap scroll-x transit-preview-scroll">
             <table className="data-table transit-status-table">
-              <thead><tr><th>文件行号</th><th>发货计划号</th><th>型号</th><th>发货日期</th><th>版本号</th><th>FNSKU</th><th>当前物流状态</th><th>更新为</th><th>在途件数</th></tr></thead>
+              <thead><tr><th>文件行号</th><th>计划编号</th><th>型号</th><th>发货时间</th><th>版本号</th><th>FNSKU</th><th>当前物流状态</th><th>更新为</th><th>在途件数</th></tr></thead>
               <tbody>{statusPreview.updates.length === 0
                 ? <tr><td colSpan={9}>没有可更新的在途明细</td></tr>
                 : statusPreview.updates.map((update) => <tr key={`${update.sourceRow}-${update.id}`}>
@@ -203,7 +197,7 @@ export function Requirement3View({ role }: { role: Role }) {
 
 
       {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
-        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>型号</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>发货计划号</th><th>发货日期</th><th>团队</th><th>店铺</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.store || "待补录"}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
       <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "导入中…" : "确认导入"}</button></div></section>}
       {!preview && !statusPreview && !notice && <EmptyState title="选择表格开始导入" hint="XLSX / CSV" />}
     </div>

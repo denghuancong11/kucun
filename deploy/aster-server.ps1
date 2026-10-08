@@ -37,13 +37,6 @@ $env:PROD = "1"         # 静态资源仅服务 web/dist，不回退仓库根目
 # 不把数据库复制到 release 目录。
 if ([string]::IsNullOrWhiteSpace($env:ASTER_STATE_ROOT)) { $env:ASTER_STATE_ROOT = $root }
 $stateRoot = [IO.Path]::GetFullPath($env:ASTER_STATE_ROOT)
-$runtimeConfig = Join-Path $stateRoot ".local-private\runtime-config.local.json"
-if (-not (Test-Path -LiteralPath $runtimeConfig -PathType Leaf)) {
-  throw "缺少本地私有运行配置 $runtimeConfig；拒绝使用示例仓库名称启动"
-}
-$env:ASTER_RUNTIME_CONFIG = $runtimeConfig
-$env:ASTER_WAREHOUSE_ACCOUNTS = Join-Path $stateRoot ".local-private\warehouse-accounts.local.json"
-Remove-Item Env:ASTER_OVERSEAS_WAREHOUSES -ErrorAction SilentlyContinue
 $database = Join-Path (Join-Path $stateRoot "data") "aster-inventory.sqlite"
 if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
   throw "缺少统一库存数据库 $database；必须先备份并执行 scripts/migrate-to-sqlite.mjs，禁止启动空库"

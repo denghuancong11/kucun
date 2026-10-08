@@ -37,11 +37,7 @@ try {
   preflightQuickCheck = source.prepare("PRAGMA quick_check").get().quick_check;
   if (preflightQuickCheck !== "ok") throw new Error(`迁移前 SQLite 完整性检查失败：${preflightQuickCheck}`);
   sourceVersion = Number(source.prepare("PRAGMA user_version").get().user_version);
-  if (sourceVersion === INVENTORY_SCHEMA_VERSION) {
-    console.log(JSON.stringify({ok:true,changed:false,version:sourceVersion,stateRoot}));
-    process.exit(0);
-  }
-  if (!Number.isInteger(sourceVersion) || sourceVersion < 1 || sourceVersion >= INVENTORY_SCHEMA_VERSION) throw new Error(`不支持从 v${sourceVersion} 迁移至 v${INVENTORY_SCHEMA_VERSION}`);
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].includes(sourceVersion)) throw new Error(`只支持从 v1 至 v27 迁移，实际版本为 v${sourceVersion}`);
   await fs.mkdir(path.dirname(snapshot), { recursive: true });
   source.prepare("VACUUM INTO ?").run(snapshot);
 } finally {

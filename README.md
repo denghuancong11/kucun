@@ -1,6 +1,6 @@
 # Unismar 耗材库存系统
 
-该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 29。
+该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 28。
 
 ## 运行环境
 
@@ -25,7 +25,6 @@ npm run build
 
 ```powershell
 npm test
-npm run test:inventory-regressions
 npm run test:migration
 npm run test:warehouse-fba
 npm run test:teams
@@ -45,17 +44,15 @@ $env:ASTER_STATE_ROOT = Join-Path $env:LOCALAPPDATA 'UnismarInventory\developmen
 $env:HOST = '127.0.0.1'
 $env:PORT = '4174'
 $env:PROD = '1'
-npm run initialize -- --state-root "$env:ASTER_STATE_ROOT"
+npm run initialize
 npm start
 ```
 
-首次初始化会创建 schema 29 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
+首次初始化会创建 schema 28 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
 
 ## 历史数据库迁移与私有来源
 
 schema 1–27 的迁移需要 47 条私有在途来源，以核验并修正套/箱、库存批次和团队关联。缺少文件、格式无效或不能逐行匹配时，迁移会报错且不会提交新的 schema 版本；不得用示例文件代替，也不得跳过修正。
-
-schema 28 升级到 schema 29 只调整询库表结构，不回填历史单据或事件，也不需要这 47 条私有来源数据。升级前仍应备份数据库。
 
 迁移前将本地保留的 `.local-private/legacy-inbound-sources.local.json` 放到仓库根目录下的同一路径，或在 PowerShell 中显式设置：
 
@@ -64,11 +61,9 @@ $env:ASTER_PRIVATE_INBOUND_SOURCES = 'C:\private\legacy-inbound-sources.local.js
 npm run migrate
 ```
 
-`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 29 数据库无需重复迁移；schema 28 数据库运行 `npm run migrate` 即可升级，不需设置 `ASTER_PRIVATE_INBOUND_SOURCES`。
+`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 28 数据库无需重复迁移。
 
 原运行配置中的仓库名称保存在被忽略的 `.local-private/runtime-config.local.json`。没有该本地文件时，新副本使用合成默认名称；也可通过 `ASTER_OVERSEAS_WAREHOUSES` 环境变量覆盖，多个名称以分号分隔。
-
-Windows 计划任务包装器从共享状态根读取 `.local-private/runtime-config.local.json`，并清除环境变量覆盖，确保 SYSTEM 账号启动发布目录时仍使用本机仓库配置。
 
 ## 领星扩展
 

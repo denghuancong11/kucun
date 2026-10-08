@@ -3,26 +3,19 @@ import { useQueryClient } from "@tanstack/react-query";
 import { fetchSync, type ApiError } from "./api";
 import { Sidebar, Topbar } from "./components/Sidebar";
 import { requirements } from "./data";
-import { ROLES, TRANSIT_ROLES, type RequirementKey, type Role, type SyncState } from "./types";
+import { TRANSIT_ROLES, type RequirementKey, type Role, type SyncState } from "./types";
 import { AuditLogView } from "./views/AuditLog";
 import { Requirement1View } from "./views/Requirement1";
 import { Requirement3View } from "./views/Requirement3";
 import { Requirement4View } from "./views/Requirement4";
 import { ApprovalCenterView } from "./views/ApprovalCenter";
 
-const ROLE_STORAGE_KEY = "aster-current-role";
-
-function readCurrentRole(): Role {
-  const stored = sessionStorage.getItem(ROLE_STORAGE_KEY);
-  return ROLES.includes(stored as Role) ? stored as Role : "admin";
-}
-
 export default function App() {
   const [view, setView] = useState<RequirementKey>("req1");
   const [tabs, setTabs] = useState<RequirementKey[]>(["req1"]);
   const navigate = (next: RequirementKey) => { setView(next); setTabs(current => current.includes(next) ? current : [...current, next]); };
   const closeTab = (key: RequirementKey) => { const next = tabs.filter(item => item !== key); setTabs(next); if (view === key) setView(next[next.length - 1]); };
-  const [role, setRole] = useState<Role>(readCurrentRole);
+  const [role, setRole] = useState<Role>("admin");
   const syncRef = useRef<SyncState | null>(null);
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -66,7 +59,6 @@ export default function App() {
       setTabs(current => current.filter(item => item !== "req3"));
       setView(current => current === "req3" ? "req1" : current);
     }
-    sessionStorage.setItem(ROLE_STORAGE_KEY, next);
     setRole(next);
   };
   const meta = requirements.find(item => item.key === view)!;

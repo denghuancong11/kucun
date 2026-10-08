@@ -68,7 +68,7 @@ try{
     for(const [tab,name] of [['stock',/在库明细/],['transit',/在途明细/]]){
       await page.getByRole('tab',{name}).click();const p=await position();assert.equal(p.zoom,1);positions.push(p);layouts.push({tab,...p});
       await page.screenshot({path:path.join(output,`inventory-${tab}-${width}.png`),fullPage:true,animations:'disabled'});
-      await button().click();assert.equal(await page.getByRole('dialog',{name:'提交询库 · SYNTH-TONER-001',exact:true}).count(),1);
+      await button().click();assert.equal(await page.getByRole('dialog',{name:'提交询库需求 · SYNTH-TONER-001',exact:true}).count(),1);
       assert.equal(await page.getByRole('tab',{name}).getAttribute('aria-selected'),'true');
       await page.getByRole('button',{name:'取消',exact:true}).click();
       assert.equal(await page.getByRole('tab',{name}).getAttribute('aria-selected'),'true');
@@ -107,7 +107,7 @@ try{
   await page.evaluate(()=>{history.pushState(null,'','/?q=ZERO-INK&model=ZERO-INK');dispatchEvent(new PopStateEvent('popstate'));});
   await page.getByRole('region',{name:'ZERO-INK 库存明细',exact:true}).waitFor();await button().click();
   assert.equal(await page.getByLabel('询库店铺（必填）',{exact:true}).inputValue(),'');
-  assert.equal(await page.getByRole('dialog',{name:'提交询库 · ZERO-INK',exact:true}).count(),1);
+  assert.equal(await page.getByRole('dialog',{name:'提交询库需求 · ZERO-INK',exact:true}).count(),1);
   check('必填及正整数校验保留；同型号切标签保留草稿，切换型号不串用草稿或弹窗');
   await page.getByRole('button',{name:'取消',exact:true}).click();
   const inventoryBefore=db.getCatalog();

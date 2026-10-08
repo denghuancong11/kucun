@@ -17,14 +17,13 @@ export function useBusinessAction(onRefresh: () => Promise<unknown>, onSuccess: 
       await request.execute();
       pending.current = null; setUncertain(false);
       let message = request.message;
-      try { await onRefresh(); } catch { message += " 页面刷新失败，请刷新页面。"; }
+      try { await onRefresh(); } catch { message += " 页面刷新失败，请刷新查看。"; }
       onSuccess(message);
     } catch (failure) {
       const e = failure as ApiError;
-      // 只有明确的 4xx 拒绝才能丢弃幂等键；2xx 坏回执仍可能已保存。
-      const unknown = !(e.status !== undefined && e.status >= 400 && e.status < 500);
+      const unknown = e.status === undefined || e.status >= 500;
       if (!unknown) pending.current = null;
-      setUncertain(unknown); setError(unknown ? "本次操作结果尚未确认，请点击“重试确认”。" : e.message);
+      setUncertain(unknown); setError(unknown ? `${e.message} 请点击“重试确认”查看本次提交结果。` : e.message);
     } finally { running.current = false; setBusy(false); }
   };
   return { perform, busy, uncertain, error, setError, disabled: busy || uncertain };

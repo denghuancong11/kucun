@@ -28,7 +28,7 @@ async function nav(p, title) { await p.locator('.sidebar .nav-item').filter({ ha
 async function upload(p, id, text, name) { await p.locator(id).setInputFiles({ name, mimeType: 'text/csv', buffer: Buffer.from(text) }); }
 async function approval(p, model) {
   await nav(p, '审批中心');
-  await p.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill(model);
+  await p.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill(model);
   const button = p.locator('.approval-model-toggle').filter({ hasText: model });
   await button.waitFor(); if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
   await p.locator('.approval-record').last().waitFor();
@@ -43,7 +43,7 @@ const scenarios = [
   { id: '2-logistics-preview', title: '物流预览', role: 'assistant', rows: '.transit-status-table tbody tr', setup: async p => { await nav(p, '在途库存'); await upload(p, '#transit-status-file', statusCsv, '物流状态.csv'); await p.locator('.transit-status-table tbody tr').last().waitFor(); } },
   { id: '3-approval-center', title: '审批混合阶段 25 列', role: 'admin', rows: '.approval-record', density: true, columns: 25, setup: p => approval(p, 'APP-25') },
   { id: '3-business-18', title: '商务审核 18 列', role: 'business', rows: '.approval-record', density: true, columns: 18, setup: p => approval(p, 'APP-18') },
-  { id: '3-purchase-20', title: '采购回复 22 列', role: 'purchasing', rows: '.approval-record', columns: 22, setup: async p => { await approval(p, 'APP-20'); await p.getByLabel('供应商库存回复', { exact: true }).first().fill('60'); await p.getByLabel('发货仓库', { exact: true }).first().selectOption('CA'); await p.getByLabel('采购备注', { exact: true }).first().fill('采购草稿备注'); } },
+  { id: '3-purchase-20', title: '采购回复 20 列', role: 'purchasing', rows: '.approval-record', columns: 20, setup: async p => { await approval(p, 'APP-20'); await p.getByLabel('供应商库存回复', { exact: true }).first().fill('60'); await p.getByLabel('发货仓库', { exact: true }).first().fill('采购草稿仓库'); } },
   { id: '3-assistant-22', title: '助理归档与确认调拨 22 列', role: 'assistant', rows: '.approval-record', columns: 22, setup: async p => { await approval(p, 'APP-22'); await p.getByLabel('发货计划号', { exact: true }).first().fill('ASSISTANT-DRAFT'); await p.getByRole('button', { name: '确认调拨完成', exact: true }).first().waitFor(); } },
   { id: '3-long-notes', title: '长备注完整阅读', role: 'admin', rows: '.approval-record', columns: 25, setup: async p => { await p.route('**/api/approvals', async route => { const response = await route.fetch(), data = await response.json(); for (const rows of [data.allocations, data.inquiries]) for (const row of rows) if (row.model === 'APP-25') { row.operatorNote = longNote; if (row.reviewedAt) row.businessNote = longNote; } await route.fulfill({ response, json: data }); }); await approval(p, 'APP-25'); } },
   { id: '4-upgrade-inventory', title: '升级来源', role: 'purchasing', rows: '.upgrade-candidate-table tbody tr', density: true, setup: async p => { await nav(p, '升级库存'); await p.locator('.upgrade-candidate-table tbody tr').last().waitFor(); } },

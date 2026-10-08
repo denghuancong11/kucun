@@ -40,7 +40,7 @@ try {
     await p.locator('.sidebar .nav-item').filter({ hasText: title }).click();
     if (title === '库存汇总') { await p.locator('.inventory-summary-row').filter({ hasText: 'SYNTH-TONER-001' }).click(); await p.locator('.alloc-toggle').first().click(); }
     if (title === '在途库存') { await p.locator('#transit-import-file').setInputFiles({ name: '待导入硒鼓.csv', mimeType: 'text/csv', buffer: Buffer.from(previewCsv) }); await p.locator('.transit-preview-table').waitFor(); }
-    if (title === '审批中心') { await p.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill('APP-18'); await p.locator('.approval-model-toggle').filter({ hasText: 'APP-18' }).click(); await p.locator('.approval-review-form').first().waitFor(); }
+    if (title === '审批中心') { await p.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill('APP-18'); await p.locator('.approval-model-toggle').filter({ hasText: 'APP-18' }).click(); await p.locator('.approval-review-form').first().waitFor(); }
     if (title === '升级库存') { await p.getByRole('tab', { name: '在库升级', exact: true }).click(); await p.locator('.upgrade-inline-complete').waitFor(); }
     if (title === '库存流水') await p.locator('.audit-table').waitFor();
     const samples = await controls(p); result.controls.push({ title, samples }); result.violations.push(...samples.filter(s => s.ratio < 4.5).map(s => ({ title, ...s })));

@@ -33,7 +33,7 @@ export function seedVisualFixtures(stateRoot) {
     function inquiry(model, i, stage = 0) {
       let r = db.createInquiry({ role: 'operation-1', model, quantity: 100, department: '一团', store: 'EU-Store', operator: `运营${String(i + 1).padStart(2, '0')}`, asin: 'BVISUAL002', fnsku: `XINQUIRY${i}`, operatorNote: '海外仓备货', requestId: rid() }).record;
       if (stage > 0) r = db.reviewInquiry({ id: r.id, role: 'business', decision: 'approve', approvedQuantity: 80, businessNote: '核准 80 件', expectedRevision: r.revision, requestId: rid() }).record;
-      if (stage > 1) r = db.replyInquiry({ id: r.id, role: 'purchasing', supplierQuantity: 60, shippingWarehouse: 'CA', expectedRevision: r.revision, requestId: rid() }).record;
+      if (stage > 1) r = db.replyInquiry({ id: r.id, role: 'purchasing', supplierQuantity: 60, shippingWarehouse: '东莞供应仓', expectedRevision: r.revision, requestId: rid() }).record;
       if (stage > 2) r = db.archiveInquiry({ id: r.id, role: 'assistant', plan: `ARCHIVE-PLAN-${i}`, date: '2026-09-01', version: 'V1', expectedRevision: r.revision, requestId: rid() }).record;
       return r;
     }

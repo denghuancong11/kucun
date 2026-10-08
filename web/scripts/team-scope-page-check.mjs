@@ -27,8 +27,8 @@ const insertPageActiveTransit=db.db.prepare("INSERT INTO transit_batches(model,q
 const pageBatches={};
 for(const [team,warehouse] of [['一团','PAGE-ONE'],['二团','PAGE-TWO']]){
  const plan='PAGE-INK-PLAN',date='2026-09-01',version='V1',fnsku='XPAGEINK',batchKey=[pageInk,plan,date,version,warehouse].join('#');
- insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,2);
- const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,2);
+ insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,4);
+ const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,4);
  insertPageReceipt.run(Number(transit.lastInsertRowid),batchKey,500,'assistant',pageAt,`page-ink-${team}`);
  pageBatches[team]={batchKey,plan,date,version,fnsku};
 }
@@ -53,7 +53,6 @@ db.db.prepare("INSERT INTO catalog_models(model,category,base_in_stock,in_transi
 insertPageBatch.run(hiddenBatch,hiddenInk,hiddenPlan,hiddenDate,hiddenVersion,hiddenFnsku,pageAt,'PAGE-HIDDEN',4);
 const hiddenTransit=insertPageTransit.run(hiddenInk,80,0,hiddenPlan,hiddenDate,hiddenVersion,hiddenFnsku,'','','整柜','一团',pageAt,pageAt,4);
 insertPageReceipt.run(Number(hiddenTransit.lastInsertRowid),hiddenBatch,80,'assistant',pageAt,'page-hidden-ink');
-db.db.prepare("UPDATE stock_batches SET pack_per_box='1' WHERE model=?").run('SYNTH-TONER-001');
 db.createAllocation({role:'operation-2',model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity:100,department:'二团',store:'BUS',operator:'二团专属运营',fnsku:'XSECOND',asin:'BTEAM00002',requestId:crypto.randomUUID()});
 const pageFirstAllocation=db.createAllocation({role:'operation-1',model:pageInk,...pageBatches['一团'],sourceBatchKey:pageBatches['一团'].batchKey,quantity:10,department:'一团',store:'AUS',operator:'一团页面测试',asin:'BPAGE00001',requestId:crypto.randomUUID()}).record;
 db.createAllocation({role:'operation-2',model:pageInk,...pageBatches['二团'],sourceBatchKey:pageBatches['二团'].batchKey,quantity:20,department:'二团',store:'BUS',operator:'二团页面测试',asin:'BPAGE00002',requestId:crypto.randomUUID()});
@@ -148,8 +147,8 @@ try {
   await dept.waitFor();
   assert.deepEqual(await dept.locator('option').allTextContents(),[team]);assert.equal(await dept.inputValue(),team);
   if(teamRole==='operation-1'&&category==='硒鼓') {assert.equal((await panel.locator('.approval-quantities').innerText()).replace(/\s/g,''),'在库500预锁定100可用400');await panel.screenshot({path:path.join(out,'shared-500-100-400.png')});}
-  await panel.getByLabel('调拨数量',{exact:true}).fill('10');await panel.getByLabel('调拨店铺',{exact:true}).fill(team==='一团'?'AUS':'BUS');await panel.getByLabel('调拨运营',{exact:true}).fill(team+'运营');await panel.getByLabel('FNSKU',{exact:true}).fill('XUI');await panel.getByLabel('ASIN（必填）',{exact:true}).fill('BTEAM00001');
-  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/allocations'&&r.request().method()==='POST');await panel.getByRole('button',{name:'提交调拨',exact:true}).click();assert.equal((await(await response).json()).record.department,team);
+  await panel.getByLabel('调拨数量',{exact:true}).fill('10');await panel.getByLabel('调拨店铺',{exact:true}).fill(team==='一团'?'AUS':'BUS');await panel.getByLabel('调拨运营',{exact:true}).fill(team+'运营');await panel.getByLabel('已贴 FNSKU',{exact:true}).fill('XUI');await panel.getByLabel('ASIN（必填）',{exact:true}).fill('BTEAM00001');
+  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/allocations'&&r.request().method()==='POST');await panel.getByRole('button',{name:'录入并预锁定',exact:true}).click();assert.equal((await(await response).json()).record.department,team);
   await page.getByRole('region',{name:model+' 库存明细',exact:true}).getByRole('button',{name:'询库',exact:true}).click();const dialog=page.getByRole('dialog');assert.deepEqual(await dialog.locator('label').filter({hasText:'询库部门'}).locator('select option').allTextContents(),[team]);
   for(const [label,value] of [['询库数量（必填）','10'],['询库店铺（必填）',team==='一团'?'AUS':'BUS'],['询库运营（必填）',team+'运营'],['ASIN（必填）','BTEAM00001'],['FNSKU（必填）','XUI']])await dialog.getByLabel(label,{exact:true}).fill(value);
   const inquiry=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/inquiries'&&r.request().method()==='POST');await dialog.getByRole('button',{name:'提交询库',exact:true}).click();assert.equal((await(await inquiry).json()).record.department,team);
@@ -210,7 +209,7 @@ try {
    await nav(page,name);
    assert.equal(await page.getByRole('button',{name:/更正|回退|退货|取消本次移仓|切换主题/}).count(),0);
  }
- assert.equal(await page.getByLabel('选择库存操作类型',{exact:true}).locator('option[value=business_correction]').count(),0);const history=await(await fetch(base+'/api/audit?action=business_correction&limit=200',{headers:{'x-role':'admin'}})).json();assert.equal(history.records.filter(r=>r.action==='business_correction'||r.eventType==='business_correction').length,1);await page.getByLabel('选择库存操作类型',{exact:true}).selectOption('transit_import');
+ assert.equal(await page.getByLabel('选择库存操作分类',{exact:true}).locator('option[value=business_correction]').count(),0);const history=await(await fetch(base+'/api/audit?action=business_correction&limit=200',{headers:{'x-role':'admin'}})).json();assert.equal(history.records.filter(r=>r.action==='business_correction'||r.eventType==='business_correction').length,1);await page.getByLabel('选择库存操作分类',{exact:true}).selectOption('transit_import');
  await page.setViewportSize({width:1280,height:1000});await page.screenshot({path:path.join(out,'historical-audit-readonly.png'),fullPage:true});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  check('五个一级入口均可用且无纠错/退货按钮，历史更正保留于原接口且没有筛选入口，1280桌面分类不溢出');

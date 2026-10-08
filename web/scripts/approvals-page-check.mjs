@@ -51,10 +51,10 @@ async function role(page, value) {
 async function approvals(page) {
   await page.locator(".sidebar .nav-item", { hasText: "审批中心" }).click();
   await page.locator(".approval-page").waitFor();
-  if (await page.getByRole("button", {name:/^(我的待办|本团处理中)/}).getAttribute("aria-pressed") === "true") await page.getByRole("button", {name:/^(我的待办|本团处理中)/}).click();
+  if (await page.getByRole("button", {name:/^我的待办/}).getAttribute("aria-pressed") === "true") await page.getByRole("button", {name:/^我的待办/}).click();
   await page.getByLabel("按需求类型筛选",{exact:true}).selectOption("all");
   await page.getByRole("group", { name: "按类目筛选", exact: true }).getByRole("button", { name: "全部类目", exact: true }).click();
-  await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).fill("");
+  await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).fill("");
   await page.getByLabel("筛选审批进度", { exact: true }).selectOption("all");
 }
 
@@ -77,8 +77,7 @@ async function stock(page) {
 }
 
 async function todo(page, count) {
-  const label = (await page.getByLabel('切换当前操作角色', { exact: true }).inputValue()).startsWith('operation-') ? '本团处理中' : '我的待办';
-  await page.waitForFunction(({ expected, label }) => [...document.querySelectorAll('.approval-toolbar button')].some(button => button.textContent.replace(/\s/g, '') === label + expected), { expected: count, label });
+  await page.waitForFunction(expected => [...document.querySelectorAll('.approval-toolbar button')].some(button => button.textContent.replace(/\s/g, '') === `我的待办${expected}`), count);
 }
 
 // 真实办理阶段的桌面摘要、详情和表单检查。
@@ -92,15 +91,15 @@ async function verifyApprovalDisplay(page, phase) {
       documentHeaders:[...element.querySelector('.approval-document-table').querySelectorAll('thead th')].map(e=>e.textContent),
       metrics:[...element.querySelectorAll('.approval-record')].filter(e=>e.getClientRects().length).map(e=>({count:e.querySelectorAll('.approval-metric-value').length,columnCount:e.querySelectorAll('.approval-data-row > td').length,colSpan:e.querySelector('.approval-action-row > td')?.colSpan,ys:[...e.querySelectorAll('.approval-data-row > td')].map(f=>f.getBoundingClientRect().y)})),
       tableScroll:[...element.querySelectorAll('.approval-table-scroll')].filter(e=>e.getClientRects().length).every(e=>getComputedStyle(e).overflowX==='auto' && (e.clientWidth>=(['assistant-1','assistant-2','purchasing'].includes(document.querySelector('select[aria-label="切换当前操作角色"]')?.value)?2700:2890) || e.scrollWidth>e.clientWidth)),
-      clipped:[...element.querySelectorAll('.approval-row-actions input,.approval-row-actions select,.approval-metric-cell')].filter(e=>e.getClientRects().length&&e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>({tag:e.tagName,class:e.className,width:e.clientWidth,scroll:e.scrollWidth})),
+      clipped:[...element.querySelectorAll('.approval-row-actions input,.approval-metric-cell')].filter(e=>e.getClientRects().length&&e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>({tag:e.tagName,class:e.className,width:e.clientWidth,scroll:e.scrollWidth})),
       sizes:[...element.querySelectorAll('.approval-summary-table td,.approval-metric-value,input,select')].filter(e=>e.getClientRects().length).map(e=>parseFloat(getComputedStyle(e).fontSize))
     }));
     assert.deepEqual(result.headers,['','型号','在库库存','申请数量合计','商务审核数量合计']);
     const hidesProfit=['assistant-1','assistant-2','purchasing'].includes(result.role);
-    const expectedDocumentHeaders=['申请数量','商务审核数量','商务备注','供应商库存回复','发货仓库','采购备注','部门','店铺','运营','FNSKU','ASIN','运营备注','提交时间','状态','7 天销量','30 天销量',...(hidesProfit?[]:['订单毛利润（USD）']),'FBA 可售','FBA 待调仓','FBA 调仓中','FBA 在途','调货前倍数','调货后倍数'];
+    const expectedDocumentHeaders=['申请数量','商务部审核数量','商务部备注','调拨部门','调拨店铺','调拨运营','已贴FNSKU','ASIN','运营备注','提交时间','状况','7 天销量','30 天销量',...(hidesProfit?[]:['订单毛利润（USD）']),'FBA 可售','FBA 待调仓','FBA 调仓中','FBA 在途','调货前倍数','调货后倍数'];
     assert.deepEqual(result.documentHeaders,expectedDocumentHeaders);
     assert.equal(result.zoom,1);assert.ok(result.pageWidth<=width);assert.equal(result.tableScroll,true);assert.deepEqual(result.clipped,[]);
-    const expectedColumns=hidesProfit?22:23,expectedMetrics=hidesProfit?6:7;
+    const expectedColumns=hidesProfit?19:20,expectedMetrics=hidesProfit?6:7;
     assert.ok(result.metrics.length>0&&result.metrics.every(m=>m.count===expectedMetrics&&m.columnCount===expectedColumns&&m.colSpan===expectedColumns&&m.ys.length===expectedColumns&&new Set(m.ys).size===1));assert.ok(result.sizes.every(n=>n>=13));
     for (const dialog of await page.getByRole('dialog').all()) for (const button of await dialog.getByRole('button').all()) {
       assert.equal(await button.evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}),true,'办理按钮不能被其他单据遮挡');
@@ -110,7 +109,7 @@ async function verifyApprovalDisplay(page, phase) {
     await page.screenshot({path:path.join(output,'approval-'+phase+'-'+width+'.png'),fullPage:true,animations:'disabled'});
   }
   await page.setViewportSize({width:1440,height:1100});
-  check(phase+`型号汇总及${['assistant-1','assistant-2','purchasing'].includes(await page.locator('select[aria-label="切换当前操作角色"]').inputValue())?'22':'23'}列单据、对应指标及第二行原办理表单在1280/1366/1920完整显示且仅表内横向滚动`,true);
+  check(phase+`型号汇总及${['assistant-1','assistant-2','purchasing'].includes(await page.locator('select[aria-label="切换当前操作角色"]').inputValue())?'19':'20'}列单据、对应指标及第二行原办理表单在1280/1366/1920完整显示且仅表内横向滚动`,true);
   await fs.writeFile(path.join(output,'approval-layout.json'),JSON.stringify(displayChecks,null,2));
 }
 
@@ -120,9 +119,6 @@ try {
   const roles = ["admin", "assistant-1", "assistant-2", "business", "operation-1", "operation-2", "purchasing"];
   await fs.writeFile(path.join(stateRoot, "data", "permissions.json"), JSON.stringify({ 墨盒: Object.fromEntries(roles.map((value) => [value, { summary: true, detail: true, expand: true, actions: true }])) }));
   createInventoryDatabase({ databasePath: path.join(stateRoot, "data", INVENTORY_DATABASE_NAME) });
-  const packFixtureDb = new InventoryDatabase(stateRoot);
-  packFixtureDb.db.prepare("UPDATE stock_batches SET pack_per_box = '1' WHERE model = ? AND version = 'V11'").run("SYNTH-TONER-001");
-  packFixtureDb.close();
   const port = await new Promise((resolve, reject) => {
     const listener = net.createServer(); listener.once("error", reject);
     listener.listen(0, "127.0.0.1", () => { const value = listener.address().port; listener.close((error) => error ? reject(error) : resolve(value)); });
@@ -167,19 +163,19 @@ try {
     assert.equal(await form.locator(".field-error").innerText(), "店铺名称须包含大写 US，且不能包含‘-’。");
   }
   await form.getByLabel("调拨运营", { exact: true }).fill("张三");
-  await form.getByLabel("FNSKU", { exact: true }).fill("XUIAPP0001");
+  await form.getByLabel("已贴 FNSKU", { exact: true }).fill("XUIAPP0001");
   await form.getByLabel("ASIN（必填）", { exact: true }).fill("BUIAPP0001");
   await form.getByLabel("运营备注（选填）", { exact: true }).fill(longNote);
   const postsBeforeInvalidAllocation = storeValidationPosts.length;
-  await form.getByRole("button", { name: "提交调拨", exact: true }).click();
+  await form.getByRole("button", { name: "录入并预锁定", exact: true }).click();
   assert.equal(storeValidationPosts.length, postsBeforeInvalidAllocation, "格式错误的调拨店铺不能发出请求");
   await allocationStore.fill("ABUS");
-  let result = await write(page, "/api/allocations", () => form.getByRole("button", { name: "提交调拨", exact: true }).click());
+  let result = await write(page, "/api/allocations", () => form.getByRole("button", { name: "录入并预锁定", exact: true }).click());
   const allocation = result.record;
   check("页面申请保存 ASIN 和选填备注并预锁定 100", allocation.asin === "BUIAPP0001" && allocation.operatorNote === longNote && (await stock()).locked === 100);
   await role(page, "operation-1");
   await inquiryButton.click();
-  const dialog = page.getByRole("dialog", { name: "提交询库 · SYNTH-TONER-001", exact: true });
+  const dialog = page.getByRole("dialog", { name: "提交询库需求 · SYNTH-TONER-001", exact: true });
   await dialog.getByLabel("询库数量（必填）", { exact: true }).fill("150");
   const inquiryStore = dialog.locator("input[pattern]");
   for (const store of validStores) {
@@ -216,7 +212,7 @@ try {
 
   for (const emptyRole of ['admin']) {
     await role(page, emptyRole); await approvals(page);
-    await page.getByRole('button', {name:/^(我的待办|本团处理中)/}).click(); await todo(page, 0);
+    await page.getByRole('button', {name:/^我的待办/}).click(); await todo(page, 0);
     await page.getByText('当前岗位暂无待办', {exact:true}).waitFor();
   }
   check('管理员待办保持空', true);
@@ -225,7 +221,7 @@ try {
     const observer = await browser.newPage({viewport:{width:1440,height:1100}});
     observer.on('pageerror', error => errors.push(error.message));
     await observer.goto(base, {waitUntil:'networkidle'}); await role(observer, observerRole); await approvals(observer);
-    await observer.getByRole('button', {name:/^(我的待办|本团处理中)/}).click(); observers.push(observer);
+    await observer.getByRole('button', {name:/^我的待办/}).click(); observers.push(observer);
   }
   const watchCounts = async counts => {
     await Promise.all(observers.map(async (observer, index) => {
@@ -252,12 +248,12 @@ try {
   await operationStage(allocation.documentNo, '待商务审核'); await operationStage(inquiry.documentNo, '待商务审核');
   check('两团分别跟进本团所有进行中单据，另一客户端首次打开可见且没有办理表单', true);
   const operationPage = observers[3];
-  await operationPage.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();
+  await operationPage.getByRole('button',{name:/^我的待办/}).click();
   await operationPage.getByLabel('筛选审批进度',{exact:true}).selectOption('active');
-  await operationPage.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();
+  await operationPage.getByRole('button',{name:/^我的待办/}).click();
   assert.equal(await operationPage.getByLabel('筛选审批进度',{exact:true}).inputValue(),'all');
-  await operationPage.getByLabel('搜索型号、单号、运营或 ASIN',{exact:true}).fill('没有这个姓名');
-  await todo(operationPage,2); await operationPage.getByText('当前筛选下没有处理中记录',{exact:true}).waitFor();
+  await operationPage.getByLabel('搜索运营姓名、型号或 ASIN',{exact:true}).fill('没有这个姓名');
+  await todo(operationPage,2); await operationPage.getByText('当前筛选下没有待办',{exact:true}).waitFor();
   await operationPage.getByRole('button',{name:'清除筛选',exact:true}).click();
   await expand(operationPage);await operationPage.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-expand').click(); await todo(operationPage,2); await expand(operationPage);
   await operationPage.screenshot({path:path.join(output,'operation-pending-business.png'),fullPage:true});
@@ -276,9 +272,9 @@ try {
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'250');
   assert.equal(await modelGroup.locator('[data-field="商务审核数量合计"]').innerText(),'—');
   for (const [card,requested] of [[allocationCard,'100'],[inquiryCard,'150']]) {
-    assert.equal(await card.locator('.approval-data-row > td').count(),23);
+    assert.equal(await card.locator('.approval-data-row > td').count(),20);
     assert.equal(await card.locator(':scope > tr').count(),2);
-    assert.equal(await card.locator('.approval-action-row > td').getAttribute('colspan'),'23');
+    assert.equal(await card.locator('.approval-action-row > td').getAttribute('colspan'),'20');
     assert.equal(await card.locator('.approval-metrics-row,.approval-metrics').count(),0);
     assert.equal(await card.locator('[data-field="申请数量"]').innerText(),requested);
     assert.equal(await card.locator('[data-field="商务审核数量"]').innerText(),'—');
@@ -308,12 +304,12 @@ try {
   assert.equal(await allocationCard.locator('[data-field="运营备注"]').innerText(),longNote);
   assert.deepEqual(await allocationCard.locator('.approval-metric-value').allTextContents(),['40','170','1,234,567,890.12','100','76','100','100']);
   assert.deepEqual(await inquiryCard.locator('.approval-metric-value').allTextContents(),['0','0','0','0','0','0','0']);
-  assert.deepEqual(await allocationCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(14)),['40','170','1,234,567,890.12','100','76','100','100','2.2 倍','2.8 倍']);
-  assert.deepEqual(await inquiryCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(14)),['0','0','0','0','0','0','0','近30天无销量','近30天无销量']);
+  assert.deepEqual(await allocationCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(11)),['40','170','1,234,567,890.12','100','76','100','100','2.2 倍','2.8 倍']);
+  assert.deepEqual(await inquiryCard.locator('.approval-data-row > td').allTextContents().then(values=>values.slice(11)),['0','0','0','0','0','0','0','无销量','无销量']);
   check('同型号合并250、库存只取一次、逐单100/150及未审核缺失值正确，多型号独立展开',true);
   check('不同ASIN保留各自七项指标与真实零，长备注全文保留，直接审核区不混入资料行',true);
   check("调拨保留2.2倍和USD，底层取数时间保留且不再展示", (await allocationCard.innerText()).includes("2.2") && Boolean((await api("GET","/api/approvals","admin")).allocations.find(r=>r.id===allocation.id).lingxing.capturedAt) && await allocationCard.locator('[data-field="取数时间"]').count()===0 && (await modelGroup.locator('.approval-document-table > thead').innerText()).includes('USD') && !(await allocationCard.innerText()).includes("全部店铺"));
-  check("零销量显示明确无法计算", (await inquiryCard.innerText()).includes("近30天无销量") && await inquiryCard.locator('.approval-coverage-value').filter({hasText:'近30天无销量'}).count()===2);
+  check("零销量显示明确无法计算", (await inquiryCard.innerText()).includes("无销量") && await inquiryCard.locator('.approval-coverage-value').filter({hasText:'无销量'}).count()===2);
   check("审批不再展示申请资料，但原批次资料仍在接口保留",await allocationCard.locator('[data-field="发货计划号"],[data-field="发货时间"],[data-field="原版本号"],[data-field="来源批次"]').count()===0 && (await api('GET','/api/approvals','admin')).allocations.find(r=>r.id===allocation.id).plan==='TEST-PLAN-TONER');
   await page.getByRole("group", { name: "按类目筛选", exact: true }).getByRole("button", { name: "墨盒", exact: true }).click();
   check("审批类目筛选仅显示墨盒型号", await page.locator('.approval-model-name').count()===1 && (await page.locator('.approval-model-name').innerText()).includes('SYNTH-INK-001'));
@@ -322,18 +318,18 @@ try {
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'100');
   check("类型切换可单独查看调拨并只合计筛选内单据", await page.locator(".approval-record").count() === 1 && await allocationCard.count() === 1);
   await page.getByLabel("按需求类型筛选",{exact:true}).selectOption("all");
-  await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).fill("李四");
+  await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).fill("李四");
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'150');
   check("运营姓名搜索只返回对应申请人的进度与合计", await page.locator(".approval-record").count() === 1 && (await detailsText(page.locator(".approval-record"))).includes("BUS"));
-  await page.getByLabel("搜索型号、单号、运营或 ASIN", { exact: true }).fill("");
+  await page.getByLabel("搜索运营姓名、型号或 ASIN", { exact: true }).fill("");
   await page.getByLabel('筛选审批进度', {exact:true}).selectOption('active');
-  await page.getByRole("button",{name:/^(我的待办|本团处理中)/}).click();
+  await page.getByRole("button",{name:/^我的待办/}).click();
   await todo(page, 3);
   await page.screenshot({path:path.join(output,'todo-archived-switch.png'),fullPage:true,animations:'disabled'});
   assert.equal(await page.getByLabel('筛选审批进度', {exact:true}).inputValue(), 'all');
   assert.ok(!(await page.getByLabel('筛选审批进度', {exact:true}).locator('option').allTextContents()).includes('已归档'));
   check('进入我的待办重置进度筛选，进度选项不再提供已归档', true);
-  await page.getByLabel('搜索型号、单号、运营或 ASIN', {exact:true}).fill('没有这个姓名');
+  await page.getByLabel('搜索运营姓名、型号或 ASIN', {exact:true}).fill('没有这个姓名');
   await page.getByText('当前筛选下没有待办', {exact:true}).waitFor(); await todo(page, 3);
   assert.equal(await page.getByText('当前岗位暂无待办', {exact:true}).count(), 0);
   await page.screenshot({path:path.join(output,'todo-filter-empty.png'),fullPage:true,animations:'disabled'});
@@ -342,7 +338,7 @@ try {
   await page.getByLabel('按需求类型筛选',{exact:true}).selectOption('allocation');
   await page.getByText('当前筛选下没有待办', {exact:true}).waitFor(); await todo(page, 3);
   await page.getByRole('button', {name:'清除筛选',exact:true}).click(); await allocationCard.waitFor();
-  assert.equal(await page.getByLabel('搜索型号、单号、运营或 ASIN', {exact:true}).inputValue(), '');
+  assert.equal(await page.getByLabel('搜索运营姓名、型号或 ASIN', {exact:true}).inputValue(), '');
   await expand(page); await page.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-expand').click(); await todo(page, 3); await expand(page);
   check('搜索或类目/类型遮挡时提示筛选无结果，清除筛选恢复，型号折叠不改变岗位总数', true);
   check("删除待办说明后仍显示商务待审核单据", await page.locator(".approval-scope-hint").count()===0 && await allocationCard.isVisible() && await inquiryCard.isVisible());
@@ -390,17 +386,11 @@ try {
   check('提交进入商务，调拨批准转助理、询库批准转采购；三台岗位页面自动刷新数量', true);
 
   await role(page, "purchasing");
-  await page.getByRole("button",{name:/^(我的待办|本团处理中)/}).click();
+  await page.getByRole("button",{name:/^我的待办/}).click();
   await expand(page);
+  await inquiryCard.getByRole("button",{name:"采购回复",exact:true}).click();
   await inquiryCard.getByLabel("供应商库存回复", { exact: true }).fill("60");
-  const purchasingWarehouse = inquiryCard.locator(".inquiry-purchasing-form select");
-  assert.equal(await purchasingWarehouse.count(), 1);
-  assert.equal(await purchasingWarehouse.evaluate(element => element.tagName), "SELECT");
-  assert.equal(await purchasingWarehouse.evaluate(element => element.closest("label")?.textContent?.trim().startsWith("发货仓库")), true);
-  assert.deepEqual(await purchasingWarehouse.locator("option").allTextContents(), ["选择仓库", "CA", "SC"]);
-  await purchasingWarehouse.selectOption("CA");
-  await inquiryCard.getByLabel("采购备注", { exact: true }).fill("供应商确认可供 60 件");
-  assert.equal(await record(operationPage,inquiry.documentNo).getByLabel('采购备注',{exact:true}).count(),0);
+  await inquiryCard.getByLabel("发货仓库", { exact: true }).fill("东莞供应仓");
   await verifyApprovalDisplay(page, 'purchasing');
   await write(page, `/api/inquiries/${inquiry.id}/reply`, () => inquiryCard.getByRole("button", { name: "提交", exact: true }).click());
   await inquiryCard.waitFor({ state: "hidden" });
@@ -412,7 +402,7 @@ try {
   check('采购有货回复后退出采购待办，助理新增询库归档待办', true);
 
   await role(page, "assistant-1");
-  await page.getByRole("button",{name:/^(我的待办|本团处理中)/}).click();
+  await page.getByRole("button",{name:/^我的待办/}).click();
   await expand(page);
   await verifyApprovalDisplay(page, 'assistant-confirm');
   await write(page, `/api/allocations/${allocation.id}/confirm`, () => allocationCard.getByRole("button", { name: "确认调拨完成", exact: true }).click());
@@ -422,32 +412,25 @@ try {
   assert.equal(await record(operationPage,allocation.documentNo).count(),0);
   await inquiryCard.getByRole("button",{name:"助理归档",exact:true}).click();
   await inquiryCard.getByLabel("发货计划号", { exact: true }).fill("FBA-UI-INQUIRY");
-  await inquiryCard.getByLabel("发货日期", { exact: true }).fill("2026-09-01");
+  await inquiryCard.getByLabel("发货时间", { exact: true }).fill("2026-09-01");
   await inquiryCard.getByLabel("原版本号", { exact: true }).fill("V20");
   await verifyApprovalDisplay(page, 'assistant-archive');
   await write(page, `/api/inquiries/${inquiry.id}/archive`, () => inquiryCard.getByRole("button", { name: "提交", exact: true }).click());
   await inquiryCard.waitFor({state:"hidden"});
   check("助理一次归档结束待办，本地库存不变",(await stock()).onHand===410 && (await stock()).locked===0);
   await todo(page, 0); await watchCounts([1,0,0,0,1]); await page.getByText('当前岗位暂无待办',{exact:true}).waitFor();
-  await operationPage.getByText('本团暂无处理中记录',{exact:true}).waitFor();
+  await operationPage.getByText('当前岗位暂无待办',{exact:true}).waitFor();
   check('调拨完成、询库归档后自动移出所属运营团队待办',true);
   check('调拨完成及询库归档退出待办，其他电脑自动同步列表和数量', true);
   await approvals(page); await expand(page);
   const archivedInquiry=(await api("GET","/api/approvals","admin")).inquiries.find(r=>r.id===inquiry.id);
   assert.equal(archivedInquiry.requestedQuantity,60);
-  assert.equal(archivedInquiry.approvedQuantity,60);
+  assert.equal(archivedInquiry.approvedQuantity,90);
   assert.equal(archivedInquiry.supplierQuantity,60);
-  assert.equal(archivedInquiry.shippingWarehouse,"CA");
-  assert.equal(archivedInquiry.purchaseNote,"供应商确认可供 60 件");
   assert.equal(archivedInquiry.events.find(event=>event.type==='entry').payload.requestedQuantity,150);
   assert.equal(await inquiryCard.locator('[data-field="申请数量"]').innerText(),'60');
-  assert.equal(await inquiryCard.locator('[data-field="商务审核数量"]').innerText(),'60');
-  assert.equal(await inquiryCard.locator('[data-field="供应商库存回复"]').innerText(),'60');
-  assert.equal(await inquiryCard.locator('[data-field="发货仓库"]').innerText(),'CA');
-  assert.equal(await inquiryCard.locator('[data-field="采购备注"]').innerText(),'供应商确认可供 60 件');
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'160');
-  assert.equal(await modelGroup.locator('[data-field="商务审核数量合计"]').innerText(),'150');
-  check("采购回复后申请量、商务审核量及型号合计统一为最终量60，供应商回复、仓库和采购备注在正确列显示", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0);
+  check("采购回复后申请数量、主行及型号合计改为最终量60；商务审核90和原申请历史150保留，归档仍显示已完成", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0 && await inquiryCard.locator('[data-field="供货数量"]').count()===0);
   for (const close of await page.getByRole("button", { name: "关闭提示", exact: true }).all()) await close.click();
   await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0,0); });
   await page.screenshot({ path: path.join(output, "approvals-desktop.png"), fullPage: true });
@@ -461,7 +444,7 @@ try {
   await role(page, "assistant-1");
   await approvals(page);
   await expand(page);
-  check("浏览器刷新后审批归档数量和采购备注保持", (await detailsText(allocationCard)).includes("调拨备注保留") && (await detailsText(inquiryCard)).includes("供应商确认可供 60 件")
+  check("浏览器刷新后审批归档数量和备注保持", (await detailsText(allocationCard)).includes("调拨备注保留") && (await detailsText(inquiryCard)).includes("询库备注保留")
     && beforeRefresh.inquiries.find((row) => row.id === inquiry.id).quantity === 60);
   await page.locator(".sidebar .nav-item", { hasText: "升级库存" }).click();
   await page.locator(".upgrade-page").waitFor();
@@ -483,32 +466,17 @@ try {
   zero=(await api("POST",`/api/inquiries/${zero.id}/review`,"business",{decision:"approve",approvedQuantity:10,expectedRevision:zero.revision,requestId:requestId("zero-review")})).record;
   await watchCounts([1,1,0,1,1]); await operationStage(zero.documentNo,'待采购回复');
   await role(page,"purchasing");await approvals(page);await expand(page);
-  const zeroCard=record(page,zero.documentNo);
-  const zeroQuantity=zeroCard.getByLabel("供应商库存回复",{exact:true});
-  await zeroQuantity.fill("");assert.equal(await zeroQuantity.evaluate(input=>input.validity.valueMissing),true);
-  await zeroQuantity.fill("-1");assert.equal(await zeroQuantity.evaluate(input=>input.validity.rangeUnderflow),true);
-  await zeroQuantity.fill("0.5");assert.equal(await zeroQuantity.evaluate(input=>input.validity.stepMismatch),true);
-  await zeroQuantity.fill("0");
+  const zeroCard=record(page,zero.documentNo);await zeroCard.getByRole("button",{name:"采购回复",exact:true}).click();await zeroCard.getByLabel("供应商库存回复",{exact:true}).fill("0");
   await page.screenshot({path:path.join(output,'zero-reply-form.png'),fullPage:true});
-  assert.equal(await zeroCard.locator('.inquiry-purchasing-form').evaluate(form=>form.checkValidity()),true);
-  assert.equal(await zeroCard.getByLabel('发货仓库',{exact:true}).inputValue(),'');
+  assert.equal(await zeroCard.getByRole('dialog').locator('form').evaluate(form=>form.checkValidity()),true);
   assert.equal(await zeroCard.getByRole('button',{name:'提交',exact:true}).evaluate(el=>{const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}),true,'零供货回复不能被后续详情遮挡');
   result=await write(page,`/api/inquiries/${zero.id}/reply`,()=>zeroCard.getByRole("button",{name:"提交",exact:true}).click());
-  check("页面供应商0回复将申请量与商务审核量置0并立即归档",result.record.status==="archived" && result.record.requestedQuantity===0 && result.record.approvedQuantity===0 && result.record.quantity===0);
-  await page.waitForFunction(documentNo=>{
-    const row=document.querySelector(`[data-document-no="${CSS.escape(documentNo)}"]`);
-    return row?.querySelector('[data-field="申请数量"]')?.textContent?.trim()==="0"
-      && row?.querySelector('[data-field="商务审核数量"]')?.textContent?.trim()==="0"
-      && row?.querySelector('[data-field="供应商库存回复"]')?.textContent?.trim()==="0";
-  },zero.documentNo,{timeout:8000});
-  assert.equal(await zeroCard.locator('[data-field="申请数量"]').innerText(),'0');
-  assert.equal(await zeroCard.locator('[data-field="商务审核数量"]').innerText(),'0');
-  assert.equal(await zeroCard.locator('[data-field="供应商库存回复"]').innerText(),'0');
+  check("页面供应商0回复立即归档",result.record.status==="archived" && result.record.quantity===0);
   await todo(page, 0); await watchCounts([1,0,0,0,1]);
   check('采购回复0退出待办且不生成助理待办', true);
   let rejectedAllocation=(await api('POST','/api/allocations','operation-1',{model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity:10,department:'一团',store:'AUS',operator:'拒绝测试',fnsku:'XTODO00001',asin:'BTODO00001',requestId:requestId('reject-allocation')})).record;
   await watchCounts([2,0,0,1,1]);
-  await role(page,'business'); await approvals(page); await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await expand(page);
+  await role(page,'business'); await approvals(page); await page.getByRole('button',{name:/^我的待办/}).click();await expand(page);
   await record(page,rejectedAllocation.documentNo).getByLabel('审核数量',{exact:true}).waitFor();
   await write(page,`/api/allocations/${rejectedAllocation.id}/review`,()=>record(page,rejectedAllocation.documentNo).getByRole('button',{name:'拒绝',exact:true}).click());
   await todo(page,1); await watchCounts([1,0,0,0,1]);
@@ -525,20 +493,20 @@ try {
     data.inquiries.push(...['cancelled','rejected','archived'].map((status,index)=>({...(data.inquiries[0]||historyFixtures.inquiries[0]),id:91000+index,documentNo:'INQUIRY-HISTORY-'+index,status})));
     await route.fulfill({response,json:data});
   });
-  for(const currentRole of ['business','purchasing','assistant-1','assistant-2','operation-1','operation-2','admin']) {await role(page,currentRole);await approvals(page);await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await todo(page,0);await page.getByText(currentRole.startsWith('operation-')?'本团暂无处理中记录':'当前岗位暂无待办',{exact:true}).waitFor();}
+  for(const currentRole of ['business','purchasing','assistant-1','assistant-2','operation-1','operation-2','admin']) {await role(page,currentRole);await approvals(page);await page.getByRole('button',{name:/^我的待办/}).click();await todo(page,0);await page.getByText('当前岗位暂无待办',{exact:true}).waitFor();}
   await page.unroute('**/api/approvals');
   check('已取消、已撤回、已完成及已归档历史均不计待办',true);
   // 另一个客户端提交新单，现有商务页面通过版本轮询发现；切页和浏览器刷新结果一致。
   await api('POST','/api/inquiries','operation-2',{model:'SYNTH-INK-001',quantity:10,department:'二团',store:'AUS',operator:'跨页面测试',fnsku:'XRELOAD001',asin:'BRELOAD001',requestId:requestId('reload-todo')});
-  await watchCounts([1,0,0,0,1]); await role(page,'business');await approvals(page);await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await todo(page,1);
-  await page.locator('.sidebar .nav-item',{hasText:'库存流水'}).click();await approvals(page);await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await todo(page,1);
-  await page.reload({waitUntil:'networkidle'});await role(page,'business');await approvals(page);await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await todo(page,1);await expand(page,'SYNTH-INK-001');
+  await watchCounts([1,0,0,0,1]); await role(page,'business');await approvals(page);await page.getByRole('button',{name:/^我的待办/}).click();await todo(page,1);
+  await page.locator('.sidebar .nav-item',{hasText:'库存流水'}).click();await approvals(page);await page.getByRole('button',{name:/^我的待办/}).click();await todo(page,1);
+  await page.reload({waitUntil:'networkidle'});await role(page,'business');await approvals(page);await page.getByRole('button',{name:/^我的待办/}).click();await todo(page,1);await expand(page,'SYNTH-INK-001');
   await page.screenshot({path:path.join(output,'todo-reloaded.png'),fullPage:true,animations:'disabled'});
   check('其他客户端提交后自动进入待办；切换岗位、重新进入和浏览器刷新计数一致',true);
-  await role(page,'operation-2'); await approvals(page); await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click(); await todo(page,1);
-  await page.reload({waitUntil:'networkidle'}); await role(page,'operation-2'); await approvals(page); await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click(); await todo(page,1); await expand(page,'SYNTH-INK-001');
+  await role(page,'operation-2'); await approvals(page); await page.getByRole('button',{name:/^我的待办/}).click(); await todo(page,1);
+  await page.reload({waitUntil:'networkidle'}); await role(page,'operation-2'); await approvals(page); await page.getByRole('button',{name:/^我的待办/}).click(); await todo(page,1); await expand(page,'SYNTH-INK-001');
   await page.screenshot({path:path.join(output,'operation-team2-reloaded.png'),fullPage:true});
-  await role(page,'operation-1'); await approvals(page); await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click(); await todo(page,0);
+  await role(page,'operation-1'); await approvals(page); await page.getByRole('button',{name:/^我的待办/}).click(); await todo(page,0);
   check('运营同团其他客户端新单自动出现，刷新和切换团队后计数与归属一致',true);
   // 二团另一客户端办理完整流程；姓名与一团相同，归属仍只按部门判断。
   let teamInquiry=(await api('GET','/api/approvals','operation-2')).inquiries.find(row=>row.status==='pending_business');
@@ -550,21 +518,10 @@ try {
   await watchCounts([0,1,0,0,2]);
   await record(observers[4],teamAllocation.documentNo).locator('[data-field="商务审核数量"]').filter({hasText:/^\d+$/}).waitFor();
   await record(observers[4],teamInquiry.documentNo).locator('[data-field="商务审核数量"]').filter({hasText:/^\d+$/}).waitFor();
-  await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'operation-2',{supplierQuantity:8,shippingWarehouse:'CA',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-reply')},403);
-  await role(page,'purchasing');await approvals(page);await page.getByRole('button',{name:/^(我的待办|本团处理中)/}).click();await todo(page,1);await expand(page,'SYNTH-INK-001');
-  const teamInquiryCard=record(page,teamInquiry.documentNo);
-  await teamInquiryCard.getByLabel('供应商库存回复',{exact:true}).fill('8');
-  await teamInquiryCard.getByLabel('发货仓库',{exact:true}).selectOption('SC');
-  await teamInquiryCard.getByLabel('采购备注',{exact:true}).fill('墨盒供应商回复');
-  teamInquiry=(await write(page,`/api/inquiries/${teamInquiry.id}/reply`,()=>teamInquiryCard.getByRole('button',{name:'提交',exact:true}).click())).record;
+  await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'operation-2',{supplierQuantity:8,shippingWarehouse:'二团供应仓',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-reply')},403);
+  teamInquiry=(await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'purchasing',{supplierQuantity:8,shippingWarehouse:'二团供应仓',expectedRevision:teamInquiry.revision,requestId:requestId('team2-reply')})).record;
   await watchCounts([0,0,0,0,2]);
-  assert.equal(teamInquiry.supplierQuantity,8);assert.equal(teamInquiry.requestedQuantity,8);assert.equal(teamInquiry.approvedQuantity,8);
-  const teamObservedReply=record(observers[4],teamInquiry.documentNo).locator('[data-field="供应商库存回复"]');
-  await teamObservedReply.filter({hasText:/^8$/}).waitFor();
-  assert.equal(await teamObservedReply.innerText(),'8');
-  assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="发货仓库"]').innerText(),'SC');
-  assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="采购备注"]').innerText(),'墨盒供应商回复');
-  check('硒鼓与墨盒均在表格正确列提交 CA/SC 回复，采购备注独立显示给其他岗位',true);
+  assert.equal(teamInquiry.supplierQuantity,8);assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="供货数量"]').count(),0);
   await observers[4].screenshot({path:path.join(output,'operation-team2-following.png'),fullPage:true});
   await api('POST',`/api/allocations/${teamAllocation.id}/confirm`,'operation-2',{expectedRevision:teamAllocation.revision,requestId:requestId('forbidden-confirm')},403);
   await api('POST',`/api/inquiries/${teamInquiry.id}/archive`,'operation-2',{plan:'FBA-TEAM2',date:'2026-09-01',version:'V20',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-archive')},403);
@@ -603,13 +560,13 @@ try {
     const transit = scopedStockDb.db.prepare(`INSERT INTO transit_batches(
       model,quantity,remaining_quantity,plan,ship_date,version,fnsku,brand,transport_method,shipping_method,team,
       logistics_status,on_shelf_indicator,status,source_row,revision,created_at,updated_at,on_shelf_by_role,on_shelf_at,pack_per_box
-    ) VALUES(?,100,0,?,?,?,?,'','','整柜',?,'已签收','已上架','on_shelf',1,1,?,?, 'admin', ?, '3')`)
+    ) VALUES(?,100,0,?,?,?,?,'','','整柜',?,'已签收','已上架','on_shelf',1,1,?,?, 'admin', ?, '4')`)
       .run(spec.model, source.plan, source.date, source.version, sourceFnsku, department, at, at, at);
     const batchKey = `${spec.model}#${source.plan}#${source.date}#${source.version}#${sourceFnsku}`;
     scopedStockDb.db.prepare(`INSERT INTO stock_batches(
       batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,revision,created_by_import_id,
       created_by_transit_id,is_legacy_placeholder,warehouse,pack_per_box
-    ) VALUES(?,?,?,?,?,?,0,?,1,NULL,?,0,?, '3')`)
+    ) VALUES(?,?,?,?,?,?,0,?,1,NULL,?,0,?, '4')`)
       .run(batchKey, spec.model, source.plan, source.date, source.version, sourceFnsku, at, Number(transit.lastInsertRowid), 'SyntheticWarehouseA');
     scopedStockDb.db.prepare(`INSERT INTO stock_receipts(transit_id,batch_key,quantity,created_by_role,created_at,request_id,ledger_watermark)
       VALUES(?,?,100,'admin',?,?,0)`).run(Number(transit.lastInsertRowid), batchKey, at, `approval-team-source-${key}`);
@@ -633,18 +590,18 @@ try {
   }
   await role(page, 'business');
   await approvals(page);
-  await page.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill('BVS');
+  await page.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill('BVS');
   await expand(page, 'SYNTH-TONER-001');
   const calculationSource = visibilityDocs.allocations.find(row => row.asin === 'BVSTONAL01' && row.department === '一团');
   const calculationRow = record(page, calculationSource.record.documentNo);
-  const calculation = calculationRow.getByLabel(`预计调货后倍数 ${calculationSource.record.documentNo}`);
+  const calculation = calculationRow.getByLabel(`计算-调货后倍数 ${calculationSource.record.documentNo}`);
   await calculationRow.getByLabel('审核数量', { exact: true }).fill('30');
   assert.equal(await calculation.innerText(), '3.3 倍');
   await calculationRow.getByLabel('审核数量', { exact: true }).fill('80');
   assert.equal(await calculation.innerText(), '3.5 倍');
   const independentSource = visibilityDocs.inquiries.find(row => row.asin === 'BVSTONIN01' && row.department === '一团');
   const independentRow = record(page, independentSource.record.documentNo);
-  assert.equal(await independentRow.getByLabel(`预计调货后倍数 ${independentSource.record.documentNo}`).innerText(), '3.7 倍');
+  assert.equal(await independentRow.getByLabel(`计算-调货后倍数 ${independentSource.record.documentNo}`).innerText(), '3.7 倍');
   await calculationRow.getByLabel('审核数量', { exact: true }).fill('1.5');
   assert.equal(await calculation.innerText(), '—');
   await calculationRow.getByLabel('审核数量', { exact: true }).fill('');
@@ -717,7 +674,7 @@ try {
   for (const fixture of visibilityDocs.inquiries) {
     const reviewed = await api('POST', '/api/inquiries/' + fixture.record.id + '/review', 'business', { decision: 'approve', approvedQuantity: 3, expectedRevision: fixture.record.revision, requestId: requestId('visibility-review-inquiry') });
     assert.equal(reviewed.record.lingxing.orderGrossProfit, expectedGrossProfit.get(fixture.asin));
-    const replied = await api('POST', '/api/inquiries/' + fixture.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: 'CA', expectedRevision: reviewed.record.revision, requestId: requestId('visibility-reply-inquiry') });
+    const replied = await api('POST', '/api/inquiries/' + fixture.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: '测试供应仓', expectedRevision: reviewed.record.revision, requestId: requestId('visibility-reply-inquiry') });
     assert.ok(!Object.hasOwn(replied.record.lingxing, 'orderGrossProfit'));
     assert.equal(replied.record.lingxing.sales30d, visibilityMetrics.find(item => item.asin === fixture.asin).sales30d);
     const archived = await api('POST', '/api/inquiries/' + fixture.record.id + '/archive', fixture.department === '一团' ? 'assistant-1' : 'assistant-2', { plan: 'FBA-VISIBILITY', date: '2026-09-22', version: 'V1', expectedRevision: replied.record.revision, requestId: requestId('visibility-archive-inquiry') });
@@ -734,7 +691,7 @@ try {
   assert.ok(!Object.hasOwn(assistantConflict.details.current.lingxing, 'orderGrossProfit'));
   assert.equal(assistantConflict.details.current.lingxing.sales7d, visibilityMetrics.find(item => item.asin === staleAllocation.asin).sales7d);
   const staleInquiry = visibilityDocs.inquiries[0];
-  const purchasingConflict = await api('POST', '/api/inquiries/' + staleInquiry.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: 'CA', expectedRevision: staleInquiry.record.revision - 1, requestId: requestId('visibility-stale-reply') }, 409);
+  const purchasingConflict = await api('POST', '/api/inquiries/' + staleInquiry.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse: '测试供应仓', expectedRevision: staleInquiry.record.revision - 1, requestId: requestId('visibility-stale-reply') }, 409);
   assert.ok(!Object.hasOwn(purchasingConflict.details.current.lingxing, 'orderGrossProfit'));
   assert.equal(purchasingConflict.details.current.lingxing.sales7d, visibilityMetrics.find(item => item.asin === staleInquiry.asin).sales7d);
   check('确认/采购回复/助理归档结果与 details.current 隐藏毛利润；后续同步不覆盖单据历史快照', true);
@@ -742,7 +699,7 @@ try {
   for (const currentRole of ['admin', 'assistant-1', 'assistant-2', 'business', 'operation-1', 'operation-2', 'purchasing']) {
     await role(page, currentRole);
     await approvals(page);
-    await page.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill('BVS');
+    await page.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill('BVS');
     for (const model of ['SYNTH-TONER-001', 'SYNTH-INK-001']) {
       const modelGroup = page.locator('.approval-model-group[data-model="' + model + '"]');
       await modelGroup.waitFor();
@@ -764,8 +721,8 @@ try {
       const cells = await rows.evaluateAll(elements => elements.map(element => {
         const tds = [...element.querySelectorAll('.approval-data-row > td')];
         return {
-          department: tds[6]?.textContent?.trim(),
-          asin: tds[10]?.textContent?.trim(),
+          department: tds[3]?.textContent?.trim(),
+          asin: tds[7]?.textContent?.trim(),
           profit: element.querySelector('[data-field="订单毛利润（USD）"] .approval-metric-value')?.textContent?.trim(),
           metricCount: element.querySelectorAll('.approval-metric-value').length,
           hasSales: Boolean(element.querySelector('[data-field="7 天销量"] .approval-metric-value')),
@@ -786,16 +743,16 @@ try {
   })).record;
   await role(page, 'business');
   await approvals(page);
-  await page.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill('BNOMTRC001');
+  await page.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill('BNOMTRC001');
   await expand(page, 'SYNTH-TONER-001');
   const missingRow = record(page, missingMetricInquiry.documentNo);
-  assert.equal(await missingRow.getByLabel(`预计调货后倍数 ${missingMetricInquiry.documentNo}`).innerText(), '—');
-  await page.getByLabel('搜索型号、单号、运营或 ASIN', { exact: true }).fill('BUIINQ0001');
+  assert.equal(await missingRow.getByLabel(`计算-调货后倍数 ${missingMetricInquiry.documentNo}`).innerText(), '—');
+  await page.getByLabel('搜索运营姓名、型号或 ASIN', { exact: true }).fill('BUIINQ0001');
   const zeroSalesRow = record(page, zeroSalesInquiry.documentNo);
   await zeroSalesRow.waitFor();
   await zeroSalesRow.getByLabel('审核数量', { exact: true }).fill('80');
-  assert.equal(await zeroSalesRow.getByLabel(`预计调货后倍数 ${zeroSalesInquiry.documentNo}`).innerText(), '近30天无销量');
-  check('试算指标缺失显示—，30天销量为0显示近30天无销量', true);
+  assert.equal(await zeroSalesRow.getByLabel(`计算-调货后倍数 ${zeroSalesInquiry.documentNo}`).innerText(), '无销量');
+  check('试算指标缺失显示—，30天销量为0显示无销量', true);
   check('页面角色切换覆盖七种角色；列数、毛利润零值/负值、团队明细及型号数量合计同步变化', true);
   await page.screenshot({path:path.join(output,"inquiry-zero.png"),fullPage:true});
   check("页面流程没有 JavaScript 运行错误", errors.length === 0);
