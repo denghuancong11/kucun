@@ -38,6 +38,7 @@
     "test:allocation-pack-page": "node web/scripts/allocation-pack-page-check.mjs",
     "test:allocation-review-pack-page": "node web/scripts/allocation-review-pack-page-check.mjs",
     "test:inquiry-procurement-page": "node web/scripts/inquiry-procurement-page-check.mjs",
-    "test:inquiry-export": "node web/scripts/inquiry-export-page-check.mjs"
+    "test:inquiry-export": "node web/scripts/inquiry-export-page-check.mjs",
+    "test:ink-inquiry": "node scripts/verify-ink-inquiry.mjs && node web/scripts/ink-inquiry-page-check.mjs"
   }
 }

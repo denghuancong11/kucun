@@ -18,11 +18,12 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
     void action.perform({ execute: () => archiveInquiry(role, row.id, payload), message: "发货资料已保存。" });
   };
   const assistant = role === "assistant-1" || role === "assistant-2";
-  const allowed = assistant && row.status === "pending_assistant";
+  const allowed = (row.category === "墨盒" ? role === "purchasing" : assistant) && row.status === "pending_assistant";
+  const label = row.category === "墨盒" ? "采购归档" : "助理归档";
   if (!allowed && !action.uncertain) return null;
-  return <div className="inquiry-fulfillment"><button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>助理归档</button>
-    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`助理归档 ${row.documentNo}`}><h3>{row.documentNo} · {row.model}</h3>
-    {assistant && row.status === "pending_assistant" && <form className="approval-action-form" onSubmit={archive}>
+  return <div className="inquiry-fulfillment"><button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>{label}</button>
+    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.documentNo}`}><h3>{row.documentNo} · {row.model}</h3>
+    {allowed && <form className="approval-action-form" onSubmit={archive}>
       <label className="field"><span>发货计划号</span><input required value={plan} disabled={action.disabled} onChange={event => setPlan(event.target.value)} /></label>
       <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={action.disabled} onChange={event => setDate(event.target.value)} /></label>
       <label className="field"><span>原版本号</span><input required value={version} disabled={action.disabled} onChange={event => setVersion(event.target.value)} /></label>
@@ -44,7 +45,7 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
   const [note, setNote] = useState("");
   const [attempted, setAttempted] = useState(false);
   const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
-  const editable = role === "purchasing" && row.status === "pending_purchasing";
+  const editable = (role === "purchasing" || role === "alan" && row.category === "墨盒") && row.status === "pending_purchasing";
   const formId = `inquiry-reply-${row.id}`;
   const quantityError = quantity.trim() === "" ? (attempted ? "请填写供应商库存回复，有货填数量，无货填 0" : "")
     : !Number.isInteger(Number(quantity)) || Number(quantity) < 0 ? "供应商库存回复请填写 0 或正整数" : "";

@@ -206,6 +206,12 @@ export function replyInquiry(role: Role, id: number, payload: {
   });
 }
 
+export function recallInquiry(role: Role, id: number, payload: { expectedRevision: number; requestId: string }): Promise<unknown> {
+  return requestJson(`/api/inquiries/${id}/recall`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  });
+}
+
 export function archiveInquiry(role: Role, id: number, payload: {
   plan: string; date: string; version: string; expectedRevision: number; requestId: string;
 }): Promise<unknown> {
@@ -254,7 +260,7 @@ export function completeDirectUpgrade(
 
 export function initiateRelocationUpgrade(
   role: Role,
-  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string },
+  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; sourceRevision?: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string },
 ): Promise<unknown> {
   return requestJson("/api/upgrades/relocation-work-items", role, {
     method: "POST",

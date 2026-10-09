@@ -7,6 +7,7 @@ import {
   fetchUpgradeDashboard,
   formatNumber,
   initiateRelocationUpgrade,
+  recallInquiry,
   recordRelocationOperation,
   recordRelocationProcurement,
   shipRelocationUpgrade,
@@ -16,6 +17,7 @@ import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable
 import { RelocationExternalHistory, RelocationExternalShipments } from "../components/RelocationExternalShipments";
 import { LingxingSync } from "../components/LingxingSync";
 import type { DirectUpgrade, NoticeMessage, RelocationCandidate, RelocationUpgrade, RelocationWorkItem, Role, UpgradeJob } from "../types";
+import { useBusinessAction } from "../hooks/useBusinessAction";
 import { createRequestId } from "../utils/ids";
 
 type UpgradeMode = "relocation" | "direct";
@@ -59,7 +61,7 @@ const ROLE_LABELS: Record<Role, string> = {
   "assistant-2": "助理-二团",
   "operation-1": "运营·一团",
   "operation-2": "运营·二团",
-  purchasing: "采购",
+  purchasing: "采购", alan: "Alan",
   business: "商务",
 };
 
@@ -171,6 +173,7 @@ export function Requirement4View({ role }: { role: Role }) {
       queryClient.invalidateQueries({ queryKey: ["inventory"] }),
       queryClient.invalidateQueries({ queryKey: ["allocations"] }),
       queryClient.invalidateQueries({ queryKey: ["audit"] }),
+      queryClient.invalidateQueries({ queryKey: ["approvals"] }),
     ]);
   };
 
@@ -180,9 +183,9 @@ export function Requirement4View({ role }: { role: Role }) {
   };
 
   const submitRelocation = async () => {
-    if (!selectedCandidate || busy || role === "business") return;
+    if (!selectedCandidate || busy || role === "business" || role === "alan") return;
     const payload = selectedCandidate.sourceKind === "fba" ? {fbaArchiveId:selectedCandidate.fbaArchiveId!} : selectedCandidate.sourceKind === "inquiry"
-      ? { inquiryId: selectedCandidate.inquiryId! }
+      ? { inquiryId: selectedCandidate.inquiryId!, sourceRevision: selectedCandidate.inquiryRecall?.revision }
       : { allocationId: selectedCandidate.allocationId! };
     const requestId = requestFor(relocationRequest, "upgrade-relocation-initiate", { role, ...payload });
     setBusy("relocation-initiate");
@@ -256,7 +259,7 @@ export function Requirement4View({ role }: { role: Role }) {
   };
 
   const submitDirect = async () => {
-    if (!selectedDirectSource || selectedDirectSource.available <= 0 || busy || role === "business") return;
+    if (!selectedDirectSource || selectedDirectSource.available <= 0 || busy || role === "business" || role === "alan") return;
     const payload = { model: selectedDirectSource.model, sourceVersion: selectedDirectSource.sourceVersion };
     const requestId = requestFor(directRequest, "upgrade-direct", { role, ...payload });
     setBusy("direct-create");
@@ -382,7 +385,8 @@ export function Requirement4View({ role }: { role: Role }) {
             </tr>)}</tbody></table></div>{!visibleCandidates.length && <EmptyState title="暂无对应来源" />}
           </Panel>
           <div className="relocation-documents">
-            {selectedSource && <Panel title={selectedSource.documentNo + " · " + selectedSource.model} actions={selectedCandidate && role !== "business" ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
+            {selectedSource && <Panel title={selectedSource.documentNo + " · " + selectedSource.model} actions={selectedCandidate && role !== "business" && role !== "alan" ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
+              <InquiryRecall key={`${selectedKey}-${role}`} source={selectedSource} role={role} onRefresh={refreshAfterWrite} onNotice={setNotice} />
               <dl className="relocation-fields">{[
                 ["来源 FNSKU", selectedSource.fnsku], ["原版本", selectedSource.sourceVersion], ["ASIN", selectedSource.asin || "—"], ["发货计划号", selectedSource.plan], ["发货时间", selectedSource.shipDate],
                 ["已用数量", "initialQuantity" in selectedSource ? formatNumber(selectedSource.initialQuantity - selectedSource.fbaRemainingQuantity) : "—"],
@@ -421,7 +425,7 @@ export function Requirement4View({ role }: { role: Role }) {
                   <span className="primary">本次可锁 <strong>{formatNumber(selectedDirectSource.available)}</strong></span>
                 </div>
                 <div className="form-footer">
-                  <button className="btn btn-primary" type="button" disabled={selectedDirectSource.available <= 0 || busy !== null || role === "business"} onClick={() => void submitDirect()}>{busy === "direct-create" ? "锁定中…" : `锁定全部 ${formatNumber(selectedDirectSource.available)} 件并发起升级`}</button>
+                  {role !== "alan" && <button className="btn btn-primary" type="button" disabled={selectedDirectSource.available <= 0 || busy !== null || role === "business"} onClick={() => void submitDirect()}>{busy === "direct-create" ? "锁定中…" : `锁定全部 ${formatNumber(selectedDirectSource.available)} 件并发起升级`}</button>}
                 </div>
               </>
             )}
@@ -433,6 +437,22 @@ export function Requirement4View({ role }: { role: Role }) {
       <Notice notice={notice} onClose={() => setNotice(null)} />
     </div>
   );
+}
+
+function InquiryRecall({ source, role, onRefresh, onNotice }: { source: RelocationSource; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void }) {
+  const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
+  if (!source.inquiryRecall || source.inquiryId == null || !["purchasing", "business"].includes(role)) return null;
+  const target = role === "purchasing" ? "待Alan或采购回复" : "待商务审核";
+  const recall = () => {
+    const payload = { expectedRevision: source.inquiryRecall!.revision, requestId: createRequestId("inquiry-recall") };
+    void action.perform({ execute: () => recallInquiry(role, source.inquiryId!, payload), message: "询库已回撤至" + target + "。" });
+  };
+  return <div className="inquiry-recall">
+    <button type="button" className="btn btn-ghost btn-sm" disabled={action.disabled || source.inquiryRecall.blockers.length > 0} onClick={recall}>回撤至{target}</button>
+    {source.inquiryRecall.blockers.length > 0 && <p className="field-error" role="alert">不能回撤，已产生下游关联：{source.inquiryRecall.blockers.map(item => item.type + " " + item.number + "（" + item.status + "）").join("；")}</p>}
+    {action.error && <p className="field-error" role="alert">{action.error}</p>}
+    {action.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={action.busy} onClick={() => void action.perform()}>重试确认</button>}
+  </div>;
 }
 
 function RelocationWorkflow({

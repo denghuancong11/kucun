@@ -6,7 +6,7 @@ export type LingxingJob = {
   result:{updated:number;capturedAt:string}|null;
 };
 export type LingxingJobs = {ok:true;jobs:LingxingJob[];worker:{connected:boolean;host:string;message:string}};
-export const canSyncLingxing = (role:Role, action:LingxingTarget['action']) => action==='metrics' ? ['admin','business'].includes(role) : role!=='business';
+export const canSyncLingxing = (role:Role, action:LingxingTarget['action']) => action==='metrics' ? ['admin','business'].includes(role) : role!=='business' && role!=='alan';
 export const lingxingTargetKey = (target:LingxingTarget) => target.action==='logistics'
   ? `logistics:${target.workId}`
   : `metrics:${target.documents.map(ref=>`${ref.kind}:${ref.id}`).sort().join(',')}`;

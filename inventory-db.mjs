@@ -36,7 +36,7 @@ const LEGACY_PLACEHOLDER_CLEANUP_REQUEST_ID = "schema-v13-legacy-placeholder-cle
 
 export const ASSISTANT_ROLES = Object.freeze(["assistant-1", "assistant-2"]);
 const ASSISTANT_ROLE_SET = new Set(ASSISTANT_ROLES);
-export const ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "business"]);
+export const ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "business", "alan"]);
 const UPGRADE_ROLE_SET = new Set(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing"]);
 export const BUSINESS_ROLE = "business";
 export const TRANSIT_ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "purchasing"]);
@@ -3616,6 +3616,7 @@ export class InventoryDatabase {
   inquiryRecord(row) {
     if (!row) return null;
     const quantity = Number(row.supplier_quantity ?? row.approved_quantity ?? row.requested_quantity);
+    const ink = this.getModel(row.model).category === "墨盒";
     const lingxing = this.lingxingForDocument(row);
     const shipments = this.inquiryShipments(Number(row.id));
     const shippedQuantity = shipments.reduce((total, shipment) => total + shipment.quantity, 0);
@@ -3628,7 +3629,8 @@ export class InventoryDatabase {
       operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
       plan: row.plan, date: row.ship_date, version: row.version,
       status: row.status, statusCode: row.status,
-      statusText: { pending_business: "待商务审核", pending_purchasing: "待采购回复", pending_assistant: "待助理归档", archived: "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
+      // pending_assistant 是既有归档阶段存储码；办理岗位按类目确定。
+      statusText: { pending_business: "待商务审核", pending_purchasing: ink ? "待Alan或采购回复" : "待采购回复", pending_assistant: ink ? "待采购归档" : "待助理归档", archived: "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
       approvalStatus: row.status === "rejected" ? "rejected" : row.approved_quantity == null ? "pending" : "approved",
       createdByRole: row.created_by_role, createdAt: row.created_at, updatedAt: row.updated_at,
       reviewedByRole: row.reviewed_by_role, reviewedAt: row.reviewed_at,
@@ -3710,7 +3712,7 @@ export class InventoryDatabase {
   }
 
   replyInquiry({ id, role, supplierQuantity, shippingWarehouse, procurementNote, expectedRevision, requestId }) {
-    if (role !== "purchasing") throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购可填写供应商库存回复");
+    if (!["purchasing", "alan"].includes(role)) throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购或Alan可填写供应商库存回复");
     const quantity = Number(supplierQuantity);
     const warehouse = String(shippingWarehouse ?? "").trim();
     if (!Number.isInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
@@ -3719,21 +3721,25 @@ export class InventoryDatabase {
     if (!["CA", "SC"].includes(warehouse)) throw new BusinessError(400, "invalid_shippingWarehouse", "发货仓库仅允许 CA 或 SC");
     return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
+      const ink = this.getModel(row.model).category === "墨盒";
+      if (role === "alan" && !ink) throw new BusinessError(403, "inquiry_reply_forbidden", "Alan仅可回复墨盒询库");
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = 'pending_assistant',
+      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = ?,
         replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, quantity, warehouse, note, role, at, at, id);
+        .run(quantity, quantity, quantity, warehouse, note, ink && quantity === 0 ? "rejected" : "pending_assistant", role, at, at, id);
       this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
 
   archiveInquiry({ id, role, plan, date, version, expectedRevision, requestId }) {
-    if (!ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "仅助理角色可归档询库");
+    if (!ASSISTANT_ROLE_SET.has(role) && role !== "purchasing") throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购归档，硒鼓询库由助理归档");
     const fields = { plan: String(plan ?? "").trim(), date: inquiryShipDate(date), version: String(version ?? "").trim() };
     if (!fields.plan || !fields.version) throw new BusinessError(400, "missing_inquiry_archive_fields", "请填写发货计划号、发货日期和原版本");
     return this.idempotent(`inquiry:archive:${id}`, requestId, { id, role, ...fields, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_assistant"]);
+      const ink = this.getModel(row.model).category === "墨盒";
+      if (ink ? role !== "purchasing" : !ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购归档，硒鼓询库由助理归档");
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET plan = ?, ship_date = ?, version = ?, status = 'archived',
         archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
@@ -3744,6 +3750,67 @@ export class InventoryDatabase {
   }
 
 
+
+  // 不过滤关联状态：取消、撤回及间接升级入库也保留来源使用事实。
+  inquiryDownstream(id) {
+    return this.db.prepare(`WITH RECURSIVE jobs(id) AS (
+      SELECT id FROM upgrade_jobs WHERE inquiry_id = :id
+      UNION SELECT upgrade_id FROM upgrade_relocations WHERE inquiry_id = :id
+      UNION SELECT upgrade_id FROM upgrade_relocation_work_items WHERE inquiry_id = :id AND upgrade_id IS NOT NULL
+      UNION SELECT s.upgrade_id FROM jobs j JOIN upgrade_inventory_ledger l ON l.upgrade_id = j.id
+        JOIN upgrade_stock_lines s ON s.source_batch_key = l.batch_key
+        WHERE l.entry_type IN ('relocation_receipt', 'direct_transfer_in')
+    )
+    SELECT '移仓任务' AS type, work_no AS number, status FROM upgrade_relocation_work_items
+      WHERE inquiry_id = :id OR upgrade_id IN (SELECT id FROM jobs)
+    UNION ALL SELECT '询库发货', '询库发货#' || id, '已记录' FROM inquiry_shipments WHERE inquiry_id = :id
+    UNION ALL SELECT '移仓发货', relocation_no, status FROM upgrade_relocations
+      WHERE inquiry_id = :id OR upgrade_id IN (SELECT id FROM jobs)
+    UNION ALL SELECT '升级', upgrade_no, CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' ELSE status END
+      FROM upgrade_jobs WHERE id IN (SELECT id FROM jobs)
+    UNION ALL SELECT CASE WHEN operation_type IN ('direct_complete', 'relocation_complete') THEN '升级入库' ELSE '升级操作' END,
+      operation_no, status FROM upgrade_operations WHERE upgrade_id IN (SELECT id FROM jobs)`).all({ id }).map(row => ({
+        ...row, status: ({ awaiting_procurement: '待采购填写', awaiting_operation: '待运营填写', awaiting_shipping: '待确认发货',
+          shipped: '已登记发货', withdrawn: '已撤回', cancelled: '已取消', active: '有效', completed: '已完成' })[row.status] ?? row.status,
+      }));
+  }
+
+  inquiryRecallInfo(id) {
+    if (id == null) return null;
+    const row = this.db.prepare('SELECT * FROM inquiry_documents WHERE id = ?').get(id);
+    if (!row || row.status !== 'archived' || row.supplier_quantity <= 0 || this.getModel(row.model).category !== '墨盒') return null;
+    return { revision: Number(row.revision), blockers: this.inquiryDownstream(id) };
+  }
+
+  recallInquiry({ id, role, expectedRevision, requestId }) {
+    if (!["purchasing", "business"].includes(role)) throw new BusinessError(403, "inquiry_recall_forbidden", "仅采购或商务可回撤已归档的墨盒询库");
+    return this.idempotent(`inquiry:recall:${id}`, requestId, { id, role, expectedRevision }, () => {
+      const row = this.inquiryForUpdate(id, expectedRevision, ["archived"]);
+      if (this.getModel(row.model).category !== "墨盒" || row.supplier_quantity <= 0) throw new BusinessError(409, "inquiry_recall_unavailable", "仅有正数回复且已归档的墨盒询库可回撤");
+      const blockers = this.inquiryDownstream(id);
+      if (blockers.length) throw new BusinessError(409, "inquiry_has_downstream", "不能回撤，已产生下游关联：" + blockers.map(item => `${item.type} ${item.number}（${item.status}）`).join("；"), { blockers });
+      const events = this.getInquiry(id).events;
+      const entry = events.find(event => event.type === 'entry');
+      const review = events.findLast(event => event.type === 'review');
+      if (!entry || !review) throw new BusinessError(409, "inquiry_history_missing", "原申请或商务审核历史缺失，无法恢复数量，请核对该单历史");
+      const target = role === 'purchasing' ? 'pending_purchasing' : 'pending_business';
+      const requested = entry.payload.requestedQuantity;
+      const approved = role === 'purchasing' ? review.payload.approvedQuantity : null;
+      const at = new Date().toISOString();
+      this.db.prepare(`UPDATE inquiry_documents SET requested_quantity = ?, approved_quantity = ?, business_note = ?, reviewed_by_role = ?, reviewed_at = ?,
+        supplier_quantity = NULL, shipping_warehouse = '', procurement_note = '', replied_by_role = NULL, replied_at = NULL,
+        plan = '', ship_date = '', version = '', archived_by_role = NULL, archived_at = NULL, lingxing_snapshot_json = NULL,
+        fba_shipped_at = NULL, fba_confirmed_by_role = NULL, status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+        .run(requested, approved, role === 'purchasing' ? review.payload.businessNote : '', role === 'purchasing' ? review.role : null,
+          role === 'purchasing' ? review.at : null, target, at, id);
+      this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review.id,
+        before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity, supplierQuantity: row.supplier_quantity,
+          businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
+          plan: row.plan, date: row.ship_date, version: row.version, status: row.status },
+        after: { requestedQuantity: requested, approvedQuantity: approved, supplierQuantity: null, status: target } });
+      return { ok: true, record: this.getInquiry(id) };
+    });
+  }
 
   syncLingxing({ role, items, capturedAt, requestId, onSaved }) {
     if (!["admin", "business"].includes(role)) throw new BusinessError(403, "lingxing_sync_forbidden", "仅商务或管理员可同步领星指标");
@@ -3985,6 +4052,7 @@ export class InventoryDatabase {
       kind: "relocation",
       allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
       inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
+      inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
       sourceKind: row.fba_archive_id != null ? "fba" : row.inquiry_id == null ? "allocation" : "inquiry",
       documentNo: row.document_no,
@@ -4124,6 +4192,7 @@ export class InventoryDatabase {
       workNo: row.work_no,
       allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
       inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
+      inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
       sourceKind: row.fba_archive_id != null ? "fba" : row.inquiry_id == null ? "allocation" : "inquiry",
       documentNo: row.document_no,
@@ -4256,6 +4325,7 @@ export class InventoryDatabase {
       result.push({
         allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
         inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
+        inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
         sourceKind: row.source_kind,
         documentNo: row.document_no,
@@ -4467,7 +4537,7 @@ export class InventoryDatabase {
     return sourceQuantity - Number(used.quantity);
   }
 
-  initiateRelocationUpgrade({ role, allocationId, inquiryId, fbaArchiveId, requestId }) {
+  initiateRelocationUpgrade({ role, allocationId, inquiryId, fbaArchiveId, sourceRevision, requestId }) {
     const documentId = allocationId == null ? null : Number(allocationId);
     const inquirySourceId = inquiryId == null ? null : Number(inquiryId);
     const fbaSourceId = fbaArchiveId == null ? null : Number(fbaArchiveId);
@@ -4478,9 +4548,10 @@ export class InventoryDatabase {
       || (inquirySourceId != null && (!Number.isInteger(inquirySourceId) || inquirySourceId <= 0))) {
       throw new BusinessError(400, "invalid_allocation", "请选择一条已归档的调拨、询库或直发FBA记录");
     }
-    return this.idempotent("upgrade:relocation:initiate", requestId, { role, allocationId: documentId, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId }, () => {
+    return this.idempotent("upgrade:relocation:initiate", requestId, { role, allocationId: documentId, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId, ...(sourceRevision == null ? {} : { sourceRevision }) }, () => {
       const document = this.relocationSource(documentId, inquirySourceId, fbaSourceId);
       if (!document || !["confirmed", "archived"].includes(document.status)) throw new BusinessError(409, "allocation_not_confirmed", "仅可选择已归档的调拨、询库或直发FBA记录");
+      if (inquirySourceId != null && this.getModel(document.model).category === "墨盒") this.inquiryForUpdate(inquirySourceId, sourceRevision, ["archived"]);
       const shipmentId = null;
       const confirmedAt = Date.parse(document.confirmed_at ?? "");
       if (document.source_kind === "allocation" && (!Number.isFinite(confirmedAt) || confirmedAt < Date.now() - 90 * 24 * 60 * 60 * 1000)) {
@@ -5811,7 +5882,7 @@ export class InventoryDatabase {
   }
 
   listTransitImports(role) {
-    if (!TRANSIT_ROLE_SET.has(role)) throw new BusinessError(403, "transit_import_forbidden", "当前角色无权查看导入批次");
+    if (!TRANSIT_ROLE_SET.has(role) && role !== "alan") throw new BusinessError(403, "transit_import_forbidden", "当前角色无权查看导入批次");
     const group = OPERATION_GROUPS[role];
     const imports = this.db.prepare(`
       SELECT id, file_name, file_sha256, template_sha256, status, row_count, inventory_applied, created_by_role, created_at, replaces_import_id

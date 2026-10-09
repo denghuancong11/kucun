@@ -96,6 +96,7 @@ function defaultPermissions() {
       "operation-1": byRole(true, true, true, true),
       "operation-2": byRole(true, true, true, true),
       purchasing: byRole(true, true, true, true),
+      alan: byRole(true, true, true, true),
       business: byRole(true, true, true, true),
     };
   }
@@ -165,6 +166,9 @@ async function loadPermissions() {
         parsed[category].business = { ...openPermissions };
       }
     }
+    for (const category of controlledCategories) {
+      if (parsed?.[category] && !Object.hasOwn(parsed[category], "alan")) parsed[category].alan = { ...parsed[category].purchasing };
+    }
     return validatePermissions(parsed);
   } catch (error) {
     throw corruptError(permissionsFile, error);
@@ -177,7 +181,7 @@ function requestRole(request) {
   return roles.includes(role) ? role : null;
 }
 
-const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing"]);
+const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing", "alan"]);
 
 function approvalDocumentForRole(document, role) {
   if (!document || !grossProfitHiddenRoles.has(role) || !document.lingxing
@@ -213,7 +217,7 @@ async function handlePermissionsApi(request, response, pathname) {
     }
     const matrix = await loadPermissions();
     const slice = {};
-    for (const category of allCategories) slice[category] = matrix[category]?.[role] ?? openPermissions;
+    for (const category of allCategories) slice[category] = matrix[category]?.[role === "alan" ? "purchasing" : role] ?? openPermissions;
     sendJson(response, 200, { ok: true, role, permissions: slice });
     return true;
   }
@@ -243,7 +247,7 @@ async function parseJsonRequest(request) {
 async function categoryPermissions(role, category) {
   if (!controlledCategories.includes(category)) return openPermissions;
   const matrix = await loadPermissions();
-  return matrix[category]?.[role] ?? { summary: false, detail: false, expand: false, actions: false };
+  return matrix[category]?.[role === "alan" ? "purchasing" : role] ?? { summary: false, detail: false, expand: false, actions: false };
 }
 
 async function requireActions(role, category) {
@@ -517,7 +521,7 @@ function filteredInquiryExport(visible, role, query) {
     .sort((a, b) => (b.record.createdAt ?? "").localeCompare(a.record.createdAt ?? ""))
     .filter(item => (type === "all" || item.kind === type) && (category === "all" || item.record.category === category)
       && (progress === "all" || active(item))
-      && (scope === "all" || role === "purchasing" && item.kind === "inquiry" && item.record.status === "pending_purchasing")
+      && (scope === "all" || role === "purchasing" && item.kind === "inquiry" && (item.record.status === "pending_purchasing" || item.record.category === "墨盒" && item.record.status === "pending_assistant"))
       && (!keyword || [item.record.operator, item.record.model, item.record.asin, item.record.documentNo].some(value => value.toLocaleLowerCase().includes(keyword))));
   const groups = new Map();
   for (const item of items) {
@@ -531,7 +535,7 @@ function inquiryExportWorkbook(records) {
   const headers = ["型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
   const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
     row.department, row.store, row.operator, row.fnsku, new Date(row.createdAt).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }),
-    row.status === "archived" ? ["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") ? "已完成" : "" : row.statusText])];
+    row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "墨盒" && row.archivedByRole === "purchasing") ? "已完成" : "" : row.statusText])];
   const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
   const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
     const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 0 ? ' s="1"' : '';
@@ -617,12 +621,12 @@ async function handleApprovalsApi(request, response, pathname) {
     return true;
   }
 
-  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|reply|archive)$/);
+  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|reply|archive|recall)$/);
   if (match && request.method === "POST") {
     const id = Number(match[1]);
     const action = match[2];
-    const requiredRole = { review: "business", reply: "purchasing" }[action];
-    if ((action === "archive" && !assistantRoleSet.has(role)) || (requiredRole && role !== requiredRole)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
+    const allowedRoles = { review: ["business"], reply: ["purchasing", "alan"], archive: ["purchasing", ...assistantRoleSet], recall: ["purchasing", "business"] }[action];
+    if (!allowedRoles.includes(role)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
     await getInquiryForRole(id, role);
     const payload = await parseJsonRequest(request);
     const common = {
@@ -645,6 +649,8 @@ async function handleApprovalsApi(request, response, pathname) {
         shippingWarehouse: String(payload.shippingWarehouse ?? "").trim(),
         procurementNote: String(payload.procurementNote ?? "").trim(),
       });
+    } else if (action === "recall") {
+      result = inventory.recallInquiry(common);
     } else if (action === "archive") {
       result = inventory.archiveInquiry({
         ...common,
@@ -735,7 +741,7 @@ async function handleUpgradesApi(request, response, pathname) {
     const fbaArchiveId = payload.fbaArchiveId == null ? null : requirePositiveInteger(payload.fbaArchiveId, "直发FBA归档编号");
     if ([allocationId,inquiryId,fbaArchiveId].filter(value=>value!=null).length !== 1) throw new BusinessError(400,"invalid_upgrade_source","请选择一条归档来源");
     await requireRelocationSourceVisibility({allocationId,inquiryId,fbaArchiveId},role);
-    const result = inventory.initiateRelocationUpgrade({role,allocationId,inquiryId,fbaArchiveId,requestId:requireNonBlank(payload,"requestId","提交编号")});
+    const result = inventory.initiateRelocationUpgrade({role,allocationId,inquiryId,fbaArchiveId,sourceRevision:payload.sourceRevision,requestId:requireNonBlank(payload,"requestId","提交编号")});
     sendJson(response, 200, result);
     return;
   }
@@ -1504,6 +1510,9 @@ async function handleLingxingApi(request,response,pathname) {
 const server = http.createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, `http://${request.headers.host || "localhost"}`).pathname;
+    if (requestRole(request) === "alan" && request.method !== "GET" && !(request.method === "POST" && /^\/api\/inquiries\/\d+\/reply$/.test(pathname))) {
+      throw new BusinessError(403, "alan_write_forbidden", "Alan仅可办理墨盒询库回复");
+    }
     if (pathname.startsWith('/api/lingxing/') || pathname.startsWith('/api/lingxing-worker/')) { await handleLingxingApi(request,response,pathname); return; }
     if (pathname.startsWith("/api/permissions") && (await handlePermissionsApi(request, response, pathname))) return;
     if ((pathname === "/api/health" || pathname === "/api/version") && request.method === "GET") {
@@ -1636,7 +1645,7 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "GET" && pathname === "/api/transit/imports") {
       const role = requireRole(request);
-      if (!transitRoleSet.has(role)) throw new BusinessError(403, "transit_import_forbidden", "当前角色无权查看导入批次");
+      if (!transitRoleSet.has(role) && role !== "alan") throw new BusinessError(403, "transit_import_forbidden", "当前角色无权查看导入批次");
       sendJson(response, 200, { ok: true, imports: inventory.listTransitImports(role), sync: inventory.syncState() });
       return;
     }

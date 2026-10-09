@@ -1,5 +1,5 @@
 import { requirements } from "../data";
-import { TRANSIT_ROLES, type RequirementKey, type Role } from "../types";
+import { TRANSIT_VIEW_ROLES, type RequirementKey, type Role } from "../types";
 import { Icon } from "./Icon";
 
 const navIcons: Record<string, string> = {
@@ -17,6 +17,7 @@ const roleOptions: { value: Role; label: string }[] = [
   { value: "operation-1", label: "运营·一团" },
   { value: "operation-2", label: "运营·二团" },
   { value: "purchasing", label: "采购" },
+  { value: "alan", label: "Alan" },
   { value: "business", label: "商务" },
 ];
 
@@ -49,7 +50,7 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="brand" aria-label="Unismar耗材库存系统"><span className="brand-mark" aria-hidden="true">U</span><span>Unismar</span><span>耗材</span><span>库存系统</span></div>
       <nav aria-label="功能导航">
-        {requirements.filter(item => item.key !== "req3" || TRANSIT_ROLES.includes(role)).map(renderItem)}
+        {requirements.filter(item => item.key !== "req3" || TRANSIT_VIEW_ROLES.includes(role)).map(renderItem)}
       </nav>
     </aside>
   );

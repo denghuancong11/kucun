@@ -29,7 +29,7 @@ const roleLabels: Record<string, string> = {
   "assistant-2": "助理-二团",
   "operation-1": "运营·一团",
   "operation-2": "运营·二团",
-  purchasing: "采购",
+  purchasing: "采购", alan: "Alan",
   business: "商务",
 };
 

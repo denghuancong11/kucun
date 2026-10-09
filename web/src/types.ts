@@ -1,10 +1,11 @@
 export type RequirementKey = "req1" | "req3" | "req4" | "approvals" | "audit";
 
 /* 助理与运营分别按团队办理；硒鼓库存明细和公开调拨摘要保持跨团可见。 */
-export type Role = "admin" | "assistant-1" | "assistant-2" | "operation-1" | "operation-2" | "purchasing" | "business";
+export type Role = "admin" | "assistant-1" | "assistant-2" | "operation-1" | "operation-2" | "purchasing" | "business" | "alan";
 
 /** 在途导入、物流更新及页面访问角色；助理数据范围仍由服务端按团队复核。 */
 export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing"];
+export const TRANSIT_VIEW_ROLES: readonly Role[] = [...TRANSIT_ROLES, "alan"];
 export const TRANSIT_SHELF_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2"];
 
 /* 有效权限：由服务端按类目与角色下发，供库存页面控制字段、展开和操作。 */
@@ -395,7 +396,13 @@ export interface DirectUpgradeSource {
   batchCount: number;
 }
 
+export interface InquiryRecallInfo {
+  revision: number;
+  blockers: { type: string; number: string; status: string }[];
+}
+
 export interface RelocationCandidate {
+  inquiryRecall: InquiryRecallInfo | null;
   allocationId: number | null;
   inquiryId: number | null;
   inquiryShipmentId: number | null;
@@ -498,6 +505,7 @@ export interface RelocationExternalItem {
 }
 
 export interface RelocationWorkItem {
+  inquiryRecall: InquiryRecallInfo | null;
   id: number;
   workNo: string;
   allocationId: number | null;
@@ -575,6 +583,7 @@ export interface DirectUpgrade extends UpgradeBase {
 }
 
 export interface RelocationUpgrade extends UpgradeBase {
+  inquiryRecall: InquiryRecallInfo | null;
   kind: "relocation";
   allocationId: number | null;
   inquiryId: number | null;

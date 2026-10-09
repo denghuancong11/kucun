@@ -4,7 +4,7 @@ import { fetchSync, type ApiError } from "./api";
 import { PendingBusinessRequests } from "./components/PendingBusinessRequests";
 import { Sidebar, Topbar } from "./components/Sidebar";
 import { requirements } from "./data";
-import { TRANSIT_ROLES, type RequirementKey, type Role, type SyncState } from "./types";
+import { TRANSIT_VIEW_ROLES, type RequirementKey, type Role, type SyncState } from "./types";
 import { AuditLogView } from "./views/AuditLog";
 import { Requirement1View } from "./views/Requirement1";
 import { Requirement3View } from "./views/Requirement3";
@@ -56,7 +56,7 @@ export default function App() {
   const changeRole = (next: Role) => {
     const url = new URL(location.href); url.searchParams.delete("model"); url.searchParams.delete("tab");
     history.replaceState(null, "", url);
-    if (!TRANSIT_ROLES.includes(next)) {
+    if (!TRANSIT_VIEW_ROLES.includes(next)) {
       setTabs(current => current.filter(item => item !== "req3"));
       setView(current => current === "req3" ? "req1" : current);
     }
@@ -70,7 +70,7 @@ export default function App() {
       <Topbar view={view} tabs={tabs} onNavigate={navigate} onClose={closeTab} role={role} onRoleChange={changeRole} />
       <main className="content" id="main-content" tabIndex={-1}><div className="breadcrumb">Unismar耗材库存系统 <span>›</span> {meta.label}</div><PendingBusinessRequests key={`pending-${view}-${role}`} role={role} /><div className="view-enter" key={`${view}-${role}`}><h1 className="page-title">{meta.label}</h1>
         {view === "req1" && <Requirement1View role={role} />}
-        {view === "req3" && TRANSIT_ROLES.includes(role) && <Requirement3View role={role} />}
+        {view === "req3" && TRANSIT_VIEW_ROLES.includes(role) && <Requirement3View role={role} />}
         {view === "req4" && <Requirement4View role={role} />}
         {view === "approvals" && <ApprovalCenterView role={role} />}
         {view === "audit" && <AuditLogView role={role} />}

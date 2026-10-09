@@ -94,8 +94,8 @@ try {
   second=(await api(`/api/allocations/${second.id}/confirm`,'assistant-2',{expectedRevision:second.revision,requestId:rid()})).record;
   inquiry=(await api(`/api/inquiries/${inquiry.id}/review`,'business',{decision:'approve',approvedQuantity:20,expectedRevision:inquiry.revision,requestId:rid()})).record;
   inquiry=(await api(`/api/inquiries/${inquiry.id}/reply`,'purchasing',{supplierQuantity:20,shippingWarehouse:'CA',expectedRevision:inquiry.revision,requestId:rid()})).record;
-  inquiry=(await api(`/api/inquiries/${inquiry.id}/archive`,'assistant-2',{plan:'ARCHIVE-'+model,date:'2026-09-10',version:'V1',expectedRevision:inquiry.revision,requestId:rid()})).record;
-  for(const source of [{allocationId:second.id},{inquiryId:inquiry.id}]) {
+  inquiry=(await api(`/api/inquiries/${inquiry.id}/archive`,category==='墨盒'?'purchasing':'assistant-2',{plan:'ARCHIVE-'+model,date:'2026-09-10',version:'V1',expectedRevision:inquiry.revision,requestId:rid()})).record;
+  for(const source of [{allocationId:second.id},{inquiryId:inquiry.id,...(category==='墨盒'?{sourceRevision:inquiry.revision}:{})}]) {
    await api('/api/upgrades/relocation-work-items','operation-1',{...source,requestId:rid()},403);
    let work=(await api('/api/upgrades/relocation-work-items','operation-2',{...source,requestId:rid()})).workItem;
    work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',{rma:'RMA',relocationAddress:'仓库',expectedRevision:work.revision,requestId:rid()})).workItem;

@@ -535,13 +535,13 @@ try {
   await record(observers[4],teamInquiry.documentNo).locator('[data-field="商务审核数量"]').filter({hasText:/^\d+$/}).waitFor();
   await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'operation-2',{supplierQuantity:8,shippingWarehouse:'CA',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-reply')},403);
   teamInquiry=(await api('POST',`/api/inquiries/${teamInquiry.id}/reply`,'purchasing',{supplierQuantity:8,shippingWarehouse:'CA',expectedRevision:teamInquiry.revision,requestId:requestId('team2-reply')})).record;
-  await watchCounts([0,0,0,0,2]);
+  await watchCounts([0,1,0,0,2]);
   assert.equal(teamInquiry.supplierQuantity,8);assert.equal(await record(observers[4],teamInquiry.documentNo).locator('[data-field="供货数量"]').count(),0);
   await observers[4].screenshot({path:path.join(output,'operation-team2-following.png'),fullPage:true});
   await api('POST',`/api/allocations/${teamAllocation.id}/confirm`,'operation-2',{expectedRevision:teamAllocation.revision,requestId:requestId('forbidden-confirm')},403);
   await api('POST',`/api/inquiries/${teamInquiry.id}/archive`,'operation-2',{plan:'FBA-TEAM2',date:'2026-09-01',version:'V20',expectedRevision:teamInquiry.revision,requestId:requestId('forbidden-archive')},403);
   await api('POST',`/api/allocations/${teamAllocation.id}/confirm`,'assistant-2',{expectedRevision:teamAllocation.revision,requestId:requestId('team2-confirm')});
-  await api('POST',`/api/inquiries/${teamInquiry.id}/archive`,'assistant-2',{plan:'FBA-TEAM2',date:'2026-09-01',version:'V20',expectedRevision:teamInquiry.revision,requestId:requestId('team2-archive')});
+  await api('POST',`/api/inquiries/${teamInquiry.id}/archive`,'purchasing',{plan:'FBA-TEAM2',date:'2026-09-01',version:'V20',expectedRevision:teamInquiry.revision,requestId:requestId('team2-archive')});
   await watchCounts([0,0,0,0,0]);
   check('二团跨类目调拨/询库全程跟进直到结束，一团同姓名不会看到二团待办',true);
   check('运营可见待办仍不能直接调用审核、采购回复、确认完成或归档接口',true);
@@ -692,7 +692,7 @@ try {
     const replied = await api('POST', '/api/inquiries/' + fixture.record.id + '/reply', 'purchasing', { supplierQuantity: 3, shippingWarehouse:'CA', expectedRevision: reviewed.record.revision, requestId: requestId('visibility-reply-inquiry') });
     assert.ok(!Object.hasOwn(replied.record.lingxing, 'orderGrossProfit'));
     assert.equal(replied.record.lingxing.sales30d, visibilityMetrics.find(item => item.asin === fixture.asin).sales30d);
-    const archived = await api('POST', '/api/inquiries/' + fixture.record.id + '/archive', fixture.department === '一团' ? 'assistant-1' : 'assistant-2', { plan: 'FBA-VISIBILITY', date: '2026-09-22', version: 'V1', expectedRevision: replied.record.revision, requestId: requestId('visibility-archive-inquiry') });
+    const archived = await api('POST', '/api/inquiries/' + fixture.record.id + '/archive', fixture.model === 'SYNTH-INK-001' ? 'purchasing' : fixture.department === '一团' ? 'assistant-1' : 'assistant-2', { plan: 'FBA-VISIBILITY', date: '2026-09-22', version: 'V1', expectedRevision: replied.record.revision, requestId: requestId('visibility-archive-inquiry') });
     assert.ok(!Object.hasOwn(archived.record.lingxing, 'orderGrossProfit'));
     fixture.record = archived.record;
   }
