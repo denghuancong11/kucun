@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { confirmAllocation, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
-import { InquiryFulfillment } from "../components/InquiryFulfillment";
+import { InquiryFulfillment, InquiryProcurementCells } from "../components/InquiryFulfillment";
 import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { useApprovals } from "../hooks/useApprovals";
@@ -60,6 +60,7 @@ const METRIC_COLUMNS: ApprovalColumn[] = [
 
 const DOCUMENT_COLUMNS: ApprovalColumn[] = [
   { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "套/箱", width: 100 }, { label: "商务部备注", width: 230 },
+  { label: "供应商库存回复", width: 150 }, { label: "发货仓库", width: 130 }, { label: "采购备注", width: 250 },
   { label: "调拨部门", width: 100 }, { label: "调拨店铺", width: 160 }, { label: "调拨运营", width: 110 },
   { label: "已贴FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
   { label: "提交时间", width: 160 }, { label: "状况", width: 135 },
@@ -110,6 +111,8 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       <td className="approval-number" data-field="商务审核数量">{row.approvedQuantity === null ? "—" : formatNumber(row.approvedQuantity)}</td>
       <td className="approval-number" data-field="套/箱" title={item.kind === "allocation" ? item.record.packPerBox ?? "来源批次套/箱缺失" : undefined}>{item.kind === "allocation" ? item.record.packPerBox || "—" : "—"}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
+      {item.kind === "inquiry" ? <InquiryProcurementCells row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />
+        : <><td data-field="供应商库存回复">—</td><td data-field="发货仓库">—</td><td data-field="采购备注">—</td></>}
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
       <td>{row.createdAt ? displayTime(row.createdAt) : "—"}</td>

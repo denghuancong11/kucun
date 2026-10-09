@@ -575,6 +575,7 @@ async function handleApprovalsApi(request, response, pathname) {
       result = inventory.replyInquiry({
         ...common, supplierQuantity: requireNonNegativeInteger(payload.supplierQuantity, "供应商库存回复"),
         shippingWarehouse: String(payload.shippingWarehouse ?? "").trim(),
+        procurementNote: String(payload.procurementNote ?? "").trim(),
       });
     } else if (action === "archive") {
       result = inventory.archiveInquiry({

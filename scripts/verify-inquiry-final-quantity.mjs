@@ -93,7 +93,7 @@ try {
   check("原申请、商务审核及供应商回复事件完整不变", JSON.stringify(db.db.prepare("SELECT * FROM inquiry_events WHERE inquiry_id IN (?,?) ORDER BY id").all(positive.id, zero.id)) === JSON.stringify(beforeEvents));
   check("数据迁移仅更新询库申请量，库存与锁定账本不变", JSON.stringify(db.db.prepare("SELECT model,base_in_stock,in_transit FROM catalog_models ORDER BY model").all()) === JSON.stringify(beforeCatalog)
     && JSON.stringify(db.db.prepare("SELECT * FROM inventory_ledger ORDER BY id").all()) === JSON.stringify(beforeLedger));
-  check("迁移修正全部 47 条合成在途来源并提交 schema28", migration.sourceInventory?.verifiedTransitRows === 47
+  check("迁移修正全部 47 条合成在途来源并提交 schema29", migration.sourceInventory?.verifiedTransitRows === 47
     && migration.sourceInventory.transitChanges.length === 47
     && migration.toVersion === INVENTORY_SCHEMA_VERSION
     && db.db.prepare("PRAGMA user_version").get().user_version === INVENTORY_SCHEMA_VERSION

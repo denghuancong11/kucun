@@ -48,7 +48,7 @@ const view=()=>api('/api/approvals');
 async function allocation(quantity,operator){return(await api('/api/allocations','operation-1',{model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity,department:'一团',store:'TESTUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
 async function inquiry(operator,model='SYNTH-TONER-001'){return(await api('/api/inquiries','operation-1',{model,quantity:10,department:'一团',store:'TESTUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
 async function review(r,kind='inquiries',decision='approve',quantity=10){return(await api(`/api/${kind}/${r.id}/review`,'business',{decision,approvedQuantity:quantity,businessNote:'隔离跨周期回归',expectedRevision:r.revision,requestId:rid()})).record;}
-async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:quantity?'隔离来源仓':'',expectedRevision:r.revision,requestId:rid()})).record;}
+async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:rid()})).record;}
 async function archive(r){return(await api(`/api/inquiries/${r.id}/archive`,'assistant-1',{plan:'PENDING-PLAN',date:'2026-09-24',version:'V1',expectedRevision:r.revision,requestId:rid()})).record;}
 async function assertVisible(allocations,inquiries){const result=await view();assert.deepEqual(result.allocations.map(r=>r.id).sort((a,b)=>a-b),allocations.map(r=>r.id).sort((a,b)=>a-b));assert.deepEqual(result.inquiries.map(r=>r.id).sort((a,b)=>a-b),inquiries.map(r=>r.id).sort((a,b)=>a-b));return result;}
 try{

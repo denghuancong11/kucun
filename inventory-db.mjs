@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 28;
+export const INVENTORY_SCHEMA_VERSION = 29;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1609,6 +1609,7 @@ function createSchema(db, databaseId, createdAt) {
   migratePackPerBoxV26(db, createdAt, []);
   migrateInquiryFinalQuantityV27(db, createdAt);
   migrateSourceInventoryV28(db, createdAt, []);
+  migrateInquiryProcurementV29(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2793,6 +2794,12 @@ function migrateSourceInventoryV28(db, at, imports) {
     verifiedDerivedBatches: [...expectedStock].map(([batchKey,packPerBox])=>({batchKey,packPerBox,sources:[...(sources.get(batchKey)?.values()??[])]})), teamChanges } };
 }
 
+function migrateInquiryProcurementV29(db, at) {
+  db.exec("ALTER TABLE inquiry_documents ADD COLUMN procurement_note TEXT NOT NULL DEFAULT ''");
+  db.prepare("INSERT INTO schema_migrations(version, applied_at, description) VALUES (29, ?, ?)")
+    .run(at, "询库采购备注独立保存；保留历史发货仓库原值");
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2802,13 +2809,13 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v27 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v28 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
-    verifiedPackImports = loadVerifiedPackImports();
+    verifiedPackImports = fromVersion < 28 ? loadVerifiedPackImports() : [];
   } catch (error) {
     db.close();
     throw error;
@@ -2917,6 +2924,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 25) { Object.assign(migrated, migratePackPerBoxV26(db, appliedAt, verifiedPackImports)); version = 26; }
     if (version === 26) { migrateInquiryFinalQuantityV27(db, appliedAt); version = 27; }
     if (version === 27) { Object.assign(migrated, migrateSourceInventoryV28(db, appliedAt, verifiedPackImports)); version = 28; }
+    if (version === 28) { migrateInquiryProcurementV29(db, appliedAt); version = 29; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3593,7 +3601,7 @@ export class InventoryDatabase {
       approvedQuantity: row.approved_quantity == null ? null : Number(row.approved_quantity),
       supplierQuantity: row.supplier_quantity == null ? null : Number(row.supplier_quantity),
       department: row.department, store: row.store_name, operator: row.operator_name,
-      operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse,
+      operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
       plan: row.plan, date: row.ship_date, version: row.version,
       status: row.status, statusCode: row.status,
       statusText: { pending_business: "待商务审核", pending_purchasing: "待采购回复", pending_assistant: "待助理归档", archived: "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
@@ -3677,19 +3685,21 @@ export class InventoryDatabase {
     });
   }
 
-  replyInquiry({ id, role, supplierQuantity, shippingWarehouse, expectedRevision, requestId }) {
+  replyInquiry({ id, role, supplierQuantity, shippingWarehouse, procurementNote, expectedRevision, requestId }) {
     if (role !== "purchasing") throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购可填写供应商库存回复");
     const quantity = Number(supplierQuantity);
     const warehouse = String(shippingWarehouse ?? "").trim();
     if (!Number.isInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
-    if (quantity > 0 && !warehouse) throw new BusinessError(400, "missing_shippingWarehouse", "请填写发货仓库");
-    return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, expectedRevision }, () => {
+    const note = String(procurementNote ?? "").trim();
+    if (!warehouse) throw new BusinessError(400, "missing_shippingWarehouse", "请选择发货仓库（CA 或 SC），回复 0 也须选择");
+    if (!["CA", "SC"].includes(warehouse)) throw new BusinessError(400, "invalid_shippingWarehouse", "发货仓库仅允许 CA 或 SC");
+    return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, status = 'pending_assistant',
+      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = 'pending_assistant',
         replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, warehouse, role, at, at, id);
-      this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse });
+        .run(quantity, quantity, warehouse, note, role, at, at, id);
+      this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note });
       return { ok: true, record: this.getInquiry(id) };
     });
   }

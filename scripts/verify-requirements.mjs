@@ -253,14 +253,14 @@ try {
   });
   const inquirySubmitted = result.record;
   check("询库申请 150 独立进入商务待审", inquirySubmitted.status === "pending_business" && inquirySubmitted.requestedQuantity === 150 && inquirySubmitted.asin === "BTEST00002");
-  await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse: "东莞仓", expectedRevision: inquirySubmitted.revision, requestId: requestId("reply-before-review") }, 409);
+  await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse:'CA', expectedRevision: inquirySubmitted.revision, requestId: requestId("reply-before-review") }, 409);
   result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/review`, "business", reviewBody(inquirySubmitted, 90));
   const inquiryApproved = result.record;
   check("询库批准 90 保留申请 150 并进入采购待办", inquiryApproved.status === "pending_purchasing" && inquiryApproved.requestedQuantity === 150 && inquiryApproved.approvedQuantity === 90);
-  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse: "东莞仓", expectedRevision: result.record.revision, requestId: requestId("reply-60") });
+  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse:'CA', expectedRevision: result.record.revision, requestId: requestId("reply-60") });
   const inquiryReplied = result.record;
   check("供应商回复 60 覆盖申请量、保留商务审核 90 并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
-    && inquiryReplied.approvedQuantity === 90 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "东莞仓");
+    && inquiryReplied.approvedQuantity === 90 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA");
   check("采购回复保留最初申请事件及原始数量", inquiryReplied.events.find(event => event.type === "entry")?.payload.requestedQuantity === 150
     && inquiryReplied.events.some(event => event.type === "reply" && event.payload.supplierQuantity === 60));
   await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", { plan: "FBA-INQUIRY-PLAN", date: "", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive-missing-date") }, 400);
@@ -291,7 +291,7 @@ try {
   for (const qty of [0,120]) {
     let r=(await call("POST","/api/inquiries","operation-1",{...allocationBody(150,`reply-${qty}`),model:batch.model})).record;
     r=(await call("POST",`/api/inquiries/${r.id}/review`,"business",reviewBody(r,90))).record;
-    r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:qty?"东莞仓":"",expectedRevision:r.revision,requestId:requestId("supplier")})).record;
+    r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:requestId("supplier")})).record;
     check(`供应商回复${qty}覆盖申请量并按最终量处理`,r.requestedQuantity===qty && r.quantity===qty && r.status==="pending_assistant" && r.archivedAt===null);
     if(qty===0) {
       const zeroBalance=await balance();
