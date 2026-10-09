@@ -4,6 +4,7 @@ import type { Role } from "../types";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", alan: "Alan", business: "商务" };
 const actionNames: Array<[RegExp, string]> = [
+  [/^\/api\/approvals\/inquiries\/clear$/, "询库数据流-手动清空"],
   [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
   [/^\/api\/allocations$/, "调拨录入"], [/\/allocations\/\d+\/review$/, "调拨审核"], [/\/allocations\/\d+\/confirm$/, "调拨完成"],
   [/^\/api\/upgrades\/direct$/, "在库升级发起"], [/\/upgrades\/direct\/\d+\/complete$/, "在库升级入库"], [/\/upgrades\/relocations\/\d+\/complete$/, "移仓升级入库"],

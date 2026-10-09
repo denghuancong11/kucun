@@ -570,6 +570,12 @@ function inquiryExportWorkbook(records) {
 
 async function handleApprovalsApi(request, response, pathname) {
   const role = requireRole(request);
+  if (pathname === "/api/approvals/inquiries/clear" && request.method === "POST") {
+    if (!["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员和采购可手动清空询库显示");
+    const payload = await parseJsonRequest(request);
+    sendJson(response, 200, inventory.clearInquiryDisplay({ role, requestId: payload.requestId }));
+    return true;
+  }
   const exporting = pathname === "/api/approvals/inquiries/export";
   if ((pathname === "/api/approvals" || exporting) && request.method === "GET") {
     if (exporting && !["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_export_forbidden", "仅管理员和采购可导出询库明细");

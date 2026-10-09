@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { confirmAllocation, downloadInquiryExport, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
+import { clearInquiryDisplay, confirmAllocation, downloadInquiryExport, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment, InquiryProcurementCells } from "../components/InquiryFulfillment";
@@ -160,6 +160,15 @@ export function ApprovalCenterView({ role }: { role: Role }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
   const [exporting, setExporting] = useState(false);
+  const clearAction = useBusinessAction(query.refresh, text => setNotice({ kind: "success", text }));
+  const clearInquiries = () => {
+    const requestId = createRequestId();
+    const action = { message: "", execute: async () => {
+      const result = await clearInquiryDisplay(role, requestId);
+      action.message = result.hiddenCount > 0 ? `已从审批中心隐藏 ${result.hiddenCount} 条已完成或已拒绝的询库。` : "没有需要清空的已完成或已拒绝询库。";
+    } };
+    void clearAction.perform(action);
+  };
   const exportInquiries = async () => {
     setExporting(true);
     try {
@@ -190,7 +199,10 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
       <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions">{(role === "admin" || role === "purchasing") && <button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "导出中…" : "导出询库"}</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    </div><div className="page-actions">{(role === "admin" || role === "purchasing") && <button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "导出中…" : "导出询库"}</button>}{(role === "admin" || role === "purchasing") && <button className="btn btn-ghost" type="button" disabled={clearAction.disabled} onClick={clearInquiries}>询库数据流-手动清空</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    {(role === "admin" || role === "purchasing") && <p className="muted">手动清空为全局操作：隐藏全部硒鼓、墨盒中已完成或已拒绝的询库，不受当前筛选影响；保留原记录及升级库存来源。</p>}
+    {clearAction.error && <p className="dialog-error" role="alert">{clearAction.error}</p>}
+    {clearAction.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={clearAction.busy} onClick={() => void clearAction.perform()}>重试确认</button>}
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}
     {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
       <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>

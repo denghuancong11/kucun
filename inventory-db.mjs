@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 30;
+export const INVENTORY_SCHEMA_VERSION = 31;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1611,6 +1611,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateSourceInventoryV28(db, createdAt, []);
   migrateInquiryProcurementV29(db, createdAt);
   migrateInquiryApprovedQuantityV30(db, createdAt);
+  migrateInquiryDisplayV31(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2820,6 +2821,12 @@ function migrateInquiryApprovedQuantityV30(db, at) {
     .run(at, "询库审核数量允许采购最终量0；保留现有单据、备注、历史和关联数据");
 }
 
+function migrateInquiryDisplayV31(db, at) {
+  db.exec("ALTER TABLE inquiry_documents ADD COLUMN approval_hidden INTEGER NOT NULL DEFAULT 0 CHECK (approval_hidden IN (0, 1))");
+  db.prepare("INSERT INTO schema_migrations(version, applied_at, description) VALUES (31, ?, ?)")
+    .run(at, "询库审批显示改为手动隐藏；回撤后恢复显示，调拨保留定时清理");
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2829,9 +2836,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v29 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v30 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -2946,6 +2953,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 27) { Object.assign(migrated, migrateSourceInventoryV28(db, appliedAt, verifiedPackImports)); version = 28; }
     if (version === 28) { migrateInquiryProcurementV29(db, appliedAt); version = 29; }
     if (version === 29) { migrateInquiryApprovedQuantityV30(db, appliedAt); version = 30; }
+    if (version === 30) { migrateInquiryDisplayV31(db, appliedAt); version = 31; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3348,7 +3356,7 @@ export class InventoryDatabase {
   }
 
   refreshApprovalDisplay(at = new Date().toISOString(), { readOnly = false } = {}) {
-    // 北京时间周二、周四 21:00 即 UTC 当日 13:00，不受部署电脑时区影响。
+    // 仅调拨使用此截止时间：北京时间周二、周四 21:00 即 UTC 当日 13:00。
     const boundary = new Date(at);
     boundary.setUTCHours(13, 0, 0, 0);
     while (boundary.toISOString() > at || ![2, 4].includes(boundary.getUTCDay())) boundary.setUTCDate(boundary.getUTCDate() - 1);
@@ -3609,8 +3617,21 @@ export class InventoryDatabase {
     return {
       allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (status = 'pending' OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
         .map((row) => this.documentRecord(row)),
-      inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE (status IN ('pending_business', 'pending_purchasing', 'pending_assistant') OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff).map((row) => this.inquiryRecord(row)),
+      inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE approval_hidden = 0 ORDER BY updated_at DESC, id DESC").all().map((row) => this.inquiryRecord(row)),
     };
+  }
+
+  clearInquiryDisplay({ role, requestId }) {
+    if (!["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员和采购可手动清空询库显示");
+    return this.idempotent("approvals:inquiries:clear", requestId, { role }, () => {
+      // 对应审批页面的“已完成 / 已拒绝”，不改变业务状态、版本或来源资格。
+      const result = this.db.prepare(`UPDATE inquiry_documents SET approval_hidden = 1
+        WHERE approval_hidden = 0 AND model IN (SELECT model FROM catalog_models WHERE category IN ('硒鼓', '墨盒'))
+          AND (status = 'rejected' OR (status = 'archived' AND
+            (archived_by_role IN ('assistant', 'assistant-1', 'assistant-2') OR
+              (archived_by_role = 'purchasing' AND model IN (SELECT model FROM catalog_models WHERE category = '墨盒')))))`).run();
+      return { ok: true, hiddenCount: Number(result.changes) };
+    });
   }
 
   inquiryRecord(row) {
@@ -3800,7 +3821,7 @@ export class InventoryDatabase {
       this.db.prepare(`UPDATE inquiry_documents SET requested_quantity = ?, approved_quantity = ?, business_note = ?, reviewed_by_role = ?, reviewed_at = ?,
         supplier_quantity = NULL, shipping_warehouse = '', procurement_note = '', replied_by_role = NULL, replied_at = NULL,
         plan = '', ship_date = '', version = '', archived_by_role = NULL, archived_at = NULL, lingxing_snapshot_json = NULL,
-        fba_shipped_at = NULL, fba_confirmed_by_role = NULL, status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+        fba_shipped_at = NULL, fba_confirmed_by_role = NULL, approval_hidden = 0, status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
         .run(requested, approved, role === 'purchasing' ? review.payload.businessNote : '', role === 'purchasing' ? review.role : null,
           role === 'purchasing' ? review.at : null, target, at, id);
       this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review.id,

@@ -62,8 +62,8 @@ try{
  const before=snapshot(),version=db.syncState().dataVersion,lockedBefore=balance().locked;
  await setTime('2026-09-22T13:00:00.000Z');await Promise.all([api('/api/sync'),view(),api('/api/sync')]);
  assert.equal(meta('approval_clear_before'),'2026-09-22T13:00:00.000Z');assert.equal(db.syncState().dataVersion,version+1);assert.deepEqual(snapshot(),before);assert.equal(balance().locked,lockedBefore);
- await assertVisible([waitingBusiness,waitingAssistant,toReject],[qBusiness,qPurchasing,qAssistant,zero,inkPending]);
- check('周二清理保留未审核/已审核调拨及询库三阶段；终态退出；业务表和锁定不变');
+ await assertVisible([waitingBusiness,waitingAssistant,toReject],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
+ check('周二清理保留未审核/已审核调拨及询库全部阶段；仅调拨终态退出；业务表和锁定不变');
  // Only an isolated protocol connection is used; no collector or external Lingxing session.
  const origin='chrome-extension://'+'a'.repeat(32);let workerId;
  async function worker(action,body={}){
@@ -101,7 +101,7 @@ try{
    metricsAuthorization.push({case:'old_pending_actions_forbidden',status:403,document:{kind:'inquiry',id:inkPending.id},code:denied.code,allBusinessTablesUnchanged:true});
  }finally{await fs.rm(permissionsPath);}
  await review(inkPending,'inquiries','reject');
- await assertVisible([waitingBusiness,waitingAssistant,toReject],[qBusiness,qPurchasing,qAssistant,zero]);
+ await assertVisible([waitingBusiness,waitingAssistant,toReject],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
  check('跨截止旧待办指标授权202；终态409、类目禁权403且业务/流水不变（执行端模拟）');
  await unchangedFailure(`/api/allocations/${waitingAssistant.id}/confirm`,'assistant-2',{expectedRevision:waitingAssistant.revision,requestId:rid()},403,'group_forbidden',false);
  check('跨周期保留不会绕过团队办理权限，拒绝不改任何业务表');
@@ -129,8 +129,8 @@ try{
  qBusiness=await review(qBusiness);qPurchasing=await reply(qPurchasing,0);qAssistant=await archive(qAssistant);
  assert.equal(qPurchasing.status,'pending_assistant');assert.equal(qPurchasing.requestedQuantity,0);assert.equal(qAssistant.quantity,7);qPurchasing=await archive(qPurchasing);zero=await archive(zero);assert.equal(zero.quantity,0);
  check('旧调拨缩量/拒绝释放准确，旧询库商务/采购零回复/助理归档可继续');
- await setTime('2026-09-24T13:00:00.000Z');const secondBefore=snapshot();await api('/api/sync');assert.deepEqual(snapshot(),secondBefore);await assertVisible([waitingBusiness,waitingAssistant],[qBusiness]);
- await stop();await setTime('2026-10-01T14:00:00.000Z');await start();assert.equal(meta('approval_clear_before'),'2026-10-01T13:00:00.000Z');await assertVisible([waitingBusiness,waitingAssistant],[qBusiness]);
+ await setTime('2026-09-24T13:00:00.000Z');const secondBefore=snapshot();await api('/api/sync');assert.deepEqual(snapshot(),secondBefore);await assertVisible([waitingBusiness,waitingAssistant],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
+ await stop();await setTime('2026-10-01T14:00:00.000Z');await start();assert.equal(meta('approval_clear_before'),'2026-10-01T13:00:00.000Z');await assertVisible([waitingBusiness,waitingAssistant],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
  check('周四和停机跨多次周期后未完成仍在，重启不丢状态或锁定');
  const confirmBody={expectedRevision:waitingAssistant.revision,requestId:rid()};
  await stop();await start('confirm-before-commit');const failedBefore=snapshot();const failed=await api(`/api/allocations/${waitingAssistant.id}/confirm`,'assistant-1',confirmBody,500);assert.equal(Object.hasOwn(failed,'requestNotApplied'),false);assert.deepEqual(snapshot(),failedBefore);assert.equal(balance().locked,14);
@@ -150,9 +150,9 @@ try{
  const stockBefore=JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),ledgerBefore=JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all());
  qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,12);assert.equal(qBusiness.approvedQuantity,12);await archive(qBusiness);
  assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),stockBefore);assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all()),ledgerBefore);
- await assertVisible([],[]);const candidates=(await api('/api/upgrades')).relocationCandidates;assert.ok(candidates.some(r=>r.inquiryId===qBusiness.id&&r.initialQuantity===12));
+ await assertVisible([],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);const candidates=(await api('/api/upgrades')).relocationCandidates;assert.ok(candidates.some(r=>r.inquiryId===qBusiness.id&&r.initialQuantity===12));
  check('采购最终量可以大于商务量且不增实际在库，完成后退出待办并保留可用询库来源');
- const persisted=snapshot();await stop();await start();assert.deepEqual(snapshot(),persisted);await assertVisible([],[]);
+ const persisted=snapshot();await stop();await start();assert.deepEqual(snapshot(),persisted);await assertVisible([],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
  db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(db.db.prepare('PRAGMA quick_check').get().quick_check,'ok');
  check('再次读取和重启后业务/流水/幂等回执相同，库存恒等式与外键完整');
 }catch(error){failure={message:error.message,stack:error.stack};throw error;}finally{

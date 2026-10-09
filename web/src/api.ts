@@ -176,6 +176,12 @@ export async function downloadInquiryExport(role: Role, filters: InquiryExportFi
   }
 }
 
+export function clearInquiryDisplay(role: Role, requestId: string): Promise<{ hiddenCount: number }> {
+  return requestJson("/api/approvals/inquiries/clear", role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId }),
+  });
+}
+
 export function fetchApprovals(role: Role): Promise<ApprovalsPayload> {
   return requestJson<ApprovalsPayload>("/api/approvals", role);
 }
