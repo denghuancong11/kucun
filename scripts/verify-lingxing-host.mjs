@@ -12,6 +12,7 @@ const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-host-'));
 await fs.mkdir(path.join(state,'data'));
 createInventoryDatabase({databasePath:path.join(state,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID();
+db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
 const common={model:'SYNTH-TONER-001',fnsku:'TEST-FNSKU-HOST-01',department:'一团',store:'隔离US',operator:'同步测试',role:'operation-1',quantity:20};
 const a=db.createInquiry({...common,asin:'BTEST00001',requestId:rid()}).record;
 const b=db.createInquiry({...common,asin:'BTEST00002',requestId:rid()}).record;

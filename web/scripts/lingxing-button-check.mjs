@@ -13,6 +13,7 @@ const output=process.env.ASTER_SYNC_UI_OUTPUT || path.join(root,'.test-output/sy
 await fs.mkdir(path.join(state,'data'));await fs.mkdir(output,{recursive:true});
 createInventoryDatabase({databasePath:path.join(state,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID();
+db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
 const common={role:'operation-1',model:'SYNTH-TONER-001',fnsku:'XBUTTON001',department:'一团',store:'AUS',quantity:20};
 const docs=['甲单','乙单'].map(operator=>db.createInquiry({...common,operator,asin:'BBUTTON001',requestId:rid()}).record);
 const works=[];

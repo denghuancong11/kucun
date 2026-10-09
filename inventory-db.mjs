@@ -3567,7 +3567,9 @@ export class InventoryDatabase {
   }
 
   documentRecord(row) {
-    return row ? rowToDocument(row, this.lingxingForDocument(row)) : null;
+    if (!row) return null;
+    const batch = this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key);
+    return { ...rowToDocument(row, this.lingxingForDocument(row)), packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box) };
   }
 
   approvalView() {
@@ -4865,6 +4867,10 @@ export class InventoryDatabase {
       if (!batch) throw new BusinessError(400, "unknown_batch", `型号“${model}”无此在库批次`);
       const visibleKeys = this.visibleStockBatchKeys(model, this.getModel(model)?.category, OPERATION_GROUPS[role] ?? null);
       if (visibleKeys && !visibleKeys.has(batch.batch_key)) throw new BusinessError(403, "source_team_forbidden", "当前角色不能使用该墨盒来源批次");
+      const packPerBox = Number(batch.pack_per_box);
+      if (!Number.isInteger(packPerBox) || packPerBox <= 0) throw new BusinessError(400, "invalid_pack_per_box", "当前批次套/箱数据异常（须为有效正整数），无法提交调拨，请核对批次数据。");
+      if (!Number.isInteger(quantity) || quantity <= 0) throw new BusinessError(400, "invalid_quantity", "调拨数量请填写大于 0 的整数。");
+      if (quantity % packPerBox !== 0) throw new BusinessError(400, "allocation_quantity_multiple", `当前批次套/箱为 ${packPerBox}，调拨数量须为 ${packPerBox} 的整数倍。`);
       const key = batch.batch_key;
       const balance = this.getBalance(key);
       if (quantity > balance.available) throw new BusinessError(409, "insufficient_available", `超出可用库存（当前可用 ${balance.available}）`);
@@ -4901,6 +4907,9 @@ export class InventoryDatabase {
       const at = new Date().toISOString();
       const reserve = this.db.prepare("SELECT id FROM inventory_ledger WHERE document_id = ? AND entry_type = 'reserve'").get(id);
       if (decision === "approve") {
+        const packPerBox = Number(this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key)?.pack_per_box);
+        if (!Number.isInteger(packPerBox) || packPerBox <= 0) throw new BusinessError(400, "invalid_pack_per_box", "来源批次套/箱数据异常（须为有效正整数），无法批准调拨，请核对批次数据。");
+        if (approved % packPerBox !== 0) throw new BusinessError(400, "allocation_quantity_multiple", `来源批次套/箱为 ${packPerBox}，审核数量须为 ${packPerBox} 的整数倍。`);
         const difference = approved - Number(row.quantity);
         const balance = this.getBalance(row.batch_key);
         if (difference > balance.available) throw new BusinessError(409, "insufficient_available", `增批 ${difference} 件超出可用库存（当前可用 ${balance.available}）`);

@@ -161,6 +161,7 @@ try {
     墨盒: Object.fromEntries(roles.map((role) => [role, { summary: true, detail: true, expand: true, actions: true }])),
   }));
   createInventoryDatabase({ databasePath });
+  writeSql("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'");
   await start();
 
   const missing = await call("POST", "/api/allocations", "operation-1", { ...allocationBody(100, "missing"), asin: "" }, 400);

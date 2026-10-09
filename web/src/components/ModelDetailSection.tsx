@@ -140,6 +140,7 @@ function StockPane({
                 model: model.model,
                 category: model.category ?? "硒鼓",
                 quantity: row.baseQuantity,
+                packPerBox: row.packPerBox,
                 plan: row.plan ?? "",
                 date: row.date ?? "",
                 version: row.version ?? "",

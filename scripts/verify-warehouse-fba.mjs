@@ -260,8 +260,8 @@ try {
 
   const warehouseCsv = Buffer.from([
     "ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号",
-    "SYNTH-COMP-001,100,4,TEST-COMP-FNSKU,SyntheticWarehouseA,TEST-SAME,2026-01-01,一团,TEST-V1",
-    "SYNTH-COMP-001,100,4,TEST-COMP-FNSKU,SyntheticWarehouseB,TEST-SAME,2026-01-01,二团,TEST-V1",
+    "SYNTH-COMP-001,100,5,TEST-COMP-FNSKU,SyntheticWarehouseA,TEST-SAME,2026-01-01,一团,TEST-V1",
+    "SYNTH-COMP-001,100,5,TEST-COMP-FNSKU,SyntheticWarehouseB,TEST-SAME,2026-01-01,二团,TEST-V1",
   ].join("\n"));
   const warehousePreview = await preview(warehouseCsv, "synthetic-硒鼓-warehouse.csv");
   const warehouseImport = await api("/api/transit/import", "admin", payload(warehousePreview));

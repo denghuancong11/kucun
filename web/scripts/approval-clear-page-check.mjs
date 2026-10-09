@@ -21,6 +21,7 @@ const setTime=at=>fs.writeFile(clockFile,at);
 await setTime('2026-09-21T12:00:00.000Z');
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`;
+db.db.prepare("UPDATE stock_batches SET pack_per_box='2' WHERE model='SYNTH-TONER-001'").run();
 const checks=[],errors=[],posts=[],rid=()=>crypto.randomUUID();let server,browser,actor,failure;
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 async function start(){const instanceId=createTestInstanceId('approval-clear');server=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'ignore',env:{...process.env,ASTER_STATE_ROOT:state,ASTER_TEST_INSTANCE_ID:instanceId,HOST:'127.0.0.1',PORT:String(port),PROD:'1',TZ:'America/Los_Angeles'}});await waitForOwnedServer({base,child:server,instanceId});}

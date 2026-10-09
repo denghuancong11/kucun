@@ -43,7 +43,7 @@ try{
    const bad=entry(model,two.key,'一团',1);await rejectUnchanged('/api/allocations','operation-1',bad,403);await rejectUnchanged('/api/allocations','operation-1',bad,403);
    check('隐藏墨盒来源与重复拒绝：所有表及dataVersion完全不变');
   }
-  const body1=entry(model,one.key,'一团',5),body2=entry(model,two.key,'二团',5);
+  const body1=entry(model,one.key,'一团',8),body2=entry(model,two.key,'二团',8);
   let d1=(await api('/api/allocations','operation-1',body1)).record,d2=(await api('/api/allocations','operation-2',body2)).record;
   const replay=await api('/api/allocations','operation-1',body1);assert.equal(replay.deduped,true);
   if(category==='墨盒'){assert.deepEqual(Object.keys(replay.totals),[one.key]);assert.ok(!JSON.stringify(replay).includes(two.key));}
@@ -58,8 +58,8 @@ try{
    for(const r of publicRows)assert.ok(!('lingxing'in r)&&!('asin'in r)&&!('store'in r));
   }
   check(`${category} 完整记录/指标/毛利润按七角色过滤，公开摘要范围正确，存量响应重放受限`);
-  d1=(await api(`/api/allocations/${d1.id}/review`,'business',{decision:'approve',approvedQuantity:5,expectedRevision:d1.revision,requestId:rid()})).record;
-  d2=(await api(`/api/allocations/${d2.id}/review`,'business',{decision:'approve',approvedQuantity:5,expectedRevision:d2.revision,requestId:rid()})).record;
+  d1=(await api(`/api/allocations/${d1.id}/review`,'business',{decision:'approve',approvedQuantity:4,expectedRevision:d1.revision,requestId:rid()})).record;
+  d2=(await api(`/api/allocations/${d2.id}/review`,'business',{decision:'approve',approvedQuantity:4,expectedRevision:d2.revision,requestId:rid()})).record;
   await rejectUnchanged(`/api/allocations/${d2.id}/confirm`,'assistant-1',{expectedRevision:d2.revision,requestId:rid()},403);
   const stale=await api(`/api/allocations/${d1.id}/confirm`,'assistant-1',{expectedRevision:1,requestId:rid()},409);assert.ok(!JSON.stringify(stale).includes('orderGrossProfit'));if(category==='墨盒')assert.ok(!JSON.stringify(stale).includes(two.key));
   const confirmBody={expectedRevision:d1.revision,requestId:rid()};const confirm=await api(`/api/allocations/${d1.id}/confirm`,'assistant-1',confirmBody);assert.ok(!JSON.stringify(confirm).includes('orderGrossProfit'));
@@ -67,14 +67,14 @@ try{
   if(category==='墨盒')assert.deepEqual(Object.keys(confirm.totals),[one.key]);
   const requests=[{model,sourceVersion:'V1',requestId:rid()},{model,sourceVersion:'V1',requestId:rid()}];
   const started=await Promise.all([api('/api/upgrades/direct','operation-1',requests[0]),api('/api/upgrades/direct','assistant-2',requests[1])]);
-  assert.deepEqual(started.map(r=>r.upgrade.initialQuantity),[95,55]);assert.deepEqual(started[0].upgrade.lines.map(l=>l.sourceBatchKey),[one.key]);assert.deepEqual(started[1].upgrade.lines.map(l=>l.sourceBatchKey),[two.key]);
+  assert.deepEqual(started.map(r=>r.upgrade.initialQuantity),[96,56]);assert.deepEqual(started[0].upgrade.lines.map(l=>l.sourceBatchKey),[one.key]);assert.deepEqual(started[1].upgrade.lines.map(l=>l.sourceBatchKey),[two.key]);
   assert.equal((await api('/api/upgrades/direct','operation-1',requests[0])).deduped,true);
   for(const role of ['operation-1','assistant-1','operation-2','assistant-2','admin','purchasing'])await rejectUnchanged('/api/upgrades/direct',role,{model,sourceVersion:'V1',requestId:rid()},409);
   const before=snapshot();const denied=await Promise.all([api('/api/upgrades/direct','operation-1',{model,sourceVersion:'V1',requestId:rid()},409),api('/api/upgrades/direct','assistant-1',{model,sourceVersion:'V1',requestId:rid()},409)]);assert.equal(denied.length,2);assert.equal(snapshot(),before);
-  check(`${category} 两团同版本并行锁95/55，重放及各角色重复/并发申请不二次占用`);
+  check(`${category} 两团同版本并行锁96/56，重放及各角色重复/并发申请不二次占用`);
   for(let i=0;i<2;i++){
    const job=started[i].upgrade,body={sourceLineId:job.lines[0].id,completedQuantity:i?30:20,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',expectedRevision:job.revision,requestId:rid()};
-   const result=await api(`/api/upgrades/direct/${job.id}/complete`,'purchasing',body);assert.equal(result.upgrade.inProgressQuantity,i?25:75);
+   const result=await api(`/api/upgrades/direct/${job.id}/complete`,'purchasing',body);assert.equal(result.upgrade.inProgressQuantity,i?26:76);
    const after=snapshot();assert.equal((await api(`/api/upgrades/direct/${job.id}/complete`,'purchasing',body)).deduped,true);assert.equal(snapshot(),after);
    const target=db.db.prepare('SELECT * FROM stock_batches WHERE model=? AND version=? AND source_team=?').get(model,'V2',i?'二团':'一团');assert.equal(target.pack_per_box,'4');assert.equal(db.getBalance(target.batch_key).onHand,i?30:20);
   }
@@ -88,20 +88,20 @@ try{
    let work=(await api('/api/upgrades/relocation-work-items',assistant,{allocationId:document.id,requestId:rid()})).workItem;
    work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',{rma:'RMA'+work.id,relocationAddress:'回库验证仓',expectedRevision:work.revision,requestId:rid()})).workItem;
    work=(await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,operation,{removalOrderNo:'ORDER'+work.id,expectedRevision:work.revision,requestId:rid()})).workItem;
-   work=db.syncRelocationLogistics({id:work.id,role:assistant,shipments:[{externalId:'PACK'+work.id,storeId:'FIX',orderNo:'ORDER'+work.id,fnsku:'XSAME',quantity:5,carrier:'UPS',trackingNo:'TRACK'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
-   const shipped=await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,assistant,{fbaRemainingQuantity:0,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:5}],expectedRevision:work.revision,requestId:rid()});
+   work=db.syncRelocationLogistics({id:work.id,role:assistant,shipments:[{externalId:'PACK'+work.id,storeId:'FIX',orderNo:'ORDER'+work.id,fnsku:'XSAME',quantity:4,carrier:'UPS',trackingNo:'TRACK'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
+   const shipped=await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,assistant,{fbaRemainingQuantity:0,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:4}],expectedRevision:work.revision,requestId:rid()});
    let relocation=shipped.upgrade.relocations[0];
-   for(const quantity of [2,3]) {
+   for(const quantity of [2,2]) {
     const body={completedQuantity:quantity,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',expectedRevision:relocation.revision,requestId:rid()};
     const completed=await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body);
     const before=snapshot();assert.equal((await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body)).deduped,true);assert.equal(snapshot(),before);
     relocation=completed.upgrade.relocations[0];
    }
    const target=db.db.prepare("SELECT * FROM stock_batches WHERE model=? AND version='V2' AND source_team=?").get(model,index?'二团':'一团');
-   assert.equal(db.getBalance(target.batch_key).onHand,index?35:25);assert.equal(target.pack_per_box,'4');assert.equal(relocation.completedQuantity,5);
+   assert.equal(db.getBalance(target.batch_key).onHand,index?34:24);assert.equal(target.pack_per_box,'4');assert.equal(relocation.completedQuantity,4);
   }
   assert.equal(db.db.prepare("SELECT COUNT(*) n FROM stock_batches WHERE model=? AND version='V2'").get(model).n,2);
-  check(`${category} 两团移仓分次2/3回库沿原来源分别合入本团升级目标，重放不重复入账`);
+  check(`${category} 两团移仓分次2/2回库沿原来源分别合入本团升级目标，重放不重复入账`);
   evidence.push({category,model,one,two,started,targets});
  }
  // An admin/purchasing initiator does not become the source owner.

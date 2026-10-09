@@ -205,6 +205,7 @@ export interface Allocation {
   documentNo: string;
   model: string;
   batchKey: string;
+  packPerBox: string | null;
   quantity: number;
   asin: string;
   operatorNote: string;

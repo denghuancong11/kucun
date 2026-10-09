@@ -18,7 +18,7 @@ const observers=[],results=[],errors=[],writes=[];let browser,actor,workerId,hea
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function api(route,body,role='admin',worker=false){const r=await fetch(base+route,{method:body?'POST':'GET',headers:{'x-role':role,'content-type':'application/json',...(worker?{origin:'chrome-extension://'+'a'.repeat(32)}:{})},body:body?JSON.stringify(body):undefined});const j=await r.json();assert.equal(r.status,200,JSON.stringify(j));return j;}
 const execute=(action,body={})=>api('/api/lingxing-worker/'+action,{workerId,...body},'admin',true);
-async function seedStock(){const fileName='初始硒鼓.csv',body=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},100,4,XINITIAL01,SyntheticWarehouseB,INITIAL,2026-09-01,一团,V1`;
+async function seedStock(){const fileName='初始硒鼓.csv',body=`ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n${model},100,5,XINITIAL01,SyntheticWarehouseB,INITIAL,2026-09-01,一团,V1`;
  const p=await(await fetch(base+'/api/transit/preview',{method:'POST',headers:{'x-role':'admin','x-file-name':encodeURIComponent(fileName)},body})).json();
  const imp=await api('/api/transit/import',{previewToken:p.previewToken,fileName,fileHash:p.fileSha256,templateHash:p.templateSha256,rows:p.rows.map(r=>({...r,data:{...r.data,version:'V1'}})),requestId:rid()});
  const t=db.getTransit(imp.rows[0].id);await api(`/api/transit/${t.id}/on-shelf`,{yes:'YES',expectedRevision:t.revision,requestId:rid()});

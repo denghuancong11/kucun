@@ -13,6 +13,7 @@ await fs.mkdir(path.dirname(output),{recursive:true});
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'aster-background-')),stateRoot=path.join(dir,'state');
 await fs.mkdir(path.join(stateRoot,'data'),{recursive:true});createInventoryDatabase({databasePath:path.join(stateRoot,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(stateRoot),rid=()=>crypto.randomUUID();
+db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
 const common={model:'SYNTH-TONER-001',fnsku:'X011111111',department:'一团',store:'隔离US',operator:'后台验证',role:'operation-1',quantity:20};
 const a=db.createInquiry({...common,asin:'BFIXTURE01',requestId:rid()}).record;
 const b=db.createInquiry({...common,asin:'BFIXTURE00',requestId:rid()}).record;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { confirmAllocation, formatNumber, reviewAllocation, reviewInquiry } from "../api";
+import { confirmAllocation, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment } from "../components/InquiryFulfillment";
@@ -59,7 +59,7 @@ const METRIC_COLUMNS: ApprovalColumn[] = [
 ];
 
 const DOCUMENT_COLUMNS: ApprovalColumn[] = [
-  { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "商务部备注", width: 230 },
+  { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "套/箱", width: 100 }, { label: "商务部备注", width: 230 },
   { label: "调拨部门", width: 100 }, { label: "调拨店铺", width: 160 }, { label: "调拨运营", width: 110 },
   { label: "已贴FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
   { label: "提交时间", width: 160 }, { label: "状况", width: 135 },
@@ -79,13 +79,27 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const row = item.record;
   const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
   const [businessNote, setBusinessNote] = useState(row.businessNote || "");
+  const [quantityRequestError, setQuantityRequestError] = useState(false);
+  const packPerBox = Number(item.kind === "allocation" ? item.record.packPerBox : null);
+  const quantityError = item.kind !== "allocation" ? ""
+    : !Number.isInteger(packPerBox) || packPerBox <= 0 ? "来源批次套/箱数据异常（须为有效正整数），无法批准调拨，请核对批次数据。"
+    : !Number.isInteger(Number(quantity)) || Number(quantity) <= 0 ? `来源批次套/箱为 ${packPerBox}，审核数量请填写大于 0 的整数，且须为 ${packPerBox} 的整数倍。`
+    : Number(quantity) % packPerBox !== 0 ? `来源批次套/箱为 ${packPerBox}，审核数量须为 ${packPerBox} 的整数倍。` : "";
   const { perform, busy, uncertain, error, setError } = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
   const needsReview = item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "approved" && item.record.approvalStatus !== "rejected" : item.record.status === "pending_business";
   const review = (decision: "approve" | "reject") => {
     const approvedQuantity = Number(quantity);
+    if (decision === "approve" && quantityError) return;
     if (decision === "approve" && (!Number.isInteger(approvedQuantity) || approvedQuantity <= 0)) { setError("审核数量请填写大于 0 的整数"); return; }
     const payload = { decision, ...(decision === "approve" ? { approvedQuantity } : {}), businessNote: businessNote.trim(), expectedRevision: row.revision, requestId: createRequestId(`${item.kind}-review`) };
-    void perform({ execute: () => item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload), message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
+    setQuantityRequestError(false);
+    void perform({ execute: async () => {
+      try { return await (item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload)); }
+      catch (failure) {
+        if (item.kind === "allocation") setQuantityRequestError(["invalid_quantity", "allocation_quantity_multiple", "insufficient_available"].includes((failure as ApiError).code ?? ""));
+        throw failure;
+      }
+    }, message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
   };
   const metrics = row.lingxing;
   const metricColumns = approvalDocumentColumns(role).filter(column => column.key);
@@ -94,6 +108,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     <tr className="approval-data-row">
       <td className="approval-requested approval-number" data-field="申请数量">{formatNumber(row.requestedQuantity)}</td>
       <td className="approval-number" data-field="商务审核数量">{row.approvedQuantity === null ? "—" : formatNumber(row.approvedQuantity)}</td>
+      <td className="approval-number" data-field="套/箱" title={item.kind === "allocation" ? item.record.packPerBox ?? "来源批次套/箱缺失" : undefined}>{item.kind === "allocation" ? item.record.packPerBox || "—" : "—"}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
@@ -105,16 +120,18 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       })}
       <td className="approval-metric-cell" data-field="调货前倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageBefore, metrics)}</span></td><td className="approval-metric-cell" data-field="调货后倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageAfter, metrics)}</span></td>
     </tr>
-    <tr className="approval-action-row"><td colSpan={11 + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
+    <tr className="approval-action-row"><td colSpan={DOCUMENT_COLUMNS.length + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.documentNo}`} onSubmit={event => event.preventDefault()}>
-        <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" value={quantity} disabled={busy || uncertain} onChange={event => setQuantity(event.target.value)} /></label>
+        <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" aria-label="审核数量" aria-invalid={Boolean(quantityError)} value={quantity} disabled={busy || uncertain} onChange={event => { setQuantity(event.target.value); if (quantityRequestError) { setError(null); setQuantityRequestError(false); } }} /></label>
+        {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.documentNo}`}>{item.record.packPerBox || "—"}</output></label>}
         <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
         <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
-        <button className="btn btn-primary" type="button" disabled={busy || uncertain} onClick={() => review("approve")}>批准</button>
+        <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>批准</button>
         <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>拒绝</button>
       </form>}
       {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId), message: `${row.documentNo} 已确认调拨。` }); }}>确认调拨完成</button>}
       {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
+      {role === "business" && needsReview && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {error && <p className="dialog-error" role="alert">{error}</p>}
       {uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void perform()}>重试确认</button>}
     </div></td></tr>

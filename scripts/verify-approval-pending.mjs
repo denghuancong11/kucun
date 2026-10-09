@@ -20,6 +20,7 @@ const setTime=at=>fs.writeFile(clockFile,at);
 await setTime('2026-09-21T12:00:00.000Z');
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`;
+db.db.prepare("UPDATE stock_batches SET pack_per_box='2' WHERE model='SYNTH-TONER-001'").run();
 const checks=[],metricsAuthorization=[],requestProof=[],rid=()=>crypto.randomUUID();let server;let failure=null;
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 const meta=key=>db.db.prepare('SELECT value FROM system_meta WHERE key=?').get(key)?.value;
@@ -53,7 +54,7 @@ async function assertVisible(allocations,inquiries){const result=await view();as
 try{
  await start();
  let waitingBusiness=await allocation(10,'待商务'),waitingAssistant=await review(await allocation(8,'待助理'),'allocations','approve',8),toReject=await allocation(4,'待拒绝');
- let ended=await review(await allocation(3,'已完成'),'allocations','approve',3);ended=(await api(`/api/allocations/${ended.id}/confirm`,'assistant-1',{expectedRevision:ended.revision,requestId:rid()})).record;
+ let ended=await review(await allocation(4,'已完成'),'allocations','approve',4);ended=(await api(`/api/allocations/${ended.id}/confirm`,'assistant-1',{expectedRevision:ended.revision,requestId:rid()})).record;
  let qBusiness=await inquiry('待商务'),qPurchasing=await review(await inquiry('待采购')),qAssistant=await reply(await review(await inquiry('待助理')),7);
  let zero=await reply(await review(await inquiry('零回复')),0);const rejected=await review(await inquiry('已拒绝'),'inquiries','reject'),qDone=await archive(await reply(await review(await inquiry('已归档')),6));
  const inkPending=await inquiry('指标类目权限','SYNTH-INK-001');
@@ -144,7 +145,7 @@ try{
    return {status:response.status,payload:await response.json()};
  }));
  assert.deepEqual(competing.map(r=>r.status).sort(),[200,409]);assert.equal(competing.find(r=>r.status===409).payload.code,'stale_revision');assert.equal(competing.find(r=>r.status===409).payload.requestNotApplied,true);
- assert.equal(db.db.prepare("SELECT COUNT(*) n FROM inventory_ledger WHERE document_id=? AND entry_type='issue'").get(waitingBusiness.id).n,1);assert.equal(balance().locked,0);assert.equal(balance().onHand,483);
+ assert.equal(db.db.prepare("SELECT COUNT(*) n FROM inventory_ledger WHERE document_id=? AND entry_type='issue'").get(waitingBusiness.id).n,1);assert.equal(balance().locked,0);assert.equal(balance().onHand,482);
  check('提交前异常全部回滚，相同/不同请求并发和回执丢失重试只出库一次；旧版本失败后可正常继续');
  const stockBefore=JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),ledgerBefore=JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all());
  qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,12);assert.equal(qBusiness.approvedQuantity,10);await archive(qBusiness);

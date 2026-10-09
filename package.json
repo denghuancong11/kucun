@@ -13,7 +13,7 @@
     "verify-db": "node scripts/migrate-to-sqlite.mjs --verify",
     "typecheck": "npm --prefix web run typecheck",
     "lint": "npm --prefix web run lint",
-    "test": "node scripts/verify-requirements.mjs && node scripts/verify-inquiry-final-quantity.mjs && node scripts/verify-approval-pending.mjs && node scripts/verify-transit-import-permissions.mjs",
+    "test": "node scripts/verify-requirements.mjs && node scripts/verify-inquiry-final-quantity.mjs && node scripts/verify-approval-pending.mjs && node scripts/verify-transit-import-permissions.mjs && node scripts/verify-allocation-pack.mjs && node scripts/verify-allocation-review-pack.mjs",
     "test:teams": "node scripts/verify-team-scope.mjs",
     "test:multi-page": "node web/scripts/multi-page-sync-check.mjs",
     "test:all-business-sync": "node web/scripts/all-business-sync-check.mjs",
@@ -34,6 +34,8 @@
     "test:warehouse-fba-page": "node web/scripts/warehouse-fba-page-check.mjs",
     "test:approval-clear": "node web/scripts/approval-clear-page-check.mjs",
     "test:source-scope": "node scripts/verify-source-scope.mjs",
-    "test:upgrade-real-warehouses": "node web/scripts/real-warehouse-upgrade-page-check.mjs"
+    "test:upgrade-real-warehouses": "node web/scripts/real-warehouse-upgrade-page-check.mjs",
+    "test:allocation-pack-page": "node web/scripts/allocation-pack-page-check.mjs",
+    "test:allocation-review-pack-page": "node web/scripts/allocation-review-pack-page-check.mjs"
   }
 }

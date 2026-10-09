@@ -17,6 +17,7 @@ await writeSyntheticTransitWorkbook(workbookPath,{sheetName:'SyntheticPageImport
  {model:'SYNTH-XLSX-001',quantity:8,packPerBox:'4',fnsku:'TEST-FNSKU-B',shippingMethod:'直发FBA',plan:'SYNTH-PLAN-B',date:'2026-01-02',team:'一团',version:'TEST-V1'},
 ]});
 createInventoryDatabase({databasePath:path.join(state,'data',INVENTORY_DATABASE_NAME)});const db=new InventoryDatabase(state);
+db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
 /* 页面验收使用有明确入库来源团队的墨盒型号，避免把无来源的历史演示库存混入本次范围测试。 */
 const pageInk='PAGE-INK',pageAt=new Date().toISOString();
 db.db.prepare("INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at,revision,created_by_import_id) VALUES(?,?,0,0,?,1,NULL)").run(pageInk,'墨盒',pageAt);
@@ -27,8 +28,8 @@ const insertPageActiveTransit=db.db.prepare("INSERT INTO transit_batches(model,q
 const pageBatches={};
 for(const [team,warehouse] of [['一团','PAGE-ONE'],['二团','PAGE-TWO']]){
  const plan='PAGE-INK-PLAN',date='2026-09-01',version='V1',fnsku='XPAGEINK',batchKey=[pageInk,plan,date,version,warehouse].join('#');
- insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,4);
- const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,4);
+ insertPageBatch.run(batchKey,pageInk,plan,date,version,fnsku,pageAt,warehouse,5);
+ const transit=insertPageTransit.run(pageInk,500,0,plan,date,version,fnsku,'','','整柜',team,pageAt,pageAt,5);
  insertPageReceipt.run(Number(transit.lastInsertRowid),batchKey,500,'assistant',pageAt,`page-ink-${team}`);
  pageBatches[team]={batchKey,plan,date,version,fnsku};
 }

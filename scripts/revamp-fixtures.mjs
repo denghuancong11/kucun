@@ -15,6 +15,7 @@ export function seedVisualFixtures(stateRoot) {
   try {
     createInventoryDatabase({ databasePath: path.join(stateRoot, 'data', INVENTORY_DATABASE_NAME), seedCatalogData: true });
     db = new InventoryDatabase(stateRoot);
+    db.db.prepare("UPDATE stock_batches SET pack_per_box='4' WHERE model='SYNTH-TONER-001'").run();
     let sequence = 0;
     const rid = () => `visual-fixture-${++sequence}`;
     const models = [...Array.from({ length: 36 }, (_, i) => `STOCK-${String(i + 1).padStart(2, '0')}`), 'APP-18', 'APP-20', 'APP-22', 'APP-25'];
@@ -25,7 +26,7 @@ export function seedVisualFixtures(stateRoot) {
     for (const row of imported.rows) if (row.model.startsWith('APP-')) db.markTransitOnShelf({ id: row.id, role: 'assistant-1', expectedRevision: row.revision, yes: 'YES', requestId: rid() });
     function allocation(model, i, stage = 0) {
       const batch = db.getCatalog().stockDetails[model][0];
-      let r = db.createAllocation({ role: 'operation-1', model, plan: batch.plan, date: batch.date, version: batch.version, sourceBatchKey: batch.batchKey, quantity: 5, department: '一团', store: 'VISUALUS', operator: `运营${String(i + 1).padStart(2, '0')}`, asin: 'BVISUAL001', fnsku: batch.fnsku, operatorNote: '核对店铺与批次', requestId: rid() }).record;
+      let r = db.createAllocation({ role: 'operation-1', model, plan: batch.plan, date: batch.date, version: batch.version, sourceBatchKey: batch.batchKey, quantity: 8, department: '一团', store: 'VISUALUS', operator: `运营${String(i + 1).padStart(2, '0')}`, asin: 'BVISUAL001', fnsku: batch.fnsku, operatorNote: '核对店铺与批次', requestId: rid() }).record;
       if (stage > 0) r = db.reviewAllocation({ id: r.id, role: 'business', decision: 'approve', approvedQuantity: 4, businessNote: '按申请核准', expectedRevision: r.revision, requestId: rid() }).record;
       if (stage > 2) r = db.confirmAllocation({ id: r.id, role: 'assistant-1', expectedRevision: r.revision, requestId: rid() }).record;
       return r;
