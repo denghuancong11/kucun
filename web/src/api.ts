@@ -8,6 +8,7 @@ import type {
   DocumentHistory,
   EffectivePermissions,
   InventoryCatalogPayload,
+  InquiryExportFilters,
   Role,
   SyncState,
   TransitImportListPayload,
@@ -153,6 +154,26 @@ export function fetchEffectivePermissions(role: Role): Promise<EffectivePermissi
 /** 查询某型号的调拨记录（记录行已由后端按团过滤；totals 按该角色的库存可见范围聚合）。 */
 export function fetchAllocations(role: Role, model: string): Promise<AllocationsPayload> {
   return requestJson<AllocationsPayload>(`/api/allocations?model=${encodeURIComponent(model)}`, role);
+}
+
+/** 每次直接读取服务器已保存明细，不使用审批缓存或采购草稿。 */
+export async function downloadInquiryExport(role: Role, filters: InquiryExportFilters): Promise<void> {
+  try {
+    const response = await fetch("/api/approvals/inquiries/export?" + new URLSearchParams({ ...filters }), {
+      cache: "no-store", signal: AbortSignal.timeout(10000), headers: { "x-role": role },
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error || "请求失败（HTTP " + response.status + "）");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url; link.download = "询库明细.xlsx";
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    throw new Error("询库导出读取失败：" + (error instanceof Error ? error.message : "请检查网络后重试"));
+  }
 }
 
 export function fetchApprovals(role: Role): Promise<ApprovalsPayload> {

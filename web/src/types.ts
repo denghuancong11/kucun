@@ -316,6 +316,14 @@ export interface Inquiry {
   coverageAfter: number | null;
 }
 
+export interface InquiryExportFilters {
+  type: "all" | "allocation" | "inquiry";
+  category: "all" | Category;
+  scope: "all" | "mine";
+  progress: "all" | "active";
+  search: string;
+}
+
 export interface ApprovalsPayload {
   allocations: Array<Allocation & { category: Category }>;
   inquiries: Inquiry[];

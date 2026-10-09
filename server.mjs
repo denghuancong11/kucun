@@ -504,10 +504,72 @@ async function getInquiryForRole(id, role, requireAction = true) {
   return record;
 }
 
+
+// 与审批中心的筛选及型号展开顺序一致；保留每一单，展开状态不参与导出。
+function filteredInquiryExport(visible, role, query) {
+  const type = query.get("type") || "all", category = query.get("category") || "all";
+  const scope = query.get("scope") || "all", progress = query.get("progress") || "all";
+  const keyword = (query.get("search") || "").trim().toLocaleLowerCase();
+  if (!["all", "allocation", "inquiry"].includes(type) || !["all", ...allCategories].includes(category)
+    || !["all", "mine"].includes(scope) || !["all", "active"].includes(progress)) throw new BusinessError(400, "invalid_export_filter", "询库导出筛选条件无效，请重新选择筛选");
+  const active = item => item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "rejected" : item.record.status.startsWith("pending_");
+  const items = [...visible.allocations.map(record => ({ kind: "allocation", record })), ...visible.inquiries.map(record => ({ kind: "inquiry", record }))]
+    .sort((a, b) => (b.record.createdAt ?? "").localeCompare(a.record.createdAt ?? ""))
+    .filter(item => (type === "all" || item.kind === type) && (category === "all" || item.record.category === category)
+      && (progress === "all" || active(item))
+      && (scope === "all" || role === "purchasing" && item.kind === "inquiry" && item.record.status === "pending_purchasing")
+      && (!keyword || [item.record.operator, item.record.model, item.record.asin, item.record.documentNo].some(value => value.toLocaleLowerCase().includes(keyword))));
+  const groups = new Map();
+  for (const item of items) {
+    if (!groups.has(item.record.model)) groups.set(item.record.model, []);
+    groups.get(item.record.model).push(item);
+  }
+  return [...groups.values()].flat().filter(item => item.kind === "inquiry").map(item => item.record);
+}
+
+function inquiryExportWorkbook(records) {
+  const headers = ["型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
+  const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
+    row.department, row.store, row.operator, row.fnsku, new Date(row.createdAt).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }),
+    row.status === "archived" ? ["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") ? "已完成" : "" : row.statusText])];
+  const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
+  const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
+    const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 0 ? ' s="1"' : '';
+    return value == null || value === "" ? '<c r="' + ref + '"/>' : typeof value === "number"
+      ? '<c r="' + ref + '"><v>' + value + '</v></c>'
+      : '<c r="' + ref + '" t="inlineStr"' + style + '><is><t xml:space="preserve">' + xml(value) + '</t></is></c>';
+  }).join('') + '</row>').join('');
+  const widths = [26, 20, 20, 14, 40, 14, 22, 18, 26, 26, 20];
+  const entries = [
+    ["[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ["_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ["xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="询库明细" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ["xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ["xl/styles.xml", '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
+    ["xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:K' + rows.length + '"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols>' + widths.map((width, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + width + '" customWidth="1"/>').join('') + '</cols><sheetData>' + sheetRows + '</sheetData></worksheet>'],
+  ];
+  const locals = [], directory = []; let offset = 0;
+  for (const [file, text] of entries) {
+    const name = Buffer.from(file), source = Buffer.from(text), compressed = zlib.deflateRawSync(source), crc = crc32(source);
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8); local.writeUInt16LE(0x21, 12);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(source.length, 22); local.writeUInt16LE(name.length, 26); name.copy(local, 30);
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10); central.writeUInt16LE(0x21, 14);
+    central.writeUInt32LE(crc, 16); central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(source.length, 24); central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42); name.copy(central, 46);
+    locals.push(local, compressed); directory.push(central); offset += local.length + compressed.length;
+  }
+  const central = Buffer.concat(directory), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, central, end]);
+}
+
 async function handleApprovalsApi(request, response, pathname) {
   const role = requireRole(request);
-  if (pathname === "/api/approvals" && request.method === "GET") {
-    const result = inventory.approvalView();
+  const exporting = pathname === "/api/approvals/inquiries/export";
+  if ((pathname === "/api/approvals" || exporting) && request.method === "GET") {
+    if (exporting && !["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_export_forbidden", "仅管理员和采购可导出询库明细");
+    const result = inventory.approvalView({ refreshDisplay: !exporting });
     const sync = inventory.syncState();
     const visible = { allocations: [], inquiries: [] };
     for (const kind of ["allocations", "inquiries"]) {
@@ -521,7 +583,13 @@ async function handleApprovalsApi(request, response, pathname) {
         visible[kind].push(approvalDocumentForRole({ ...record, category: model.category }, role));
       }
     }
-    sendJson(response, 200, { ok: true, ...visible, sync });
+    if (exporting) {
+      const filters = new URL(request.url, "http://localhost").searchParams;
+      const content = inquiryExportWorkbook(filteredInquiryExport(visible, role, filters));
+      response.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "cache-control": "no-store",
+        "content-disposition": "attachment; filename=inquiries.xlsx; filename*=UTF-8''" + encodeURIComponent("询库明细.xlsx") });
+      response.end(content);
+    } else sendJson(response, 200, { ok: true, ...visible, sync });
     return true;
   }
 

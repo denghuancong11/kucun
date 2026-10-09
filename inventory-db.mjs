@@ -3347,13 +3347,16 @@ export class InventoryDatabase {
     return this.syncState();
   }
 
-  refreshApprovalDisplay(at = new Date().toISOString()) {
+  refreshApprovalDisplay(at = new Date().toISOString(), { readOnly = false } = {}) {
     // 北京时间周二、周四 21:00 即 UTC 当日 13:00，不受部署电脑时区影响。
     const boundary = new Date(at);
     boundary.setUTCHours(13, 0, 0, 0);
     while (boundary.toISOString() > at || ![2, 4].includes(boundary.getUTCDay())) boundary.setUTCDate(boundary.getUTCDate() - 1);
     const cutoff = boundary.toISOString();
     const meta = Object.fromEntries(this.db.prepare("SELECT key, value FROM system_meta WHERE key IN ('approval_first_clear_at', 'approval_clear_before')").all().map(row => [row.key, row.value]));
+    // 导出按同一显示边界只读计算，不推进清理元数据或数据版本。
+    if (readOnly) return meta.approval_first_clear_at && cutoff >= meta.approval_first_clear_at
+      && (!meta.approval_clear_before || cutoff > meta.approval_clear_before) ? cutoff : meta.approval_clear_before ?? null;
     if (!meta.approval_first_clear_at) {
       do { boundary.setUTCDate(boundary.getUTCDate() + 1); } while (![2, 4].includes(boundary.getUTCDay()));
       this.db.prepare("INSERT INTO system_meta(key, value) VALUES ('approval_first_clear_at', ?)").run(boundary.toISOString());
@@ -3601,8 +3604,8 @@ export class InventoryDatabase {
     return { ...rowToDocument(row, this.lingxingForDocument(row)), packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box) };
   }
 
-  approvalView() {
-    const cutoff = this.refreshApprovalDisplay();
+  approvalView({ refreshDisplay = true } = {}) {
+    const cutoff = this.refreshApprovalDisplay(undefined, { readOnly: !refreshDisplay });
     return {
       allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (status = 'pending' OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
         .map((row) => this.documentRecord(row)),

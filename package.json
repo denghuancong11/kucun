@@ -37,6 +37,7 @@
     "test:upgrade-real-warehouses": "node web/scripts/real-warehouse-upgrade-page-check.mjs",
     "test:allocation-pack-page": "node web/scripts/allocation-pack-page-check.mjs",
     "test:allocation-review-pack-page": "node web/scripts/allocation-review-pack-page-check.mjs",
-    "test:inquiry-procurement-page": "node web/scripts/inquiry-procurement-page-check.mjs"
+    "test:inquiry-procurement-page": "node web/scripts/inquiry-procurement-page-check.mjs",
+    "test:inquiry-export": "node web/scripts/inquiry-export-page-check.mjs"
   }
 }
