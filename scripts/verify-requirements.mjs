@@ -259,9 +259,10 @@ try {
   check("询库批准 90 保留申请 150 并进入采购待办", inquiryApproved.status === "pending_purchasing" && inquiryApproved.requestedQuantity === 150 && inquiryApproved.approvedQuantity === 90);
   result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse:'CA', expectedRevision: result.record.revision, requestId: requestId("reply-60") });
   const inquiryReplied = result.record;
-  check("供应商回复 60 覆盖申请量、保留商务审核 90 并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
-    && inquiryReplied.approvedQuantity === 90 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA");
+  check("供应商回复 60 统一覆盖当前申请量和审核量 并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
+    && inquiryReplied.approvedQuantity === 60 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA");
   check("采购回复保留最初申请事件及原始数量", inquiryReplied.events.find(event => event.type === "entry")?.payload.requestedQuantity === 150
+    && inquiryReplied.events.find(event => event.type === "review")?.payload.approvedQuantity === 90
     && inquiryReplied.events.some(event => event.type === "reply" && event.payload.supplierQuantity === 60));
   await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", { plan: "FBA-INQUIRY-PLAN", date: "", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive-missing-date") }, 400);
   const archiveBody = { plan: "FBA-INQUIRY-PLAN", date: "2026-09-01", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive") };

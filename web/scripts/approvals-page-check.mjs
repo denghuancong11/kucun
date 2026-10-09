@@ -428,12 +428,14 @@ try {
   await approvals(page); await expand(page);
   const archivedInquiry=(await api("GET","/api/approvals","admin")).inquiries.find(r=>r.id===inquiry.id);
   assert.equal(archivedInquiry.requestedQuantity,60);
-  assert.equal(archivedInquiry.approvedQuantity,90);
-  assert.equal(archivedInquiry.supplierQuantity,60);
+  assert.equal(archivedInquiry.approvedQuantity,60);
+  assert.equal(archivedInquiry.supplierQuantity,60);assert.equal(archivedInquiry.events.find(event=>event.type==='review').payload.approvedQuantity,90);
+  assert.equal(await inquiryCard.locator('[data-field="商务审核数量"]').innerText(),'60');
+  assert.equal(await modelGroup.locator('[data-field="商务审核数量合计"]').innerText(),'150');
   assert.equal(archivedInquiry.events.find(event=>event.type==='entry').payload.requestedQuantity,150);
   assert.equal(await inquiryCard.locator('[data-field="申请数量"]').innerText(),'60');
   assert.equal(await modelGroup.locator('[data-field="申请数量合计"]').innerText(),'160');
-  check("采购回复后申请数量、主行及型号合计改为最终量60；商务审核90和原申请历史150保留，归档仍显示已完成", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0 && await inquiryCard.locator('[data-field="供货数量"]').count()===0);
+  check("采购回复后申请数量、主行及型号合计改为最终量60；当前审核量60，原审核90和申请150事件保留，归档仍显示已完成", await inquiryCard.locator('.approval-progress').innerText()==='已完成' && await allocationCard.locator('.approval-progress').innerText()==='已完成' && await inquiryCard.locator('.approval-row-actions button').count()===0 && await inquiryCard.locator('[data-field="供货数量"]').count()===0);
   for (const close of await page.getByRole("button", { name: "关闭提示", exact: true }).all()) await close.click();
   await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0,0); });
   await page.screenshot({ path: path.join(output, "approvals-desktop.png"), fullPage: true });

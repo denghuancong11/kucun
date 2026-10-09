@@ -148,7 +148,7 @@ try{
  assert.equal(db.db.prepare("SELECT COUNT(*) n FROM inventory_ledger WHERE document_id=? AND entry_type='issue'").get(waitingBusiness.id).n,1);assert.equal(balance().locked,0);assert.equal(balance().onHand,482);
  check('提交前异常全部回滚，相同/不同请求并发和回执丢失重试只出库一次；旧版本失败后可正常继续');
  const stockBefore=JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),ledgerBefore=JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all());
- qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,12);assert.equal(qBusiness.approvedQuantity,10);await archive(qBusiness);
+ qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,12);assert.equal(qBusiness.approvedQuantity,12);await archive(qBusiness);
  assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),stockBefore);assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all()),ledgerBefore);
  await assertVisible([],[]);const candidates=(await api('/api/upgrades')).relocationCandidates;assert.ok(candidates.some(r=>r.inquiryId===qBusiness.id&&r.initialQuantity===12));
  check('采购最终量可以大于商务量且不增实际在库，完成后退出待办并保留可用询库来源');

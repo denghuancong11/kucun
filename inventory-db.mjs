@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 29;
+export const INVENTORY_SCHEMA_VERSION = 30;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1610,6 +1610,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateInquiryFinalQuantityV27(db, createdAt);
   migrateSourceInventoryV28(db, createdAt, []);
   migrateInquiryProcurementV29(db, createdAt);
+  migrateInquiryApprovedQuantityV30(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2800,6 +2801,25 @@ function migrateInquiryProcurementV29(db, at) {
     .run(at, "询库采购备注独立保存；保留历史发货仓库原值");
 }
 
+function migrateInquiryApprovedQuantityV30(db, at) {
+  const view = db.prepare("SELECT sql FROM sqlite_master WHERE type='view' AND name='relocation_sources'").get().sql;
+  const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='inquiry_documents'").get().sql;
+  const related = db.prepare("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('index','trigger') AND (tbl_name='inquiry_documents' OR sql LIKE '%inquiry_documents%')").all();
+  const sequence = db.prepare("SELECT seq FROM sqlite_sequence WHERE name='inquiry_documents'").get()?.seq;
+  db.exec("DROP VIEW relocation_sources");
+  for (const item of related) db.exec(`DROP ${item.type} "${item.name}"`);
+  db.exec(schema.replace('inquiry_documents', 'inquiry_documents_v30')
+    .replace('approved_quantity INTEGER CHECK (approved_quantity > 0)', 'approved_quantity INTEGER CHECK (approved_quantity >= 0)'));
+  db.exec(`INSERT INTO inquiry_documents_v30 SELECT * FROM inquiry_documents;
+    DROP TABLE inquiry_documents;
+    ALTER TABLE inquiry_documents_v30 RENAME TO inquiry_documents;`);
+  if (sequence != null) db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='inquiry_documents'").run(sequence);
+  for (const item of related) db.exec(item.sql);
+  db.exec(view);
+  db.prepare("INSERT INTO schema_migrations(version, applied_at, description) VALUES (30, ?, ?)")
+    .run(at, "询库审核数量允许采购最终量0；保留现有单据、备注、历史和关联数据");
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2809,9 +2829,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v28 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v29 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -2925,6 +2945,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 26) { migrateInquiryFinalQuantityV27(db, appliedAt); version = 27; }
     if (version === 27) { Object.assign(migrated, migrateSourceInventoryV28(db, appliedAt, verifiedPackImports)); version = 28; }
     if (version === 28) { migrateInquiryProcurementV29(db, appliedAt); version = 29; }
+    if (version === 29) { migrateInquiryApprovedQuantityV30(db, appliedAt); version = 30; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3696,9 +3717,9 @@ export class InventoryDatabase {
     return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = 'pending_assistant',
+      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = 'pending_assistant',
         replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, warehouse, note, role, at, at, id);
+        .run(quantity, quantity, quantity, warehouse, note, role, at, at, id);
       this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note });
       return { ok: true, record: this.getInquiry(id) };
     });

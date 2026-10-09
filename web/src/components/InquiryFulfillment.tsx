@@ -36,10 +36,10 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
 }
 
 // 表格中的三个字段共用本单提交；不与其他单据或助理归档草稿混用。
-export function InquiryProcurementCells({ row, role, onRefresh, onNotice }: {
+export function InquiryProcurementCells({ row, quantity, onQuantityChange, role, onRefresh, onNotice }: {
   row: Inquiry; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void;
+  quantity: string; onQuantityChange: (value: string) => void;
 }) {
-  const [quantity, setQuantity] = useState("");
   const [warehouse, setWarehouse] = useState("");
   const [note, setNote] = useState("");
   const [attempted, setAttempted] = useState(false);
@@ -57,7 +57,7 @@ export function InquiryProcurementCells({ row, role, onRefresh, onNotice }: {
   };
   return <>
     <td className="approval-procurement-cell" data-field="供应商库存回复">{editable
-      ? <label className="field"><input form={formId} aria-label="供应商库存回复" required type="number" min="0" step="1" aria-invalid={Boolean(quantityError)} value={quantity} disabled={action.disabled} onChange={event => { setQuantity(event.target.value); action.setError(null); }} /></label>
+      ? <label className="field"><input form={formId} aria-label="供应商库存回复" required type="number" min="0" step="1" aria-invalid={Boolean(quantityError)} value={quantity} disabled={action.disabled} onChange={event => { onQuantityChange(event.target.value); action.setError(null); }} /></label>
       : row.supplierQuantity === null ? "—" : formatNumber(row.supplierQuantity)}</td>
     <td className="approval-procurement-cell" data-field="发货仓库">{editable
       ? <label className="field"><select form={formId} aria-label="发货仓库" required aria-invalid={Boolean(warehouseError)} value={warehouse} disabled={action.disabled} onChange={event => { setWarehouse(event.target.value); action.setError(null); }}><option value="">请选择</option><option value="CA">CA</option><option value="SC">SC</option></select></label>

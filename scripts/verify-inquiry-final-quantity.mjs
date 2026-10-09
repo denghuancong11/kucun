@@ -93,7 +93,7 @@ try {
   check("原申请、商务审核及供应商回复事件完整不变", JSON.stringify(db.db.prepare("SELECT * FROM inquiry_events WHERE inquiry_id IN (?,?) ORDER BY id").all(positive.id, zero.id)) === JSON.stringify(beforeEvents));
   check("数据迁移仅更新询库申请量，库存与锁定账本不变", JSON.stringify(db.db.prepare("SELECT model,base_in_stock,in_transit FROM catalog_models ORDER BY model").all()) === JSON.stringify(beforeCatalog)
     && JSON.stringify(db.db.prepare("SELECT * FROM inventory_ledger ORDER BY id").all()) === JSON.stringify(beforeLedger));
-  check("迁移修正全部 47 条合成在途来源并提交 schema29", migration.sourceInventory?.verifiedTransitRows === 47
+  check("迁移修正全部 47 条合成在途来源并提交 schema30", migration.sourceInventory?.verifiedTransitRows === 47
     && migration.sourceInventory.transitChanges.length === 47
     && migration.toVersion === INVENTORY_SCHEMA_VERSION
     && db.db.prepare("PRAGMA user_version").get().user_version === INVENTORY_SCHEMA_VERSION
@@ -104,6 +104,12 @@ try {
     store: "SYNTHUS", operator: "SyntheticOperator", fnsku: "TEST-FNSKU-NEW", asin: "TEST-ASIN-NEW", requestId: requestId("new-zero") }), /大于 0/);
   check("新建询库仍拒绝零申请量", true);
   assert.equal(db.syncState().dataVersion, beforeDataVersion + 1);
+  const current=db.createInquiry({role:'operation-1',model:'SYNTH-ITEM-001',quantity:7,department:'一团',store:'SYNTHUS',operator:'最终数量验收',fnsku:'TEST-ZERO-FINAL',asin:'TEST-ZERO-FINAL',requestId:requestId('final-entry')}).record;
+  const reviewed=db.reviewInquiry({id:current.id,role:'business',decision:'approve',approvedQuantity:13,expectedRevision:current.revision,requestId:requestId('final-review')}).record;
+  const replied=db.replyInquiry({id:current.id,role:'purchasing',supplierQuantity:0,shippingWarehouse:'CA',procurementNote:'v26升级后零回复',expectedRevision:reviewed.revision,requestId:requestId('final-zero')}).record;
+  check('旧库升级后新采购零回复三项当前量及执行量全为0，事件保留原申请7和审核13', [replied.requestedQuantity,replied.approvedQuantity,replied.supplierQuantity,replied.quantity].every(q=>q===0)
+    && replied.events.find(e=>e.type==='entry').payload.requestedQuantity===7 && replied.events.find(e=>e.type==='review').payload.approvedQuantity===13);
+  check('迁移样本原审核40与关联历史不被本次新规则追溯覆盖', db.getInquiry(positive.id).approvedQuantity===40 && db.getInquiry(zero.id).approvedQuantity===40);
   db.assertInventoryInvariants();
 } finally {
   legacy?.close();

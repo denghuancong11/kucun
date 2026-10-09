@@ -79,6 +79,13 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
 }) {
   const row = item.record;
   const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
+  const [procurementQuantity, setProcurementQuantity] = useState("");
+  const previewQuantity = item.kind === "inquiry" && role === "purchasing" && item.record.status === "pending_purchasing"
+    && procurementQuantity.trim() !== "" && Number.isInteger(Number(procurementQuantity)) && Number(procurementQuantity) >= 0
+    ? Number(procurementQuantity) : null;
+  const displayedRequested = previewQuantity ?? row.requestedQuantity;
+  const displayedApproved = previewQuantity ?? row.approvedQuantity;
+  const previewTitle = previewQuantity === null ? undefined : "采购数量预览（未提交）";
   const [businessNote, setBusinessNote] = useState(row.businessNote || "");
   const [quantityRequestError, setQuantityRequestError] = useState(false);
   const packPerBox = Number(item.kind === "allocation" ? item.record.packPerBox : null);
@@ -107,11 +114,11 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const progress = progressLabel(item);
   return <tbody className="approval-record" data-document-no={row.documentNo} data-document-key={`${item.kind}-${row.id}`} aria-label={`${item.kind === "allocation" ? "调拨" : "询库"} ${row.documentNo}`}>
     <tr className="approval-data-row">
-      <td className="approval-requested approval-number" data-field="申请数量">{formatNumber(row.requestedQuantity)}</td>
-      <td className="approval-number" data-field="商务审核数量">{row.approvedQuantity === null ? "—" : formatNumber(row.approvedQuantity)}</td>
+      <td className="approval-requested approval-number" data-field="申请数量" title={previewTitle}>{formatNumber(displayedRequested)}</td>
+      <td className="approval-number" data-field="商务审核数量" title={previewTitle}>{displayedApproved === null ? "—" : formatNumber(displayedApproved)}</td>
       <td className="approval-number" data-field="套/箱" title={item.kind === "allocation" ? item.record.packPerBox ?? "来源批次套/箱缺失" : undefined}>{item.kind === "allocation" ? item.record.packPerBox || "—" : "—"}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
-      {item.kind === "inquiry" ? <InquiryProcurementCells row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />
+      {item.kind === "inquiry" ? <InquiryProcurementCells row={item.record} quantity={procurementQuantity} onQuantityChange={setProcurementQuantity} role={role} onRefresh={onRefresh} onNotice={onNotice} />
         : <><td data-field="供应商库存回复">—</td><td data-field="发货仓库">—</td><td data-field="采购备注">—</td></>}
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
