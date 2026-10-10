@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  exportUpgradeFlow,
   completeDirectUpgrade,
   completeRelocationUpgrade,
   createDirectUpgrade,
@@ -316,7 +317,7 @@ export function Requirement4View({ role }: { role: Role }) {
 
       {mode === "transfer" ? <TransferUpgradeList role={role} /> : mode === "relocation" ? (
         <div className="relocation-board">
-          <Panel title="升级来源" className="relocation-source-panel">
+          <Panel title="升级来源" className="relocation-source-panel" actions={['admin','purchasing','logistics'].includes(role)?<button className="btn btn-ghost btn-sm" onClick={()=>void exportUpgradeFlow(role,'relocation',{model:relocationModel,version:relocationVersion,source:selectedKey??''}).catch(error=>setNotice({kind:'error',text:error.message}))}>导出移仓数据流</button>:undefined}>
             <div className="form-grid upgrade-filter">
               <label className="field"><span>型号</span><select value={relocationModel} onChange={event => { setRelocationModel(event.target.value); setRelocationVersion(""); setSelectedSourceKey(null); }}><option value="">全部型号</option>{relocationModels.map(value => <option key={value}>{value}</option>)}</select></label>
               <label className="field"><span>原版本号</span><select value={relocationVersion} onChange={event => { setRelocationVersion(event.target.value); setSelectedSourceKey(null); }}><option value="">全部版本</option>{relocationVersions.map(value => <option key={value}>{value}</option>)}</select></label>

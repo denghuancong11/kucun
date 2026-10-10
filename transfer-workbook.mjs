@@ -1,16 +1,14 @@
 import zlib from 'node:zlib';
-// 转仓更新专用模板，保留原15列和2—3行表头，扣回逐批填写。
+// 转仓导出与更新使用同一业务列；扣回批次在确认页面指定。
 export const TRANSFER_STAGES={rma:'RMA',count:'实际清点数量',progress:'升级进度'};
 export const TRANSFER_EDITABLE={rma:['rma'],count:['countedQuantity'],progress:['inProgressQuantity','completedQuantity','completedVersion']};
-export const TRANSFER_REVERSAL_HEADERS=['转仓单号','原入库批次','升级版本','实际仓库','有效入库数量','当前锁定','当前占用提示','本次扣回数量'];
 const xml=v=>String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll('\r','&#13;');
 const col=i=>String.fromCharCode(65+i);
 export function transferUpdateValues(record,fields){return [record.documentNo,...fields.map(([key])=>['returnQuantity','countedQuantity','inProgressQuantity','completedQuantity'].includes(key)&&record.data[key]!==''?Number(record.data[key]):record.data[key]),String(record.revision)];}
 export function transferUpdateWorkbook(records,stage,fields,crc32){
  const headers=['转仓单号',...fields.map(([,label])=>label),'记录版本'];
- const editable=TRANSFER_EDITABLE[stage].map(key=>1+fields.findIndex(([k])=>k===key));
- const sheets=[{name:'转仓升级',headers,editable,note:'本模板仅办理'+TRANSFER_STAGES[stage]+'；仅保留本次办理的记录，其他列只读。数量单位：销售套数。'+(stage==='progress'?'累计完成量减少时，在“扣回明细”逐批填写；新增入库至Aster海外仓，套/箱补齐前不能调拨。':''),rows:records.map(r=>transferUpdateValues(r,fields))}];
- if(stage==='progress')sheets.push({name:'扣回明细',headers:TRANSFER_REVERSAL_HEADERS,editable:[7],note:'填写需扣回批次的本次扣回数量，其他行留空；每单扣回合计须等于累计完成量减少量。',rows:records.flatMap(r=>r.receiptBatches.filter(b=>b.quantity>0).map(b=>[r.documentNo,b.batchKey,b.version,b.warehouse,b.quantity,b.locked,b.issue,'']))});
+ const editable=(stage ? TRANSFER_EDITABLE[stage] : Object.values(TRANSFER_EDITABLE).flat()).map(key=>1+fields.findIndex(([k])=>k===key));
+ const sheets=[{name:'转仓升级',headers,editable,note:'按转仓单号定位；单号、记录版本及非本次办理阶段字段只读。未修改行不办理。数量单位：销售套数。减少累计完成量时，在导入确认页指定原入库批次；新增入库至Aster海外仓，套/箱补齐前不能调拨。',rows:records.map(r=>transferUpdateValues(r,fields))}];
  const sheetXml=sheet=>{
    const row=(values,n)=>'<row r="'+n+'" ht="32" customHeight="1">'+values.map((v,i)=>{
      const style=n===2?1:n>=4&&sheet.editable.includes(i)?2:0,ref=col(i)+n;

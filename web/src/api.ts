@@ -437,7 +437,7 @@ export function fetchTransferUpgrades(role: Role): Promise<TransferUpgradesPaylo
   return requestJson("/api/transfer-upgrades", role);
 }
 
-export type RelocationUpdatePreview = {fileName:string;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{id:string;revision:string;workNo:string;rma:string;relocationAddress:string};processedAddress:string}[]};
+export type RelocationUpdatePreview = {unchangedCount:number;fileName:string;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{id:string;revision:string;workNo:string;rma:string;relocationAddress:string};processedAddress:string;before:{rma:string;relocationAddress:string;status:string};afterStatus:string}[]};
 export function previewRelocationUpdate(role:Role,file:File):Promise<RelocationUpdatePreview> {
   return requestJson('/api/upgrades/relocation-update/preview',role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});
 }
@@ -452,10 +452,17 @@ export async function downloadRelocationTemplate(role:Role) {
 
 export type TransferStage = 'rma'|'count'|'progress';
 export const transferStageLabels:Record<TransferStage,string>={rma:'RMA',count:'实际清点数量',progress:'升级进度'};
-export type TransferUpdatePreview = {fileName:string;stage:TransferStage;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{documentNo:string;revision:number;stage:TransferStage;reversals:{batchKey:string;quantity:number}[]};before:import('./types').TransferUpgradeData;after:import('./types').TransferUpgradeData;quantityDelta:number}[]};
+export type TransferUpdatePreview = {unchangedCount:number;fileName:string;stage:TransferStage;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{documentNo:string;revision:number;stage:TransferStage;reversals:{batchKey:string;quantity:number}[]};before:import('./types').TransferUpgradeData;after:import('./types').TransferUpgradeData;quantityDelta:number;receiptBatches:import('./types').TransferUpgradeRecord['receiptBatches']}[]};
 export function previewTransferUpdate(role:Role,stage:TransferStage,file:File):Promise<TransferUpdatePreview>{return requestJson('/api/transfer-upgrades/update/preview?stage='+stage,role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});}
 export function importTransferUpdate(role:Role,stage:TransferStage,payload:unknown):Promise<unknown>{return requestJson('/api/transfer-upgrades/update/import?stage='+stage,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});}
 export async function downloadTransferUpdate(role:Role,stage:TransferStage){
  const r=await fetch('/api/transfer-upgrades/update/template?stage='+stage,{cache:'no-store',headers:{'x-role':role}});if(!r.ok)throw new Error((await r.json()).error||'模板读取失败');
  const url=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=url;a.download='转仓升级-'+transferStageLabels[stage]+'更新模板.xlsx';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',filters?:{model:string;version:string;source:string}) {
+ const query=filters?'?'+new URLSearchParams(filters).toString():'';
+ const response=await fetch((kind==='relocation'?'/api/upgrades/relocation-update/export':'/api/transfer-upgrades/update/export')+query,{cache:'no-store',headers:{'x-role':role}});
+ if(!response.ok)throw new Error((await response.json()).error||'数据流导出失败，请重新尝试');
+ const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=(kind==='relocation'?'移仓升级':'转仓升级')+'-数据流.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }

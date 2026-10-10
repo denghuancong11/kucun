@@ -1,6 +1,6 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchTransferUpgrades, importTransferUpgrade, previewTransferUpgrade, downloadTransferUpdate,previewTransferUpdate,importTransferUpdate,transferStageLabels,type TransferStage,type TransferUpdatePreview } from "../api";
+import { exportUpgradeFlow, fetchTransferUpgrades, importTransferUpgrade, previewTransferUpgrade, downloadTransferUpdate,previewTransferUpdate,importTransferUpdate,transferStageLabels,type TransferStage,type TransferUpdatePreview } from "../api";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { TRANSFER_UPGRADE_FIELDS, type Role, type TransferUpgradePreview } from "../types";
 import { createRequestId } from "../utils/ids";
@@ -54,7 +54,9 @@ export function TransferUpgradeImport({ role, children }: { role: Role; children
 export function TransferUpgradeList({ role }: { role: Role }) {
   const query = useQuery({ queryKey: ["upgrades", "transfer", role], queryFn: () => fetchTransferUpgrades(role) });
   const rows = query.data?.records ?? [];
-  return <>{role === "logistics" && <TransferUpdate role={role} />}<Panel title="转仓升级记录" actions={<button className="btn btn-ghost btn-sm" disabled={query.isFetching} onClick={() => void query.refetch()}>刷新</button>}>
+  const [exportError,setExportError]=useState('');
+  return <>{role === "logistics" && <TransferUpdate role={role} />}<Panel title="转仓升级记录" actions={<>{['admin','purchasing','logistics'].includes(role)&&<button className="btn btn-ghost btn-sm" onClick={()=>{setExportError('');void exportUpgradeFlow(role,'transfer').catch(e=>setExportError(e.message));}}>导出转仓数据流</button>}<button className="btn btn-ghost btn-sm" disabled={query.isFetching} onClick={() => void query.refetch()}>刷新</button></>}>
+    {exportError&&<p className="dialog-error" role="alert">{exportError}</p>}
     {query.isError && <div className="callout callout-danger" role="alert">转仓升级读取失败：{query.error.message}</div>}
     {query.isLoading ? <p>加载中…</p> : rows.length === 0 ? <EmptyState title="暂无转仓升级记录" /> : <div className="table-wrap scroll-x">
       <table className="data-table transfer-upgrade-table" aria-label="转仓升级记录"><thead><tr><th>转仓单号</th>{TRANSFER_UPGRADE_FIELDS.map(([key, label]) => <th key={key}>{label}</th>)}</tr></thead>
@@ -74,16 +76,25 @@ export function TransferUpgradeList({ role }: { role: Role }) {
 
 function TransferUpdate({role}:{role:Role}) {
  const [stage,setStage]=useState<TransferStage>('rma'),[preview,setPreview]=useState<TransferUpdatePreview|null>(null),[reading,setReading]=useState(false),[notice,setNotice]=useState('');
+ const [reversalDrafts,setReversalDrafts]=useState<Record<string,Record<string,string>>>({});
+ const reversalsFor=(no:string)=>Object.entries(reversalDrafts[no]??{}).filter(([,value])=>value.trim()!==''&&Number(value)!==0).map(([batchKey,value])=>({batchKey,quantity:Number(value)}));
+ const reversalError=(row:TransferUpdatePreview['rows'][number])=>{
+   if(row.quantityDelta>=0)return '';
+   const chosen=reversalsFor(row.data.documentNo);
+   if(chosen.some(x=>!Number.isSafeInteger(x.quantity)||x.quantity<=0))return '扣回数量须为正整数';
+   if(chosen.some(x=>{const b=row.receiptBatches.find(b=>b.batchKey===x.batchKey);return !b||b.issue||x.quantity>b.quantity;}))return '所选批次存在占用或超过有效入库数量，请核对';
+   return chosen.reduce((sum,x)=>sum+x.quantity,0)===-row.quantityDelta?'':'须指定批次，扣回合计应为 '+(-row.quantityDelta);
+ };
  const client=useQueryClient(),action=useBusinessAction(async()=>{await Promise.all(['upgrades','inventory','audit'].map(key=>client.invalidateQueries({queryKey:[key]})));},message=>{setPreview(null);setNotice(message);});
- async function upload(file?:File){if(!file)return;setReading(true);setPreview(null);setNotice('');action.setError(null);try{setPreview(await previewTransferUpdate(role,stage,file));}catch(e){action.setError((e as Error).message);}finally{setReading(false);}}
+ async function upload(file?:File){if(!file)return;setReading(true);setPreview(null);setReversalDrafts({});setNotice('');action.setError(null);try{setPreview(await previewTransferUpdate(role,stage,file));}catch(e){action.setError((e as Error).message);}finally{setReading(false);}}
  return <Panel title="物流模板办理">
  <p>按RMA、实际清点数量、升级进度分步办理。下载当前记录，填写对应字段后预览确认；RMA与清点量可再次修正。</p>
- <div className="transit-toolbar"><select aria-label="转仓办理阶段" value={stage} disabled={reading||action.disabled} onChange={e=>{setStage(e.target.value as TransferStage);setPreview(null);setNotice('');action.setError(null);}}>{Object.entries(transferStageLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select>
+ <div className="transit-toolbar"><select aria-label="转仓办理阶段" value={stage} disabled={reading||action.disabled} onChange={e=>{setStage(e.target.value as TransferStage);setPreview(null);setReversalDrafts({});setNotice('');action.setError(null);}}>{Object.entries(transferStageLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select>
  <button className="btn btn-ghost" disabled={reading||action.disabled} onClick={()=>void downloadTransferUpdate(role,stage).catch(e=>action.setError(e.message))}>下载{transferStageLabels[stage]}更新模板</button>
  <label className="btn btn-ghost" htmlFor="transfer-update-file">导入{transferStageLabels[stage]}更新</label><input hidden id="transfer-update-file" type="file" accept=".xlsx" disabled={reading||action.disabled} onChange={e=>{void upload(e.target.files?.[0]);e.target.value='';}}/></div>
- <p>升级中数量＋累计升级完数量≤实际清点数量≤退仓数量。减少累计完成量时，在模板“扣回明细”中逐批填写扣回数量。</p>
+ <p>升级中数量＋累计升级完数量≤实际清点数量≤退仓数量。减少累计完成量时，在下面的导入确认页逐单指定原入库批次和扣回数量；仓库固定为Aster海外仓。</p>
  {notice&&<p role="status">{notice}</p>}{action.error&&<p role="alert" className="dialog-error">{action.error}</p>}
  {action.uncertain&&<button className="btn btn-primary" disabled={action.busy} onClick={()=>void action.perform()}>重试确认</button>}
- {preview&&<><div role="alert" className="dialog-error">{preview.errors.map((e,i)=><p key={i}>{e.message}</p>)}</div><div className="table-wrap scroll-x"><table className="data-table" aria-label="转仓更新预览"><thead><tr><th>模板行</th><th>转仓单号</th><th>本次更新</th><th>库存变化</th><th>指定扣回</th><th>更新后状况</th></tr></thead><tbody>{preview.rows.map(r=><tr key={r.sourceRow}><td>{r.sourceRow}</td><td>{r.data.documentNo}</td><td>{TRANSFER_UPGRADE_FIELDS.filter(([key])=>r.before[key]!==r.after[key]).map(([key,label])=><div key={key}>{label}：{r.before[key]===''?'未填':r.before[key]} → {r.after[key]===''?'未填':r.after[key]}</div>)}</td><td>{r.quantityDelta}</td><td>{r.data.reversals.map(b=><div key={b.batchKey}>{b.batchKey}：{b.quantity}</div>)}</td><td>{r.after.status}</td></tr>)}</tbody></table></div><button className="btn btn-primary" disabled={action.disabled||reading||!preview.previewToken||preview.errors.length>0} onClick={()=>{const payload={previewToken:preview.previewToken,fileName:preview.fileName,fileHash:preview.fileSha256,templateHash:preview.templateSha256,rows:preview.rows,requestId:createRequestId('transfer-update')};void action.perform({execute:()=>importTransferUpdate(role,stage,payload),message:'已保存 '+preview.rows.length+' 条转仓升级更新。'});}}>确认更新转仓升级</button></>}
+ {preview&&<><p>本次更新 {preview.rows.length} 单，未修改 {preview.unchangedCount} 单。{!preview.rows.length&&!preview.errors.length?'没有字段变化，无需提交。':''}</p><div role="alert" className="dialog-error">{preview.errors.map((e,i)=><p key={i}>{e.message}</p>)}</div><div className="table-wrap scroll-x"><table className="data-table" aria-label="转仓更新预览"><thead><tr><th>模板行</th><th>转仓单号</th><th>本次更新</th><th>库存变化</th><th>指定扣回</th><th>更新后状况</th></tr></thead><tbody>{preview.rows.map(r=><tr key={r.sourceRow}><td>{r.sourceRow}</td><td>{r.data.documentNo}</td><td>{TRANSFER_UPGRADE_FIELDS.filter(([key])=>r.before[key]!==r.after[key]).map(([key,label])=><div key={key}>{label}：{r.before[key]===''?'未填':r.before[key]} → {r.after[key]===''?'未填':r.after[key]}</div>)}</td><td>{r.quantityDelta}</td><td>{r.quantityDelta<0?<><p>本次需扣回 {-r.quantityDelta} 套</p>{r.receiptBatches.filter(b=>b.quantity>0).map(b=><label className="field" key={b.batchKey}><span>{b.batchKey} · 版本 {b.version} · {b.warehouse} · 有效入库 {b.quantity} · 当前锁定 {b.locked} · {b.issue||'无占用'}</span><input aria-label={r.data.documentNo+' 扣回 '+b.batchKey} type="number" min="0" step="1" max={b.quantity} disabled={action.disabled||!!b.issue} value={reversalDrafts[r.data.documentNo]?.[b.batchKey]??''} onChange={e=>setReversalDrafts(current=>({...current,[r.data.documentNo]:{...current[r.data.documentNo],[b.batchKey]:e.target.value}}))}/></label>)}{reversalError(r)&&<p role="alert">{reversalError(r)}</p>}</>:'—'}</td><td>{r.after.status}</td></tr>)}</tbody></table></div><button className="btn btn-primary" disabled={action.disabled||reading||!preview.previewToken||preview.errors.length>0||preview.rows.some(r=>!!reversalError(r))} onClick={()=>{const payload={previewToken:preview.previewToken,fileName:preview.fileName,fileHash:preview.fileSha256,templateHash:preview.templateSha256,rows:preview.rows,reversalsByDocument:Object.fromEntries(preview.rows.filter(r=>r.quantityDelta<0).map(r=>[r.data.documentNo,reversalsFor(r.data.documentNo)])),requestId:createRequestId('transfer-update')};void action.perform({execute:()=>importTransferUpdate(role,stage,payload),message:'已保存 '+preview.rows.length+' 条转仓升级更新。'});}}>确认更新转仓升级</button></>}
  </Panel>;
 }

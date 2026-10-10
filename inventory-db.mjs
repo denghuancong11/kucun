@@ -5656,7 +5656,7 @@ export class InventoryDatabase {
     });
   }
 
-  validateTransferUpdate(item, stage) {
+  validateTransferUpdate(item, stage, {preview=false} = {}) {
     const input=item.data,row=this.db.prepare('SELECT * FROM transfer_upgrade_rows WHERE document_no=?').get(input.documentNo);
     const fail=(field,message,status=422)=>{throw new BusinessError(status,'transfer_update_invalid','工作表“转仓升级”第 '+item.sourceRow+' 行，转仓单号 '+(input.documentNo||'未填写')+'，“'+field+'”：'+message);};
     if(!row)fail('转仓单号','找不到原记录，不能通过更新新增转仓单');
@@ -5684,7 +5684,7 @@ export class InventoryDatabase {
       const model=this.getModel(before.model);if(!model||!['硒鼓','墨盒'].includes(model.category))fail('型号','型号 '+before.model+' 的库存目录或类目未确定，请先核对，不能自动猜测或新建');
     }
     const receipts=new Map(this.transferReceiptBatches(row.id).map(x=>[x.batchKey,x]));
-    if(delta<0) {
+    if(delta<0 && !preview) {
       if(new Set(reversals.map(x=>x.batchKey)).size!==reversals.length || reversals.some(x=>!Number.isSafeInteger(x.quantity)||x.quantity<=0) || reversals.reduce((sum,x)=>sum+x.quantity,0)!==-delta)fail('扣回数量','各批扣回数量合计须等于减少量 '+(-delta));
       for(const x of reversals){const receipt=receipts.get(x.batchKey);if(!receipt||x.quantity>receipt.quantity)fail('扣回入库批次',x.batchKey+' 不属于本单或超过其有效入库量');if(receipt.issue)fail('扣回入库批次',x.batchKey+'：'+receipt.issue,409);}
     }else if(reversals.length)fail('扣回数量','累计量未减少，不应填写扣回数量');
@@ -5692,13 +5692,14 @@ export class InventoryDatabase {
     return {row,before,after,delta,receipts,reversals};
   }
 
-  updateTransferUpgrades({role,stage,previewToken,fileName,fileHash,templateHash,rows,requestId}) {
+  updateTransferUpgrades({role,stage,previewToken,fileName,fileHash,templateHash,rows,reversalsByDocument={},requestId}) {
     if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
-    return this.idempotent('transfer-upgrade:update',requestId,{role,stage,previewToken,fileName,fileHash,templateHash,rows},()=>{
+    return this.idempotent('transfer-upgrade:update',requestId,{role,stage,previewToken,fileName,fileHash,templateHash,rows,reversalsByDocument},()=>{
       const proof=this.consumeTransitPreviewToken({kind:'transfer_update',role,token:previewToken,fileName,fileHash,templateHash,rows});
       const updates=proof.snapshot.rows;
       if(new Set(updates.map(x=>x.data.documentNo)).size!==updates.length)throw new BusinessError(422,'transfer_duplicate_update','同一转仓单在一次更新中只能有一行');
-      const checked=updates.map(x=>this.validateTransferUpdate(x,stage)),at=new Date().toISOString();
+      if(Object.keys(reversalsByDocument).some(no=>!updates.some(x=>x.data.documentNo===no)))throw new BusinessError(422,'transfer_reversal_document','扣回资料中的转仓单号不在本次更新内');
+      const checked=updates.map(x=>this.validateTransferUpdate({...x,data:{...x.data,reversals:reversalsByDocument[x.data.documentNo]??[]}},stage)),at=new Date().toISOString();
       for(const {row,before,after,delta,receipts,reversals} of checked){
         const eventId=this.addEvent(null,'transfer_upgrade_update',role,at,null,{transferId:row.id,transferNo:row.document_no,stage,model:before.model,category:this.getModel(before.model)?.category,before,after,quantity:Math.abs(delta),onHandDelta:delta,lockedDelta:0,reversals,fileName:proof.stored.file_name,fileHash:proof.stored.file_sha256,sourceRow:updates.find(x=>x.data.documentNo===row.document_no).sourceRow,requestId});
         if(delta>0){
