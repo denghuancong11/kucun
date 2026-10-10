@@ -9,8 +9,9 @@ export interface AllocationBatchContext {
   key: string; model: string; category: Category; quantity: number; plan: string; date: string; version: string; fnsku: string; packPerBox?: string | null;
 }
 type Failure = { error: string; code?: string; status?: number } | null;
-export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEntry}: {
+export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEntry, onRefresh}: {
   batch: AllocationBatchContext; totals: AllocationBatchTotals; role: Role; actionsAllowed: boolean; busy: boolean;
+  onRefresh: () => Promise<unknown>;
   onEntry: (batch: AllocationBatchContext, entry: AllocationEntry) => Promise<Failure>;
 }) {
   const group = operationGroups[role];
@@ -37,9 +38,10 @@ export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEn
     return "";
   };
   const quantityError = packError || (quantityTouched ? validateQuantity(quantity) : "");
-  const action = useBusinessAction(async () => {}, text => { setMessage(text); setQuantity(""); setQuantityTouched(false); setQuantityRequestError(false); });
+  const action = useBusinessAction(onRefresh, text => { setMessage(text); setQuantity(""); setQuantityTouched(false); setQuantityRequestError(false); });
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setMessage('');
     setQuantityTouched(true);
     if (validateQuantity(quantity)) return;
     if (!storeValid) return;
@@ -50,7 +52,7 @@ export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEn
         setQuantityRequestError(["invalid_quantity", "allocation_quantity_multiple", "insufficient_available"].includes(failure.code ?? ""));
         throw Object.assign(new Error(failure.error), {status:failure.status, code:failure.code});
       }
-    }, message:"已预锁定库存，等待商务审核。可在审批中心查看进度。" });
+    }, message:batch.model+" · "+batch.plan+"：已预锁定库存，等待商务审核。可在审批中心查看进度。" });
   };
   return <div className="allocation-panel">
     <div className="approval-quantities"><span>在库 <strong>{formatNumber(totals.onHand)}</strong></span><span>预锁定 <strong>{formatNumber(totals.locked)}</strong></span><span>可用 <strong>{formatNumber(totals.available)}</strong></span></div>
@@ -62,9 +64,9 @@ export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEn
       <label className="field"><span>已贴 FNSKU</span><input required value={fnsku} disabled={busy || action.disabled} onChange={event => setFnsku(event.target.value)} /></label>
       <label className="field"><span>ASIN（必填）</span><input required value={asin} disabled={busy || action.disabled} onChange={event => setAsin(event.target.value)} /></label>
       <label className="field"><span>运营备注（选填）</span><input value={note} disabled={busy || action.disabled} onChange={event => setNote(event.target.value)} /></label>
-      <button className="btn btn-primary" type="submit" disabled={busy || action.disabled || Boolean(quantityError)}>录入并预锁定</button>
+      <button className="btn btn-primary" type="submit" disabled={busy || action.disabled || Boolean(quantityError)}>{action.busy ? "正在提交…" : "录入并预锁定"}</button>
     </form>}
     {message && <p role="status">{message}</p>}{action.error && <p className="dialog-error" role="alert">{action.error}</p>}
-    {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>重试确认</button>}
+    {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
   </div>;
 }

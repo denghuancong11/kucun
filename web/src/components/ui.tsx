@@ -251,3 +251,23 @@ export function Segmented<T extends string>({
     </div>
   );
 }
+
+/* 仅用于用户触发的读取和下载；业务写入继续使用原请求确认机制。 */
+export function FeedbackButton({label, pendingLabel, doneLabel, onAction, successText, onResult, disabled=false, className="btn btn-ghost"}: {
+  label:string; pendingLabel:string; doneLabel:string; onAction:()=>Promise<unknown>; successText?:string;
+  onResult?:(notice:NoticeMessage)=>void; disabled?:boolean; className?:string;
+}) {
+  const [state,setState]=useState<'idle'|'busy'|'done'>('idle');
+  const [error,setError]=useState('');
+  const running=useRef(false);
+  const run=async()=>{
+    if(running.current||disabled)return;
+    running.current=true;setState('busy');setError('');
+    try { await onAction();setState('done');onResult?.({kind:'success',text:successText??label+'：'+doneLabel}); }
+    catch(cause){const text=label+'失败：'+(cause instanceof Error?cause.message:String(cause));setState('idle');setError(text);onResult?.({kind:'error',text});}
+    finally {running.current=false;}
+  };
+  return <><button type="button" className={className} aria-label={label} aria-busy={state==='busy'} disabled={disabled||state==='busy'} onClick={()=>void run()}>{state==='busy'?pendingLabel:state==='done'?doneLabel:label}</button>
+    {error&&!onResult&&<span className="field-error" role="alert">{error}</span>}
+    {state==='done'&&successText&&!onResult&&<span className="form-hint" role="status">{successText}</span>}</>;
+}

@@ -12,7 +12,7 @@ export function useApprovals(role: Role) {
 
   const refresh = () => Promise.all(
     ["approvals", "allocations", "inventory", "upgrades", "audit"].map((key) =>
-      queryClient.invalidateQueries({ queryKey: [key] })),
+      queryClient.invalidateQueries({ queryKey: [key] }, {throwOnError:true})),
   );
   return { ...query, refresh };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
+import { type ApiError, applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
 import { TransferUpgradeImport } from "../components/TransferUpgrade";
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
@@ -13,6 +13,7 @@ export function Requirement3View({ role }: { role: Role }) {
   const [preview, setPreview] = useState<TransitImportPreview | null>(null);
   const [statusPreview, setStatusPreview] = useState<TransitStatusPreview | null>(null);
   const [busy, setBusy] = useState<"preview" | "import" | "status-preview" | "status-apply" | null>(null);
+  const [uncertainImport,setUncertainImport]=useState(false),[uncertainStatus,setUncertainStatus]=useState(false);
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const statusFileInput = useRef<HTMLInputElement>(null);
@@ -92,9 +93,11 @@ export function Requirement3View({ role }: { role: Role }) {
       statusRequestRef.current = null;
       setStatusPreview(null);
       setNotice({ kind: "success", text: `已处理 ${result.processedPlanCount} 个计划，更新 ${result.updatedDetailCount} 条在途记录，${result.unmatchedPlanCount} 个计划未匹配。` });
-      await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }), queryClient.invalidateQueries({ queryKey: ["audit"] })]);
+      setUncertainStatus(false);
+      try { await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, {throwOnError:true}), queryClient.invalidateQueries({ queryKey: ["audit"] }, {throwOnError:true})]); }
+      catch(error) {setNotice({kind:"warning",text:"物流更新已保存，但页面刷新失败："+(error instanceof Error?error.message:String(error))+" 无需重复提交。"});}
     } catch (error) {
-      if (isCurrentContext(generation)) { setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
+      if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainStatus(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 请重试确认本次物流更新。":"") }); }
     } finally { if (isCurrentContext(generation)) setBusy(null); }
   };
 
@@ -120,19 +123,20 @@ export function Requirement3View({ role }: { role: Role }) {
       try {
         result = await importTransit(role, { ...requestPayload, requestId });
       } catch (error) {
-        if (isCurrentContext(generation)) { setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
+        if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainImport(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 请重试确认本次导入。":"") }); }
         return;
       }
       if (!isCurrentContext(generation)) return;
+      setUncertainImport(false);
       setNotice({ kind: "success", text: `已导入 ${result.rowCount} 条在途记录。` });
       setPreview(null); 
       importRequestRef.current = null;
       try {
-        await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }), queryClient.invalidateQueries({ queryKey: ["audit"] })]);
+        await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, {throwOnError:true}), queryClient.invalidateQueries({ queryKey: ["audit"] }, {throwOnError:true})]);
       } catch (error) {
         if (isCurrentContext(generation)) {
           const message = error instanceof Error ? error.message : String(error);
-          setNotice({ kind: "warning", text: `导入已成功，但库存刷新失败：${message}` });
+          setNotice({ kind: "warning", text: `在途导入已保存，但页面刷新失败：${message}` });
         }
       }
     } finally {
@@ -146,16 +150,16 @@ export function Requirement3View({ role }: { role: Role }) {
     <div className="transit-page">
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
       {transitAccess && <TransferUpgradeImport key={role} role={role}>
-        <label className="btn btn-primary" htmlFor="transit-import-file">{busy === "preview" ? "读取中…" : "导入在途表格"}</label>
-        <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
-        <label className="btn btn-ghost" htmlFor="transit-status-file">{busy === "status-preview" ? "读取中…" : "导入更新物流表格"}</label>
-        <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
+        <label className="btn btn-primary" htmlFor="transit-import-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "preview" ? "正在预览…" : "导入在途表格"}</label>
+        <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
+        <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入更新物流表格"}</label>
+        <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
       </TransferUpgradeImport>}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
         <div className="transit-status-header">
           <div>
-            <h2 id="transit-status-title">物流状态更新</h2>
+            <h2 id="transit-status-title">物流状态更新</h2><p>预览已读取，尚未保存。</p>
           </div>
 
         </div>
@@ -192,14 +196,14 @@ export function Requirement3View({ role }: { role: Role }) {
                 </tr>)}</tbody>
             </table>
           </div>
-          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "更新中…" : "确认更新物流"}</button></div>
+          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "正在更新…" : uncertainStatus?"重试确认":"确认更新物流"}</button></div>
         </div>}
       </section>}
 
 
-      {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
+      {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>预览已读取，尚未导入。</p><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
         <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
-      <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "导入中…" : "确认导入"}</button></div></section>}
+      <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "正在导入…" : uncertainImport?"重试确认":"确认导入"}</button></div></section>}
       {!preview && !statusPreview && !notice && <EmptyState title="选择表格开始导入" hint="XLSX / CSV" />}
     </div>
   );

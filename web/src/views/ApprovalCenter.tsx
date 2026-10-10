@@ -3,7 +3,7 @@ import { clearInquiryDisplay, confirmAllocation, downloadInquiryExport, formatNu
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
 import { InquiryFulfillment, InquiryProcurementCells } from "../components/InquiryFulfillment";
-import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
+import { Badge, displayTime, EmptyState, FeedbackButton, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { useApprovals } from "../hooks/useApprovals";
 import { useInventoryCatalog } from "../hooks/useInventory";
@@ -95,12 +95,14 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     : !Number.isInteger(Number(quantity)) || Number(quantity) <= 0 ? `来源批次套/箱为 ${packPerBox}，审核数量请填写大于 0 的整数，且须为 ${packPerBox} 的整数倍。`
     : Number(quantity) % packPerBox !== 0 ? `来源批次套/箱为 ${packPerBox}，审核数量须为 ${packPerBox} 的整数倍。` : "";
   const { perform, busy, uncertain, error, setError } = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
+  const [reviewing,setReviewing]=useState<"approve"|"reject">("approve");
   const needsReview = item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "approved" && item.record.approvalStatus !== "rejected" : item.record.status === "pending_business";
   const review = (decision: "approve" | "reject") => {
     const approvedQuantity = Number(quantity);
     if (decision === "approve" && quantityError) return;
     if (decision === "approve" && (!Number.isInteger(approvedQuantity) || approvedQuantity <= 0)) { setError("审核数量请填写大于 0 的整数"); return; }
     const payload = { decision, ...(decision === "approve" ? { approvedQuantity } : {}), businessNote: businessNote.trim(), expectedRevision: row.revision, requestId: createRequestId(`${item.kind}-review`) };
+    setReviewing(decision);
     setQuantityRequestError(false);
     void perform({ execute: async () => {
       try { return await (item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload)); }
@@ -137,14 +139,14 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
         {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.documentNo}`}>{item.record.packPerBox || "—"}</output></label>}
         <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
         <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
-        <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>批准</button>
-        <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>拒绝</button>
+        <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>{busy&&reviewing==="approve"?"正在批准…":"批准"}</button>
+        <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>{busy&&reviewing==="reject"?"正在拒绝…":"拒绝"}</button>
       </form>}
-      {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId), message: `${row.documentNo} 已确认调拨。` }); }}>确认调拨完成</button>}
+      {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId), message: `${row.documentNo} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
       {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
       {role === "business" && needsReview && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {error && <p className="dialog-error" role="alert">{error}</p>}
-      {uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void perform()}>重试确认</button>}
+      {uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void perform()}>{busy?"正在确认…":"重试确认"}</button>}
     </div></td></tr>
   </tbody>;
 }
@@ -159,7 +161,6 @@ export function ApprovalCenterView({ role }: { role: Role }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
-  const [exporting, setExporting] = useState(false);
   const clearAction = useBusinessAction(query.refresh, text => setNotice({ kind: "success", text }));
   const clearInquiries = () => {
     const requestId = createRequestId();
@@ -168,15 +169,6 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       action.message = result.hiddenCount > 0 ? `已从审批中心隐藏 ${result.hiddenCount} 条已完成或已拒绝的询库。` : "没有需要清空的已完成或已拒绝询库。";
     } };
     void clearAction.perform(action);
-  };
-  const exportInquiries = async () => {
-    setExporting(true);
-    try {
-      await downloadInquiryExport(role, { type, category, scope, progress, search });
-      setNotice({ kind: "success", text: "已导出当前筛选的询库明细（已保存数据）。" });
-    } catch (failure) {
-      setNotice({ kind: "error", text: failure instanceof Error ? failure.message : "询库导出失败，请重试。" });
-    } finally { setExporting(false); }
   };
   const documentColumns = approvalDocumentColumns(role);
   const documentMinWidth = documentColumns.reduce((total, column) => total + column.width, 100);
@@ -199,11 +191,11 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
       <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions">{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "导出中…" : "导出询库"}</button>}{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <button className="btn btn-ghost" type="button" disabled={clearAction.disabled} onClick={clearInquiries}>询库数据流-手动清空</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    </div><div className="page-actions">{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <FeedbackButton key={JSON.stringify([type,category,scope,progress,search])} label="导出询库" pendingLabel="正在导出…" doneLabel="导出完成" onAction={()=>downloadInquiryExport(role,{type,category,scope,progress,search})} successText="询库明细已完整接收并触发下载（当前筛选的已保存数据）。"/>}{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <button className="btn btn-ghost" type="button" disabled={clearAction.disabled} onClick={clearInquiries}>{clearAction.busy?"正在清空…":"询库数据流-手动清空"}</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><FeedbackButton key={"refresh-"+JSON.stringify([type,category,scope,progress,search])} label="刷新" pendingLabel="正在刷新…" doneLabel="刷新完成" onAction={query.refresh}/></div></div>
     {(role === "admin" || ["purchasing", "logistics"].includes(role)) && <p className="muted">手动清空为全局操作：隐藏全部硒鼓、墨盒中已完成或已拒绝的询库，不受当前筛选影响；保留原记录及升级库存来源。</p>}
     {clearAction.error && <p className="dialog-error" role="alert">{clearAction.error}</p>}
-    {clearAction.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={clearAction.busy} onClick={() => void clearAction.perform()}>重试确认</button>}
-    {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}
+    {clearAction.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={clearAction.busy} onClick={() => void clearAction.perform()}>{clearAction.busy?"正在确认…":"重试确认"}</button>}
+    {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<FeedbackButton label="重新加载" pendingLabel="正在刷新…" doneLabel="刷新完成" className="btn btn-ghost btn-sm" onAction={()=>query.refetch({throwOnError:true})} onResult={setNotice}/></div>}
     {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
       <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>
       <thead><tr><th aria-label="展开或收起型号" />{["型号", "在库库存", "申请数量合计", "商务审核数量合计"].map(label => <th key={label}>{label}</th>)}</tr></thead>

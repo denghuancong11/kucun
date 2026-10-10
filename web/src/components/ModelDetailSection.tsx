@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { useBusinessAction } from "../hooks/useBusinessAction";
 import { formatNumber } from "../api";
 import { TRANSIT_SHELF_ROLES } from "../types";
 import type {
@@ -10,6 +11,7 @@ import type {
   RolePermissions,
   StockDetail,
   TransitDetail,
+  NoticeMessage,
 } from "../types";
 import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel";
 import { Icon } from "./Icon";
@@ -41,7 +43,10 @@ interface CommonProps {
     batch: AllocationBatchContext,
     entry: AllocationEntry,
   ) => Promise<{ error: string; code?: string; status?: number } | null>;
-  onShelf: (row: TransitDetail) => Promise<string | null>;
+  onShelf: (row: TransitDetail) => Promise<{record:{status:string}}>;
+  onShelfRefresh: (row: TransitDetail) => Promise<unknown>;
+  onAllocationRefresh: () => Promise<unknown>;
+  onNotice: (notice: NoticeMessage) => void;
 }
 
 /* 明细合计行：数量落在件数列下，说明并入同一行，超/欠差异整行转红。 */
@@ -78,6 +83,7 @@ function StockPane({
   activeBatchKey,
   onSelectBatchKey,
   onEntry,
+  onAllocationRefresh,
 }: CommonProps) {
   if (stockRows.length === 0) {
     return (
@@ -201,6 +207,7 @@ function StockPane({
                           actionsAllowed={perm.actions}
                           busy={allocBusy}
                           onEntry={onEntry}
+                          onRefresh={onAllocationRefresh}
                         />
                       </td>
                     </tr>
@@ -258,17 +265,26 @@ function StockPane({
   );
 }
 
-function TransitPane({ model, transitRows, perm, role, onShelf }: CommonProps) {
-  const [busy, setBusy] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+function TransitShelfAction({row,role,perm,onShelf,onShelfRefresh,onNotice}: Pick<CommonProps,'role'|'perm'|'onShelf'|'onShelfRefresh'|'onNotice'> & {row:TransitDetail}) {
+  const [saved,setSaved]=useState(false);
+  const message=row.plan+' · '+row.fnsku+'：'+(row.shippingMethod==='直发FBA'?'直发FBA已确认归档，未增加本地在库库存。':'已确认上架入库。');
+  const action=useBusinessAction(()=>onShelfRefresh(row),text=>onNotice({kind:'success',text}));
+  const allowed=TRANSIT_SHELF_ROLE_SET.has(role)&&(!operationGroups[role]||row.team===operationGroups[role])&&perm.actions&&!row.isLegacyPlaceholder;
+  const submit=()=>action.perform({execute:async()=>{const result=await onShelf(row);setSaved(result.record.status==='on_shelf');},message});
+  return <>
+    {action.busy?<button className="btn btn-primary btn-sm" disabled>正在处理…</button>:action.uncertain?<button className="btn btn-primary btn-sm" onClick={()=>void action.perform()}>重试确认</button>
+      :row.statusCode==='on_shelf'||saved?<Badge label={row.shippingMethod==='直发FBA'?'已确认':'已上架'} tone="green"/>
+      :allowed&&row.statusCode==='in_transit'?<button className="btn btn-primary btn-sm" onClick={()=>void submit()}>{row.shippingMethod==='直发FBA'?'yes':'确认上架'}</button>:<span>{row.onShelf}</span>}
+    {action.error&&<p className="dialog-error" role="alert">{row.plan}：{action.error}</p>}
+  </>;
+}
+
+function TransitPane(props: CommonProps) {
+  const {model,transitRows,perm}=props;
   return <div className="detail-pane pane-transit"><div className="table-wrap scroll-x"><table className="data-table sub">
     <thead><tr><th>在途件数</th>{perm.detail && <><th>套/箱</th><th>发货计划号</th><th>发货时间</th><th>版本号</th><th>已贴 FNSKU</th><th>发货方式</th><th>团队</th><th>物流状态</th></>}<th>是否上架</th></tr></thead>
-    <tbody>{transitRows.map(row => <tr key={row.id}><td>{formatNumber(row.quantity)}</td>{perm.detail && <><td>{row.packPerBox || "—"}</td><td>{row.plan}</td><td>{row.date}</td><td>{row.version}</td><td>{row.fnsku}</td><td>{row.shippingMethod}</td><td>{row.team}</td><td>{row.status}</td></>}<td>
-      {TRANSIT_SHELF_ROLE_SET.has(role) && (!operationGroups[role] || row.team === operationGroups[role]) && perm.actions && row.statusCode === "in_transit" && !row.isLegacyPlaceholder ? <button className="btn btn-primary btn-sm" disabled={busy !== null} onClick={async () => {
-        setBusy(row.id); setError(null); const failure = await onShelf(row); setBusy(null); if (failure) setError(failure);
-      }}>{busy === row.id ? "提交中…" : row.shippingMethod === "直发FBA" ? "yes" : "确认上架"}</button> : row.statusCode === "on_shelf" && row.shippingMethod === "直发FBA" ? null : <span>{row.onShelf}</span>}
-    </td></tr>)}<SubtotalRow sum={transitRows.reduce((sum,row) => sum + row.quantity,0)} reference={model.inTransit} referenceLabel="在途库存" span={perm.detail ? 9 : 1} /></tbody>
-  </table></div>{error && <p className="dialog-error" role="alert">{error}</p>}</div>;
+    <tbody>{transitRows.map(row => <tr key={row.id}><td>{formatNumber(row.quantity)}</td>{perm.detail && <><td>{row.packPerBox || "—"}</td><td>{row.plan}</td><td>{row.date}</td><td>{row.version}</td><td>{row.fnsku}</td><td>{row.shippingMethod}</td><td>{row.team}</td><td>{row.status}</td></>}<td><TransitShelfAction {...props} row={row}/></td></tr>)}<SubtotalRow sum={transitRows.reduce((sum,row) => sum + row.quantity,0)} reference={model.inTransit} referenceLabel="在途库存" span={perm.detail ? 9 : 1} /></tbody>
+  </table></div></div>;
 }
 
 /* 型号下钻区：在库批次（可继续展开到调拨行）与在途明细两个分段。

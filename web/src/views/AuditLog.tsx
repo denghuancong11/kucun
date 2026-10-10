@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useRef, useState, type FormEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchAuditLog, formatNumber } from "../api";
 import { Icon } from "../components/Icon";
 import { Panel, displayTime } from "../components/ui";
@@ -93,6 +93,8 @@ function SignedDelta({ value }: { value: number }) {
 }
 
 export function AuditLogView({ role }: { role: Role }) {
+  const client=useQueryClient(),running=useRef(false);
+  const [querying,setQuerying]=useState(false),[queryDone,setQueryDone]=useState('');
   const [detail, setDetail] = useState<AuditRecord | null>(null);
   const [action, setAction] = useState<VisibleAuditAction>("entry");
   const [draftFilters, setDraftFilters] = useState<AuditFilters>(emptyFilters);
@@ -107,19 +109,24 @@ export function AuditLogView({ role }: { role: Role }) {
   const hasFilters = Object.values(filters).some(Boolean);
 
 
-  const submitQuery = (event: FormEvent) => {
+  const submitQuery = async (event: FormEvent) => {
     event.preventDefault();
+    if(running.current)return;
+    setQueryDone('');
     if (draftFilters.from && draftFilters.to && draftFilters.from > draftFilters.to) {
-      setQueryError("开始日期不能晚于结束日期");
-      return;
+      setQueryError("开始日期不能晚于结束日期");return;
     }
-    setQueryError(null);
     const next = { model: draftFilters.model.trim(), from: draftFilters.from, to: draftFilters.to };
-    if (next.model === filters.model && next.from === filters.from && next.to === filters.to) void query.refetch();
-    else setFilters(next);
+    running.current=true;setQuerying(true);setQueryError(null);
+    try {
+      const result=await client.fetchQuery({queryKey:["audit",role,action,next],queryFn:()=>fetchAuditLog(role,{action,...next,limit:200}),staleTime:0});
+      setFilters(next);setQueryDone('查询完成：'+selectedMeta.label+'，共 '+result.records.length+' 条。');
+    } catch(failure){setQueryError(failure instanceof Error?failure.message:String(failure));}
+    finally{running.current=false;setQuerying(false);}
   };
 
   const clearQuery = () => {
+    setQueryDone('');
     setDraftFilters(emptyFilters);
     setFilters(emptyFilters);
     setQueryError(null);
@@ -127,17 +134,18 @@ export function AuditLogView({ role }: { role: Role }) {
 
   return (
     <Panel className="audit-panel">
-      <form className="audit-search" role="search" onSubmit={submitQuery}>
-        <label className="field"><span>操作分类</span><select aria-label="选择库存操作分类" value={action} onChange={event => setAction(event.target.value as VisibleAuditAction)}>{auditActions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-        <label className="field"><span>型号</span><input name="model" value={draftFilters.model} onChange={(event) => setDraftFilters((value) => ({ ...value, model: event.target.value }))} aria-label="按型号查询库存流水" placeholder="输入型号" /></label>
-        <label className="field"><span>开始日期</span><input name="from" type="date" value={draftFilters.from} onChange={(event) => setDraftFilters((value) => ({ ...value, from: event.target.value }))} aria-label="按开始日期查询库存流水" /></label>
-        <label className="field"><span>结束日期</span><input name="to" type="date" value={draftFilters.to} onChange={(event) => setDraftFilters((value) => ({ ...value, to: event.target.value }))} aria-label="按结束日期查询库存流水" /></label>
+      <form className="audit-search" role="search" onSubmit={event=>void submitQuery(event)}>
+        <label className="field"><span>操作分类</span><select aria-label="选择库存操作分类" value={action} disabled={querying} onChange={event => {setQueryDone('');setAction(event.target.value as VisibleAuditAction);}}>{auditActions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+        <label className="field"><span>型号</span><input name="model" value={draftFilters.model} disabled={querying} onChange={(event) => {setQueryDone('');setDraftFilters((value) => ({ ...value, model: event.target.value }));}} aria-label="按型号查询库存流水" placeholder="输入型号" /></label>
+        <label className="field"><span>开始日期</span><input name="from" type="date" value={draftFilters.from} disabled={querying} onChange={(event) => {setQueryDone('');setDraftFilters((value) => ({ ...value, from: event.target.value }));}} aria-label="按开始日期查询库存流水" /></label>
+        <label className="field"><span>结束日期</span><input name="to" type="date" value={draftFilters.to} disabled={querying} onChange={(event) => {setQueryDone('');setDraftFilters((value) => ({ ...value, to: event.target.value }));}} aria-label="按结束日期查询库存流水" /></label>
         <div className="audit-search-actions">
-          <button type="submit" className="btn btn-primary" disabled={loading}><Icon name="search" size={13} />查询</button>
-          <button type="button" className="btn btn-ghost" disabled={loading || (!Object.values(draftFilters).some(Boolean) && !hasFilters)} onClick={clearQuery}>清空</button>
+          <button type="submit" className="btn btn-primary" aria-label="查询" disabled={loading||querying}><Icon name="search" size={13} />{querying?"正在查询…":queryDone?"查询完成":"查询"}</button>
+          <button type="button" className="btn btn-ghost" disabled={loading || querying || (!Object.values(draftFilters).some(Boolean) && !hasFilters)} onClick={clearQuery}>清空</button>
         </div>
       </form>
 
+      {queryDone && <p role="status">{queryDone}</p>}
       {queryError && <div className="audit-query-error" role="alert">{queryError}</div>}
 
       {loading && (

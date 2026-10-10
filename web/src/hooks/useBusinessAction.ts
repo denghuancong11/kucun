@@ -17,7 +17,7 @@ export function useBusinessAction(onRefresh: () => Promise<unknown>, onSuccess: 
       await request.execute();
       pending.current = null; setUncertain(false);
       let message = request.message;
-      try { await onRefresh(); } catch { message += " 页面刷新失败，请刷新查看。"; }
+      try { await onRefresh(); } catch (failure) { message += " 已保存，但页面刷新失败：" + (failure instanceof Error ? failure.message : String(failure)) + " 请刷新查看，无需重复提交。"; }
       onSuccess(message);
     } catch (failure) {
       const e = failure as ApiError;

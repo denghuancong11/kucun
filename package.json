@@ -44,6 +44,7 @@
     "test:transfer-upgrade": "node scripts/verify-transfer-upgrade.mjs && node web/scripts/transfer-upgrade-page-check.mjs",
     "test:relocation-waybills": "node scripts/verify-relocation-waybills.mjs",
     "test:relocation-workflow": "node scripts/verify-relocation-workflow.mjs && node scripts/verify-relocation-migration.mjs",
-    "test:transfer-workflow": "node scripts/verify-transfer-workflow.mjs && node scripts/verify-transfer-workflow-migration.mjs"
+    "test:transfer-workflow": "node scripts/verify-transfer-workflow.mjs && node scripts/verify-transfer-workflow-migration.mjs",
+    "test:button-feedback": "node web/scripts/button-feedback-page-check.mjs && node web/scripts/yes-feedback-page-check.mjs"
   }
 }

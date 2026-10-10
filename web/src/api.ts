@@ -374,7 +374,7 @@ export function markTransitOnShelf(
   role: Role,
   id: number,
   payload: { expectedRevision: number; yes: string; requestId: string },
-): Promise<unknown> {
+): Promise<{record:{status:string}}> {
   return requestJson(`/api/transit/${id}/on-shelf`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },

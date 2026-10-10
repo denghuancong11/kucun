@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { confirmPendingBusinessRequest, fetchSync, readPendingBusinessRequests, type PendingBusinessRequest } from "../api";
 import type { Role } from "../types";
 
@@ -30,7 +30,8 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
   const [records, setRecords] = useState<PendingBusinessRequest[]>([]);
   const [otherRoles, setOtherRoles] = useState<Role[]>([]);
   const [databaseId, setDatabaseId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string|null>(null);
+  const running=useRef(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
     let cancelled = false;
@@ -49,11 +50,11 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
     return () => { cancelled = true; window.removeEventListener("aster-pending-business", update); window.removeEventListener("focus", sync); };
   }, [role, inherited]);
   const confirm = async (record: PendingBusinessRequest) => {
-    if (busy) return;
-    setBusy(true); setMessage("");
-    try { await confirmPendingBusinessRequest(record); setMessage("原提交结果已确认，请查看最新业务记录。"); }
+    if (running.current) return;
+    running.current=true;setBusy(record.requestId); setMessage("");
+    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+"：原提交结果已确认，请查看最新业务记录。"); }
     catch (failure) { setMessage((failure as Error).message); }
-    finally { setBusy(false); }
+    finally { running.current=false;setBusy(null); }
   };
   if (!records.length && !otherRoles.length && !message) return null;
   return <section className="pending-business" aria-label="待确认业务提交">
@@ -61,7 +62,7 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
     {records.length > 0 && <><strong>有提交尚未确认</strong><p>以下提交已保留原参数。请确认本次结果后，再办理新的同类操作。</p>
       {records.map(record => <div className="pending-business-row" key={record.requestId}>
         <span>{describe(record)}</span>
-        <button className="btn-primary" disabled={busy || !databaseId || databaseId !== record.databaseId} onClick={() => void confirm(record)}>{busy ? "正在确认…" : "确认本次提交"}</button>
+        <button className="btn-primary" disabled={!!busy || !databaseId || databaseId !== record.databaseId} onClick={() => void confirm(record)}>{busy===record.requestId ? "正在确认…" : "确认本次提交"}</button>
         {databaseId && databaseId !== record.databaseId && <span role="alert">当前数据库与原提交不一致，请先核对运行系统。</span>}
       </div>)}</>}
     {message && <p role="status">{message}</p>}

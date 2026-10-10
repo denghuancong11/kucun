@@ -4,12 +4,12 @@ import { Icon } from "../components/Icon";
 import { InventoryTable, type ModelRow, type SortField, type SortOrder } from "../components/InventoryTable";
 import { ModelDetailSection, type DetailTab } from "../components/ModelDetailSection";
 import { SearchBox } from "../components/SearchBox";
-import { EmptyState, Panel, Segmented, SkeletonTable } from "../components/ui";
+import { EmptyState, FeedbackButton, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { useAllocations } from "../hooks/useAllocations";
 import { useInventoryCatalog } from "../hooks/useInventory";
 import { useEffectivePermissions } from "../hooks/usePermissions";
 import { useTransit } from "../hooks/useTransit";
-import type { AllocationEntry, Category, Role, RolePermissions, TransitDetail } from "../types";
+import type { AllocationEntry, Category, Role, RolePermissions, TransitDetail, NoticeMessage } from "../types";
 
 type CategoryFilter = "all" | Category;
 
@@ -48,6 +48,7 @@ export function Requirement1View({
 }: {
   role: Role;
 }) {
+  const [notice,setNotice]=useState<NoticeMessage|null>(null);
   const [urlCtx] = useState(readUrlContext);
   const [query, setQuery] = useState(urlCtx.query);
   const [keyword, setKeyword] = useState(urlCtx.query.trim().toLowerCase());
@@ -109,25 +110,17 @@ export function Requirement1View({
     data: alloc,
     isError: allocHasError,
     error: allocErrorObj,
-    createMutation,
+    createMutation, refresh: refreshAllocation,
   } = useAllocations(role, activeModelName, activePerm.summary && activePerm.detail && activePerm.expand);
   const { onShelfMutation } = useTransit(role);
 
 
   const allocBusy = createMutation.isPending || onShelfMutation.isPending;
 
-  const onShelfOne = async (row: TransitDetail): Promise<string | null> => {
-    try {
-      await onShelfMutation.mutateAsync({ id: row.id, expectedRevision: row.revision, yes: "YES", requestId: `transit-on-shelf-${row.id}-${row.revision}` });
-      /* 上架事务完成后先取得权威目录，普通海外仓再切到在库明细，直发FBA保留在途归档状态；
-         刷新失败时保留在途标签和现有错误反馈。 */
-      const refreshed = await refetchCatalog();
-      if (refreshed.error) return `已上架，但库存页面刷新失败：${refreshed.error.message} 请重新加载查看。`;
-      if (row.shippingMethod !== "直发FBA") setDetailTab("stock");
-      return null;
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
+  const onShelfOne = (row: TransitDetail) => onShelfMutation.mutateAsync({ id: row.id, expectedRevision: row.revision, yes: "YES", requestId: `transit-on-shelf-${row.id}-${row.revision}` });
+  const refreshShelf = async (row: TransitDetail) => {
+    await refetchCatalog({throwOnError:true});
+    if (row.shippingMethod !== "直发FBA") setDetailTab("stock");
   };
 
   // 输入防抖
@@ -272,6 +265,7 @@ export function Requirement1View({
 
   return (
     <Panel>
+      <Notice notice={notice} onClose={()=>setNotice(null)}/>
       <div className="filter-bar">
         <SearchBox
           query={query}
@@ -304,9 +298,7 @@ export function Requirement1View({
             <strong>权限信息加载失败</strong>
             <p>
               暂时无法查看明细或提交调拨，请重新加载权限。
-              <button type="button" className="link-btn" onClick={() => void refetchPerms()}>
-                重新加载
-              </button>
+              <FeedbackButton label="重新加载权限" pendingLabel="正在刷新…" doneLabel="刷新完成" className="link-btn" onAction={()=>refetchPerms({throwOnError:true})} onResult={setNotice}/>
             </p>
           </div>
         </div>
@@ -319,9 +311,7 @@ export function Requirement1View({
             <strong>库存数据加载失败</strong>
             <p>
               {catalogErrorObj instanceof Error ? catalogErrorObj.message : String(catalogErrorObj)}
-              <button type="button" className="link-btn" onClick={() => void refetchCatalog()}>
-                重新加载
-              </button>
+              <FeedbackButton label="重新加载库存" pendingLabel="正在刷新…" doneLabel="刷新完成" className="link-btn" onAction={()=>refetchCatalog({throwOnError:true})} onResult={setNotice}/>
             </p>
           </div>
         </div>
@@ -364,6 +354,9 @@ export function Requirement1View({
                 onTabChange={setDetailTab}
                 onEntry={submitEntry}
                 onShelf={onShelfOne}
+                onShelfRefresh={refreshShelf}
+                onNotice={setNotice}
+                onAllocationRefresh={refreshAllocation}
               />
             ) : null
           }

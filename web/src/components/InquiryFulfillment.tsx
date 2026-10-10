@@ -15,7 +15,7 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
   const archive = (event: FormEvent) => {
     event.preventDefault();
     const payload = { plan: plan.trim(), date, version: version.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-archive") };
-    void action.perform({ execute: () => archiveInquiry(role, row.id, payload), message: "发货资料已保存。" });
+    void action.perform({ execute: () => archiveInquiry(role, row.id, payload), message: row.documentNo + "：发货资料已保存，询库已归档。" });
   };
   const assistant = role === "assistant-1" || role === "assistant-2";
   const allowed = (row.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : assistant) && row.status === "pending_assistant";
@@ -27,10 +27,10 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
       <label className="field"><span>发货计划号</span><input required value={plan} disabled={action.disabled} onChange={event => setPlan(event.target.value)} /></label>
       <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={action.disabled} onChange={event => setDate(event.target.value)} /></label>
       <label className="field"><span>原版本号</span><input required value={version} disabled={action.disabled} onChange={event => setVersion(event.target.value)} /></label>
-      <button className="btn btn-primary" type="submit" disabled={action.disabled}>提交</button>
+      <button className="btn btn-primary" type="submit" disabled={action.disabled}>{action.busy ? "正在归档…" : "提交"}</button>
     </form>}
     {action.error && <p className="dialog-error" role="alert">{action.error}</p>}
-    {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>重试确认</button>}
+    {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
     <div className="dialog-actions"><button type="button" className="btn btn-ghost" disabled={action.disabled} onClick={() => setOpen(false)}>取消</button></div>
     </div></div>}
   </div>;
@@ -54,7 +54,7 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
     event.preventDefault(); setAttempted(true);
     if (!quantity.trim() || quantityError || !["CA", "SC"].includes(warehouse)) return;
     const payload = { supplierQuantity: Number(quantity), shippingWarehouse: warehouse, procurementNote: note.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-reply") };
-    void action.perform({ execute: () => replyInquiry(role, row.id, payload), message: `已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
+    void action.perform({ execute: () => replyInquiry(role, row.id, payload), message: `${row.documentNo} 已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
   };
   return <>
     <td className="approval-procurement-cell" data-field="供应商库存回复">{editable
@@ -66,11 +66,11 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
     <td className="approval-procurement-cell" data-field="采购备注" title={!editable ? row.procurementNote : undefined}>{editable
       ? <form id={formId} className="inquiry-procurement-form field" aria-label={`采购回复 ${row.documentNo}`} noValidate onSubmit={reply}>
         <input aria-label="采购备注" value={note} disabled={action.disabled} onChange={event => { setNote(event.target.value); action.setError(null); }} />
-        <button className="btn btn-primary btn-sm" type="submit" disabled={action.disabled}>提交采购回复</button>
+        <button className="btn btn-primary btn-sm" type="submit" disabled={action.disabled}>{action.busy ? "正在提交…" : "提交采购回复"}</button>
       </form> : row.procurementNote || "—"}
       {editable && (quantityError || warehouseError) && <p className="field-error" role="alert">{quantityError || warehouseError}</p>}
       {action.error && <p className="dialog-error" role="alert">{action.error}</p>}
-      {action.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={action.busy} onClick={() => void action.perform()}>重试确认</button>}
+      {action.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
     </td>
   </>;
 }

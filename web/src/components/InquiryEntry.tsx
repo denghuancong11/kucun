@@ -15,14 +15,14 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
   const storeValid = draft.store.includes("US") && !draft.store.includes("-");
   const storeInvalid = draft.store.length > 0 && !storeValid;
   const canEntry = enabled && ["admin","operation-1","operation-2"].includes(role);
-  const {perform,busy,uncertain,error} = useBusinessAction(() => queryClient.invalidateQueries({queryKey:["approvals"]}), text => {
+  const {perform,busy,uncertain,error} = useBusinessAction(() => queryClient.invalidateQueries({queryKey:["approvals"]}, {throwOnError:true}), text => {
     setOpen(false);setMessage(text);setDraft({quantity:"",department:group??"一团",store:"",operator:"",fnsku:"",asin:"",operatorNote:""});
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!storeValid) return;
     const payload={...draft,quantity:Number(draft.quantity),department:group??draft.department,model:model.model,requestId:createRequestId("inquiry")};
-    void perform({execute:()=>createInquiry(role,payload),message:"询库已提交，进入审批中心等待商务审核。"});
+    void perform({execute:()=>createInquiry(role,payload),message:model.model+"：询库已提交，进入审批中心等待商务审核。"});
   };
   if (!canEntry) return null;
   return <div className="inquiry-entry">

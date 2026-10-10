@@ -42,7 +42,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
   useEffect(() => {
     if (job?.state!=='succeeded' || refreshed.current===job.id) return;
     refreshed.current=job.id;
-    void onSynced().catch(()=>setRefreshError('数据已保存，页面刷新失败，请重新加载页面。'));
+    void onSynced().catch(()=>setRefreshError('同步数据已保存，但页面刷新失败，请重新加载页面，无需重复同步。'));
   }, [job?.id,job?.state,onSynced]);
 
   async function sync() {
@@ -89,7 +89,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
     } finally {sending.current=false;setSubmitting(false);}
   }
   const busy = submitting || active || checking;
-  const label = busy ? '同步中' : job?.state==='succeeded' ? '同步完成'
+  const label = busy ? '正在同步…' : job?.state==='succeeded' ? '同步完成'
     : job?.state==='failed' || (!requestId && submitError) ? '同步失败'
     : uncertain ? '重试确认' : target.action==='metrics' ? '同步领星指标' : '同步领星物流';
   const error = submitting ? '' : job?.state==='failed' ? job.message
