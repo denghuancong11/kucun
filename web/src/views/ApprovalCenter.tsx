@@ -22,8 +22,8 @@ function isMyTodo(item: ApprovalItem, role: Role) {
   if (role === "operation-1" || role === "operation-2") return item.record.department === group;
   const assistant = role === "assistant-1" || role === "assistant-2";
   if (item.kind === "allocation") return (role === "business" && item.record.approvalStatus !== "approved") || (assistant && item.record.approvalStatus === "approved");
-  return (role === "business" && item.record.status === "pending_business") || ((role === "purchasing" || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing")
-    || ((item.record.category === "墨盒" ? role === "purchasing" : assistant) && item.record.status === "pending_assistant");
+  return (role === "business" && item.record.status === "pending_business") || ((["purchasing", "logistics"].includes(role) || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing")
+    || ((item.record.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : assistant) && item.record.status === "pending_assistant");
 }
 function metricCoverage(value: number | null, metrics: LingxingMetrics | null) {
   if (!metrics) return "—";
@@ -40,7 +40,7 @@ function calculatedCoverage(quantity: string, metrics: LingxingMetrics | null) {
   return `${((fba.reduce((sum, value) => sum + value, 0) + approved) / metrics.sales30d).toFixed(1)} 倍`;
 }
 function progressLabel(item: ApprovalItem) {
-  if (isArchived(item)) return item.kind === "allocation" || (["assistant", "assistant-1", "assistant-2"].includes(item.record.archivedByRole ?? "") || item.record.category === "墨盒" && item.record.archivedByRole === "purchasing") ? "已完成" : "";
+  if (isArchived(item)) return item.kind === "allocation" || (["assistant", "assistant-1", "assistant-2"].includes(item.record.archivedByRole ?? "") || item.record.category === "墨盒" && ["purchasing", "logistics"].includes(item.record.archivedByRole ?? "")) ? "已完成" : "";
   if (item.kind === "inquiry") return item.record.statusText;
   if (item.record.approvalStatus === "rejected") return "已拒绝";
   if (item.record.statusCode === "pending") return item.record.approvalStatus === "approved" ? "待助理确认" : "待商务审核";
@@ -69,7 +69,7 @@ const DOCUMENT_COLUMNS: ApprovalColumn[] = [
 const COVERAGE_COLUMNS: ApprovalColumn[] = [{ label: "调货前倍数", width: 130 }, { label: "调货后倍数", width: 130 }];
 
 function approvalDocumentColumns(role: Role) {
-  const metrics = role === "assistant-1" || role === "assistant-2" || role === "purchasing" || role === "alan"
+  const metrics = role === "assistant-1" || role === "assistant-2" || ["purchasing", "logistics"].includes(role) || role === "alan"
     ? METRIC_COLUMNS.filter(column => column.key !== "orderGrossProfit")
     : METRIC_COLUMNS;
   return [...DOCUMENT_COLUMNS, ...metrics, ...COVERAGE_COLUMNS];
@@ -81,7 +81,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const row = item.record;
   const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
   const [procurementQuantity, setProcurementQuantity] = useState("");
-  const previewQuantity = item.kind === "inquiry" && (role === "purchasing" || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing"
+  const previewQuantity = item.kind === "inquiry" && (["purchasing", "logistics"].includes(role) || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing"
     && procurementQuantity.trim() !== "" && Number.isInteger(Number(procurementQuantity)) && Number(procurementQuantity) >= 0
     ? Number(procurementQuantity) : null;
   const displayedRequested = previewQuantity ?? row.requestedQuantity;
@@ -199,8 +199,8 @@ export function ApprovalCenterView({ role }: { role: Role }) {
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>
       <button className={`btn btn-ghost${scope === "mine" ? " active" : ""}`} type="button" aria-pressed={scope === "mine"} onClick={() => { setScope(scope === "mine" ? "all" : "mine"); setProgress("all"); }}>我的待办 <span className="count-badge">{todoItems.length}</span></button>
     {(search || type !== "all" || category !== "all" || progress !== "all") && <button className="btn btn-ghost" type="button" onClick={() => { setSearch(""); setType("all"); setCategory("all"); setProgress("all"); }}>清除筛选</button>}
-    </div><div className="page-actions">{(role === "admin" || role === "purchasing") && <button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "导出中…" : "导出询库"}</button>}{(role === "admin" || role === "purchasing") && <button className="btn btn-ghost" type="button" disabled={clearAction.disabled} onClick={clearInquiries}>询库数据流-手动清空</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
-    {(role === "admin" || role === "purchasing") && <p className="muted">手动清空为全局操作：隐藏全部硒鼓、墨盒中已完成或已拒绝的询库，不受当前筛选影响；保留原记录及升级库存来源。</p>}
+    </div><div className="page-actions">{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <button className="btn btn-ghost" type="button" disabled={exporting} onClick={() => void exportInquiries()}>{exporting ? "导出中…" : "导出询库"}</button>}{(role === "admin" || ["purchasing", "logistics"].includes(role)) && <button className="btn btn-ghost" type="button" disabled={clearAction.disabled} onClick={clearInquiries}>询库数据流-手动清空</button>}<LingxingSync role={role} target={{ action: "metrics", documents: syncDocuments }} onSynced={query.refresh} disabled={query.isLoading || query.isError || syncDocuments.length === 0} /><button className="btn btn-ghost" type="button" onClick={() => void query.refresh()}>刷新</button></div></div>
+    {(role === "admin" || ["purchasing", "logistics"].includes(role)) && <p className="muted">手动清空为全局操作：隐藏全部硒鼓、墨盒中已完成或已拒绝的询库，不受当前筛选影响；保留原记录及升级库存来源。</p>}
     {clearAction.error && <p className="dialog-error" role="alert">{clearAction.error}</p>}
     {clearAction.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={clearAction.busy} onClick={() => void clearAction.perform()}>重试确认</button>}
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<button className="btn btn-ghost btn-sm" onClick={() => void query.refetch()}>重新加载</button></div>}

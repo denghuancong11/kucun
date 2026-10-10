@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
+import { TransferUpgradeImport } from "../components/TransferUpgrade";
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
 import { createRequestId } from "../utils/ids";
@@ -150,6 +151,8 @@ export function Requirement3View({ role }: { role: Role }) {
         <label className="btn btn-ghost" htmlFor="transit-status-file">{busy === "status-preview" ? "读取中…" : "导入更新物流表格"}</label>
         <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
       </div>}
+
+      {transitAccess && <TransferUpgradeImport key={role} role={role} />}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
         <div className="transit-status-header">

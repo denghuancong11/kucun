@@ -40,6 +40,7 @@
     "test:inquiry-procurement-page": "node web/scripts/inquiry-procurement-page-check.mjs",
     "test:inquiry-export": "node web/scripts/inquiry-export-page-check.mjs",
     "test:ink-inquiry": "node scripts/verify-ink-inquiry.mjs && node web/scripts/ink-inquiry-page-check.mjs",
-    "test:inquiry-clear": "node web/scripts/inquiry-clear-page-check.mjs"
+    "test:inquiry-clear": "node web/scripts/inquiry-clear-page-check.mjs",
+    "test:transfer-upgrade": "node scripts/verify-transfer-upgrade.mjs && node web/scripts/transfer-upgrade-page-check.mjs"
   }
 }

@@ -69,13 +69,13 @@ try{
  check('回撤与下游发起同时请求，两种先后顺序均只有一方成功');
  // Genuine shipping -> receipt -> further direct upgrade, not an inferred stock balance.
  const downstream=await completed();let work=(await api('/api/upgrades/relocation-work-items','purchasing',{inquiryId:downstream.id,sourceRevision:downstream.revision,requestId:rid()})).workItem;
- work=db.recordRelocationProcurement({id:work.id,role:'purchasing',rma:'RMA',relocationAddress:'地址',...common(work)}).workItem;
+ work=db.recordRelocationProcurement({id:work.id,role:"logistics",rma:'RMA',relocationAddress:'地址',...common(work)}).workItem;
  work=db.recordRelocationOperation({id:work.id,role:'operation-1',removalOrderNo:'REMOVE-INK',...common(work)}).workItem;
  work=db.syncRelocationLogistics({id:work.id,role:'purchasing',shipments:[{externalId:'INK-PKG',storeId:'S1',storeName:'测试',countryCode:'US',orderNo:'REMOVE-INK',fnsku:downstream.fnsku,carrier:'UPS',trackingNo:'TRACK-INK',shipDate:'2026-10-09',quantity:60}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
  const sent=db.shipRelocationUpgrade({id:work.id,role:'purchasing',fbaRemainingQuantity:0,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:60}],...common(work)}),relocation=sent.upgrade.relocations[0];
  db.completeRelocationUpgrade({id:relocation.id,role:'purchasing',completedQuantity:60,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',...common(relocation)});
  const next=db.createDirectUpgrade({role:'purchasing',model:'INK-FLOW',sourceVersion:'V2',requestId:rid()}).upgrade;
  const linked=await reject(`/api/inquiries/${downstream.id}/recall`,'purchasing',common(downstream),409,'inquiry_has_downstream');assert(linked.details.blockers.some(b=>b.type==='升级入库'));assert(linked.details.blockers.some(b=>b.number===next.upgradeNo));check('真实移仓发货、升级入库及再次在库升级的直接/间接关联全部列出，拒绝不改业务');
- const saved=snapshot();await stop();db.close();db=new InventoryDatabase(state);await start();assert.equal(snapshot(),saved);assert((await api('/api/approvals','purchasing')).inquiries.some(r=>r.id===record.id&&r.approvedQuantity===90));db.assertInventoryInvariants();assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,31);check('刷新与数据库/服务器重启后数量、阶段、历史和关联不变；schema31即可完整承载新流程');
+ const saved=snapshot();await stop();db.close();db=new InventoryDatabase(state);await start();assert.equal(snapshot(),saved);assert((await api('/api/approvals','purchasing')).inquiries.some(r=>r.id===record.id&&r.approvedQuantity===90));db.assertInventoryInvariants();assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,32);check('刷新与数据库/服务器重启后数量、阶段、历史和关联不变；schema31即可完整承载新流程');
 }catch(e){failure=e.stack;throw e;}finally{await fs.writeFile(path.join(out,'api-result.json'),JSON.stringify({state,base,checks,failure},null,2));await stop();db.close();}
 console.log(`INK_INQUIRY_API_PASS ${checks.length} groups`);

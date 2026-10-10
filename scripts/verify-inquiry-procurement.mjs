@@ -24,7 +24,7 @@ async function rejected(r,p,status,code,role='purchasing'){const before=snapshot
 let failure;
 try{
  for(const [model,category]of [['PROC-TONER','硒鼓'],['PROC-INK','墨盒']])db.db.prepare('INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at) VALUES(?,?,0,0,?)').run(model,category,new Date().toISOString());
- assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,31);assert.ok(db.db.prepare('PRAGMA table_info(inquiry_documents)').all().some(c=>c.name==='procurement_note'&&c.notnull===1));check('新建v31库具有独立采购备注字段');
+ assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,32);assert.ok(db.db.prepare('PRAGMA table_info(inquiry_documents)').all().some(c=>c.name==='procurement_note'&&c.notnull===1));check('新建v32库具有独立采购备注字段');
  await start();const beforeStock=stock(),a=await ready('PROC-TONER'),b=await ready('PROC-INK');
  for(const q of [0,7])for(const w of ['',null,'其他仓','ca','CA,SC'])await rejected(a,body(a,q,w),400,w?'invalid_shippingWarehouse':'missing_shippingWarehouse');
  for(const q of ['',null,-1,1.5])await rejected(a,body(a,q),400,q===''||q===null?'missing_supplier_quantity':'invalid_quantity');
@@ -76,7 +76,7 @@ try{
  old.exec(schema.replace('inquiry_documents','inquiry_documents_fixture29').replace('approved_quantity >= 0','approved_quantity > 0'));
  old.exec('INSERT INTO inquiry_documents_fixture29 SELECT * FROM inquiry_documents; DROP TABLE inquiry_documents; ALTER TABLE inquiry_documents_fixture29 RENAME TO inquiry_documents;');
  if(seq!=null)old.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='inquiry_documents'").run(seq);for(const r of related)old.exec(r.sql);old.exec(view);
- old.exec('DELETE FROM schema_migrations WHERE version>=30; PRAGMA user_version=29; COMMIT; PRAGMA foreign_keys=ON');
+ old.exec('DROP TABLE transfer_upgrade_rows; DROP TABLE transfer_upgrade_imports; DELETE FROM schema_migrations WHERE version>=30; PRAGMA user_version=29; COMMIT; PRAGMA foreign_keys=ON');
  old.prepare('UPDATE inquiry_documents SET shipping_warehouse=? WHERE id=?').run('历史自由文本供应仓',a.id);old.prepare('UPDATE inquiry_documents SET shipping_warehouse=? WHERE id=?').run('',b.id);
  const oldSnapshot=snapshot(old),oldColumns=old.prepare('PRAGMA table_info(inquiry_documents)').all().map(c=>'"'+c.name+'"').join(',');old.close();
  const migrationProcess=spawn(process.execPath,[path.join(root,'scripts/migrate-inventory-v3.mjs'),'--state-root',state,'--backup-root',path.join(state,'controlled-backups')],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,ASTER_PRIVATE_INBOUND_SOURCES:path.join(state,'missing-source.json')}});let migrationOutput='';migrationProcess.stdout.on('data',v=>migrationOutput+=v);migrationProcess.stderr.on('data',v=>migrationOutput+=v);const [code]=await once(migrationProcess,'exit');assert.equal(code,0,migrationOutput);
@@ -85,6 +85,6 @@ try{
  const backupDirs=await fs.readdir(path.join(state,'controlled-backups'));assert.equal(backupDirs.length,1);const backup=new DatabaseSync(path.join(state,'controlled-backups',backupDirs[0],'data/aster-inventory.sqlite'),{readOnly:true});assert.equal(backup.prepare('PRAGMA user_version').get().user_version,29);assert.deepEqual(snapshot(backup),oldSnapshot);backup.close();
  const migratedZero=db.replyInquiry({id:positive.id,role:'purchasing',...body(db.getInquiry(positive.id),0,'SC','升级后零回复')}).record;
  for(const field of ['requestedQuantity','approvedQuantity','supplierQuantity','quantity'])assert.equal(migratedZero[field],0);assert.equal(migratedZero.procurementNote,'升级后零回复');
- assert.equal(migrateInventoryDatabaseToCurrent({databasePath}).changed,false);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);check('受控v29→v31迁移有完整v29备份，历史自由文本和零回复空仓和旧审核量不覆盖；其他业务表原样，重复迁移无变化');
+ assert.equal(migrateInventoryDatabaseToCurrent({databasePath}).changed,false);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);check('受控v29→v32迁移有完整v29备份，历史自由文本和零回复空仓和旧审核量不覆盖；其他业务表原样，重复迁移无变化');
 }catch(e){failure=e.stack;throw e;}finally{await stop();db?.close();await fs.writeFile(path.join(out,'api-result.json'),JSON.stringify({state,base,checks,rejections,failure},null,2));}
 console.log(`INQUIRY_PROCUREMENT_API_PASS ${checks.length} groups; ${rejections.length} rejected requests unchanged`);

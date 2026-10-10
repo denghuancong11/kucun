@@ -22,7 +22,7 @@ let source=db.createAllocation({...common,asin:'BTEST00001',plan:'TEST-PLAN-TONE
 source=db.reviewAllocation({id:source.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:source.revision,requestId:rid()}).record;
 source=db.confirmAllocation({id:source.id,role:'assistant-1',expectedRevision:source.revision,requestId:rid()}).record;
 let work=db.initiateRelocationUpgrade({allocationId:source.id,role:'operation-1',requestId:rid()}).workItem;
-work=db.recordRelocationProcurement({id:work.id,role:'purchasing',rma:'隔离',relocationAddress:'隔离仓',expectedRevision:work.revision,requestId:rid()}).workItem;
+work=db.recordRelocationProcurement({id:work.id,role:"logistics",rma:'隔离',relocationAddress:'隔离仓',expectedRevision:work.revision,requestId:rid()}).workItem;
 work=db.recordRelocationOperation({id:work.id,role:'operation-1',removalOrderNo:'TEST-ORDER',expectedRevision:work.revision,requestId:rid()}).workItem;
 const before=db.getCatalog();
 const port=await freePort(),base=`http://127.0.0.1:${port}`;

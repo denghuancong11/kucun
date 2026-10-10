@@ -115,7 +115,7 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
   let work = result.workItem;
   check(`${suffix} 移仓从执行量 ${quantity} 带出原计划、实际日期和版本`, work.sourceQuantityBefore === quantity
     && work.plan === expected.plan && work.shipDate === expected.date && work.sourceVersion === expected.version && work.sourceKind === suffix);
-  result = await call("POST", `/api/upgrades/relocation-work-items/${work.id}/procurement`, "purchasing", {
+  result = await call("POST", `/api/upgrades/relocation-work-items/${work.id}/procurement`, "logistics", {
     rma: `RMA-${suffix}`, relocationAddress: "供应商升级仓", expectedRevision: work.revision, requestId: requestId("procurement"),
   });
   work = result.workItem;
@@ -408,7 +408,7 @@ try {
   const ink = await call("POST","/api/inquiries","operation-1",{...allocationBody(10,"ink"),model:"SYNTH-INK-001",asin:"BINK000001"});
   check("墨盒询库仅向对应运营团队展示",!(await call("GET","/api/approvals","operation-2")).inquiries.some(r=>r.id===ink.record.id));
   let zeroWork=(await call("POST","/api/upgrades/relocation-work-items","assistant-1",{inquiryId:inquirySubmitted.id,requestId:requestId("zero-fba-start")})).workItem;
-  zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/procurement`,"purchasing",{rma:"FBA零",relocationAddress:"测试仓",expectedRevision:zeroWork.revision,requestId:requestId("zero-procurement")})).workItem;
+  zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/procurement`,"logistics",{rma:"FBA零",relocationAddress:"测试仓",expectedRevision:zeroWork.revision,requestId:requestId("zero-procurement")})).workItem;
   zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/operation`,"operation-1",{removalOrderNo:"ZERO-FBA-ORDER",expectedRevision:zeroWork.revision,requestId:requestId("zero-operation")})).workItem;
   zeroWork=saveCapture(`/api/upgrades/relocation-work-items/${zeroWork.id}/lingxing-sync`,"assistant-1",{shipments:[{externalId:"ZERO-FBA-PKG",storeId:"S1",storeName:"验收",countryCode:"US",orderNo:"ZERO-FBA-ORDER",fnsku:zeroWork.fnsku,carrier:"UPS",trackingNo:"ZERO-FBA-TRACK",shipDate:"2026-09-10",quantity:1}],capturedAt:new Date().toISOString(),requestId:requestId("zero-sync")}).workItem;
   await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/ship`,"assistant-1",{fbaRemainingQuantity:0,externalItems:[{lineId:zeroWork.externalShipments[0].lineId,quantity:1}],expectedRevision:zeroWork.revision,requestId:requestId("zero-ship")});

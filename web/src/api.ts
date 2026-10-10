@@ -1,4 +1,7 @@
 import type {
+  TransferUpgradePreview,
+  TransferUpgradeRow,
+  TransferUpgradesPayload,
   AllocationsPayload,
   AllocationEntry,
   ApprovalsPayload,
@@ -421,4 +424,15 @@ export function fetchAuditLog(role: Role, query: AuditQuery): Promise<AuditPaylo
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);
   return requestJson<AuditPayload>(`/api/audit?${params}`, role);
+}
+
+export function previewTransferUpgrade(role: Role, file: File): Promise<TransferUpgradePreview> {
+  return requestJson("/api/transfer-upgrades/preview", role, { method: "POST",
+    headers: { "x-file-name": encodeURIComponent(file.name), "content-type": "application/octet-stream" }, body: file });
+}
+export function importTransferUpgrade(role: Role, payload: { previewToken: string; fileName: string; fileHash: string; templateHash: string; rows: TransferUpgradeRow[]; requestId: string }): Promise<{ rowCount: number }> {
+  return requestJson("/api/transfer-upgrades/import", role, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+}
+export function fetchTransferUpgrades(role: Role): Promise<TransferUpgradesPayload> {
+  return requestJson("/api/transfer-upgrades", role);
 }

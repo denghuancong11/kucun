@@ -15,12 +15,13 @@ import {
 } from "../api";
 import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { RelocationExternalHistory, RelocationExternalShipments } from "../components/RelocationExternalShipments";
+import { TransferUpgradeList } from "../components/TransferUpgrade";
 import { LingxingSync } from "../components/LingxingSync";
 import type { DirectUpgrade, NoticeMessage, RelocationCandidate, RelocationUpgrade, RelocationWorkItem, Role, UpgradeJob } from "../types";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { createRequestId } from "../utils/ids";
 
-type UpgradeMode = "relocation" | "direct";
+type UpgradeMode = "relocation" | "direct" | "transfer";
 type PendingRequest = { payloadKey: string; requestId: string };
 type CompleteDraft = { sourceLineId?: number; quantity: string; version: string; warehouse?: string };
 type CompletionRequest = { sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string };
@@ -61,7 +62,7 @@ const ROLE_LABELS: Record<Role, string> = {
   "assistant-2": "助理-二团",
   "operation-1": "运营·一团",
   "operation-2": "运营·二团",
-  purchasing: "采购", alan: "Alan",
+  purchasing: "采购", logistics: "物流", alan: "Alan",
   business: "商务",
 };
 
@@ -213,7 +214,7 @@ export function Requirement4View({ role }: { role: Role }) {
       await recordRelocationProcurement(role, work.id, { ...payload, requestId });
       completionRequests.current.delete(key);
       await refreshAfterWrite();
-      setNotice({ kind: "success", text: `${work.workNo} 的采购信息已登记。` });
+      setNotice({ kind: "success", text: `${work.workNo} 的RMA及移仓地址已登记。` });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally { setBusy(null); }
@@ -369,11 +370,12 @@ export function Requirement4View({ role }: { role: Role }) {
           items={[
             { value: "relocation", label: "移仓升级" },
             { value: "direct", label: "在库升级" },
+            { value: "transfer", label: "转仓升级" },
           ]}
         />
       </Panel>
 
-      {mode === "relocation" ? (
+      {mode === "transfer" ? <TransferUpgradeList role={role} /> : mode === "relocation" ? (
         <div className="relocation-board">
           <Panel title="升级来源" className="relocation-source-panel">
             <div className="form-grid upgrade-filter">
@@ -441,8 +443,8 @@ export function Requirement4View({ role }: { role: Role }) {
 
 function InquiryRecall({ source, role, onRefresh, onNotice }: { source: RelocationSource; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void }) {
   const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
-  if (!source.inquiryRecall || source.inquiryId == null || !["purchasing", "business"].includes(role)) return null;
-  const target = role === "purchasing" ? "待Alan或采购回复" : "待商务审核";
+  if (!source.inquiryRecall || source.inquiryId == null || !["purchasing", "logistics", "business"].includes(role)) return null;
+  const target = ["purchasing", "logistics"].includes(role) ? "待Alan或采购回复" : "待商务审核";
   const recall = () => {
     const payload = { expectedRevision: source.inquiryRecall!.revision, requestId: createRequestId("inquiry-recall") };
     void action.perform({ execute: () => recallInquiry(role, source.inquiryId!, payload), message: "询库已回撤至" + target + "。" });
@@ -489,16 +491,16 @@ function RelocationWorkflow({
     const operation = operationDrafts[work.id]?.sourceKey === workSourceKey(work) ? operationDrafts[work.id] : { orderNo: "", sourceKey: workSourceKey(work) };
     const shipping = currentShippingDraft(work, shippingDrafts), values = shippingValues(work, shipping), shippingValid = values.valid;
     return <article className="relocation-document" key={work.id} data-relocation-work-id={work.id}>
-      <header className="relocation-document-head"><strong className="mono">{work.workNo}</strong>{work.status === "awaiting_shipping" && work.removalOrderNo && <LingxingSync role={role} target={{action:"logistics", workId:work.id}} sourceKey={workSourceKey(work)} onSynced={onRefresh} disabled={busy !== null} />}</header>
+      <header className="relocation-document-head"><strong className="mono">{work.workNo}</strong><span className="muted">{work.statusText}</span>{work.status === "awaiting_shipping" && work.removalOrderNo && <LingxingSync role={role} target={{action:"logistics", workId:work.id}} sourceKey={workSourceKey(work)} onSynced={onRefresh} disabled={busy !== null} />}</header>
       <dl className="relocation-fields"><div><dt>本次移仓前</dt><dd>{formatNumber(work.sourceQuantityBefore)}</dd></div><div><dt>发起岗位</dt><dd>{ROLE_LABELS[work.initiatedByRole]}</dd></div><div><dt>发起时间</dt><dd>{displayTime(work.initiatedAt)}</dd></div>
         {work.rma && <><div><dt>RMA</dt><dd>{work.rma}</dd></div><div><dt>移仓地址</dt><dd>{work.relocationAddress}</dd></div></>}{work.removalOrderNo && <div><dt>移除订单</dt><dd>{work.removalOrderNo}</dd></div>}{work.inquiryShipmentId && <div><dt>历史询库发货记录</dt><dd>#{work.inquiryShipmentId} · {work.shipDate}</dd></div>}
       </dl>
       <RelocationExternalShipments workNo={work.workNo} rows={work.externalShipments ?? []} selected={shipping.external ?? {}} disabled={busy !== null} readOnly={work.status !== "awaiting_shipping" || role !== work.initiatedByRole} onChange={external => setShippingDrafts(current => ({...current, [work.id]: {...shipping, external}}))} />
-                    {work.status === "awaiting_procurement" && role === "purchasing" && (
+                    {work.status === "awaiting_procurement" && role === "logistics" && (
                       <div className="upgrade-inline-complete relocation-procurement-form">
                         <input aria-label={`${work.workNo} RMA`} placeholder="RMA" value={procurement.rma} onChange={(event) => setProcurementDrafts((current) => ({ ...current, [work.id]: { ...procurement, rma: event.target.value } }))} />
                         <input aria-label={`${work.workNo} 移仓地址`} placeholder="移仓地址" value={procurement.address} onChange={(event) => setProcurementDrafts((current) => ({ ...current, [work.id]: { ...procurement, address: event.target.value } }))} />
-                        <button className="btn btn-primary btn-sm" type="button" disabled={!procurement.rma.trim() || !procurement.address.trim() || busy !== null} onClick={() => void onProcurement(work)}>{busy === `relocation-procurement-${work.id}` ? "提交中…" : "提交采购信息"}</button>
+                        <button className="btn btn-primary btn-sm" type="button" disabled={!procurement.rma.trim() || !procurement.address.trim() || busy !== null} onClick={() => void onProcurement(work)}>{busy === `relocation-procurement-${work.id}` ? "提交中…" : "提交物流信息"}</button>
                       </div>
                     )}
                     {work.status === "awaiting_operation" && (role === "operation-1" || role === "operation-2") && (
@@ -552,7 +554,7 @@ function RelocationHistory({
       </dl>
       <RelocationExternalHistory items={row.externalItems ?? []} />
       <RelocationExternalShipments workNo={row.relocationNo} rows={row.externalShipments} selected={{}} disabled={busy !== null} readOnly onChange={() => {}} />
-                      {(recovery || (row.status !== "withdrawn" && row.inProgressQuantity > 0)) && role === "purchasing" ? (
+                      {(recovery || (row.status !== "withdrawn" && row.inProgressQuantity > 0)) && ["purchasing", "logistics"].includes(role) ? (
                         <div className="upgrade-inline-complete">
                           <input aria-label={`${row.relocationNo} 升级完成数量`} inputMode="numeric" placeholder={`最多 ${row.inProgressQuantity}`} value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, quantity: event.target.value } }))} />
                           <input aria-label={`${row.relocationNo} 升级完成版本号`} placeholder="新版本" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, version: event.target.value } }))} />
@@ -607,7 +609,7 @@ function DirectHistory({
 
               <span>发起岗位 <strong>{ROLE_LABELS[job.initiatedByRole]}</strong></span>
             </div>
-            {(job.status === "active" || recovery) && role === "purchasing" && (
+            {(job.status === "active" || recovery) && ["purchasing", "logistics"].includes(role) && (
               <div className="upgrade-inline-complete direct">
                 <select aria-label={`${job.upgradeNo} 完成来源批次`} value={selectedLine?.id ?? (recovery?.sourceLineId ?? "")} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, sourceLineId: Number(event.target.value)}}))}>{!selectedLine&&!recovery&&<option value="">请重新选择实际来源批次</option>}{job.lines.filter(line => line.inProgressQuantity > 0 || line.id === recovery?.sourceLineId).map(line => <option key={line.id} value={line.id}>{line.sourceTeam ? line.sourceTeam + " / " : ""}{line.warehouse || "历史仓库未确定"} / {line.plan} / {line.shipDate} / {line.fnsku}（{line.inProgressQuantity}）</option>)}</select>
                 <input aria-label={`${job.upgradeNo} 升级完成数量`} inputMode="numeric" placeholder="所选批次的完成数量" value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, quantity: event.target.value } }))} />
@@ -618,7 +620,7 @@ function DirectHistory({
                 {!recovery&&selectedLine&&quantity>selectedLine.inProgressQuantity&&<p className="form-hint">所选批次还剩 {selectedLine.inProgressQuantity} 件，请按这批货的实际完成量填写。</p>}
               </div>
             )}
-            {job.status === "active" && role !== "purchasing" && <div className="form-hint">等待采购登记完成数量和新版本。</div>}
+            {job.status === "active" && !["purchasing", "logistics"].includes(role) && <div className="form-hint">等待采购登记完成数量和新版本。</div>}
             <div className="table-wrap">
               <table className="data-table sub">
                 <thead><tr><th>型号</th><th>发货计划号</th><th>发货时间</th><th>原版本</th><th>已贴 FNSKU</th><th>来源海外仓</th><th className="num">发起时在库</th><th>状况</th><th className="num">升级完成</th><th className="num">升级中</th><th>升级完成版本</th></tr></thead>

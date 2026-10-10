@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 31;
+export const INVENTORY_SCHEMA_VERSION = 32;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -36,10 +36,19 @@ const LEGACY_PLACEHOLDER_CLEANUP_REQUEST_ID = "schema-v13-legacy-placeholder-cle
 
 export const ASSISTANT_ROLES = Object.freeze(["assistant-1", "assistant-2"]);
 const ASSISTANT_ROLE_SET = new Set(ASSISTANT_ROLES);
-export const ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "business", "alan"]);
-const UPGRADE_ROLE_SET = new Set(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing"]);
+export const TRANSFER_UPGRADE_FIELDS = Object.freeze([["model","型号"],["source","来源"],["plan","发货计划号"],["date","发货时间"],["version","版本号"],["fnsku","已贴FNSKU"],["returnQuantity","退仓数量"],["warehouse","目前所在海外仓"],["store","退仓店铺"],["status","状况"],["rma","RMA"],["countedQuantity","实际清点数量"],["inProgressQuantity","升级中数量"],["completedQuantity","升级完数量"],["completedVersion","升级完，版本号"]]);
+export function validateTransferUpgradeRows(rows) {
+  if (!rows.length) return [{ sheet: "转仓升级", row: 4, field: "", message: "工作表“转仓升级”第4行起没有可导入数据" }];
+  return rows.flatMap(row => TRANSFER_UPGRADE_FIELDS.flatMap(([key, label]) => {
+    const value = String(row.data?.[key] ?? "").trim();
+    const reason = !value ? "必填，不能为空" : /^xxx$/i.test(value) || value.includes("填写项") ? "仍为模板示例或说明，请填写实际业务值" : "";
+    return reason ? [{ sheet: "转仓升级", row: row.sourceRow, field: label, message: `工作表“转仓升级”第 ${row.sourceRow} 行“${label}”：${reason}` }] : [];
+  }));
+}
+export const ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "logistics", "business", "alan"]);
+const UPGRADE_ROLE_SET = new Set(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "logistics"]);
 export const BUSINESS_ROLE = "business";
-export const TRANSIT_ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "purchasing"]);
+export const TRANSIT_ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "purchasing", "logistics"]);
 const TRANSIT_ROLE_SET = new Set(TRANSIT_ROLES);
 export const TRANSIT_SHELF_ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES]);
 const TRANSIT_SHELF_ROLE_SET = new Set(TRANSIT_SHELF_ROLES);
@@ -1612,6 +1621,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateInquiryProcurementV29(db, createdAt);
   migrateInquiryApprovedQuantityV30(db, createdAt);
   migrateInquiryDisplayV31(db, createdAt);
+  migrateTransferUpgradeV32(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2827,6 +2837,29 @@ function migrateInquiryDisplayV31(db, at) {
     .run(at, "询库审批显示改为手动隐藏；回撤后恢复显示，调拨保留定时清理");
 }
 
+function migrateTransferUpgradeV32(db, at) {
+  // 复用预览凭证，原凭证和有效期完整保留。
+  const schema = db.prepare("SELECT sql FROM sqlite_master WHERE name='transit_preview_tokens'").get().sql;
+  db.exec(schema.replace('transit_preview_tokens', 'transit_preview_tokens_v32').replace("'import', 'status'", "'import', 'status', 'transfer_upgrade'"));
+  db.exec(`INSERT INTO transit_preview_tokens_v32 SELECT * FROM transit_preview_tokens;
+    DROP TABLE transit_preview_tokens;
+    ALTER TABLE transit_preview_tokens_v32 RENAME TO transit_preview_tokens;
+    CREATE INDEX idx_transit_preview_expiry ON transit_preview_tokens(expires_at);
+    CREATE TABLE transfer_upgrade_imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_name TEXT NOT NULL, file_sha256 TEXT NOT NULL, sheet_name TEXT NOT NULL,
+      imported_by_role TEXT NOT NULL, imported_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE transfer_upgrade_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL REFERENCES transfer_upgrade_imports(id),
+      source_row INTEGER NOT NULL, data_json TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_transfer_upgrade_import ON transfer_upgrade_rows(import_id);`);
+  db.prepare("INSERT INTO schema_migrations(version, applied_at, description) VALUES (32, ?, ?)")
+    .run(at, "转仓升级独立导入批次及明细，复用预览凭证；不产生普通库存");
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2836,9 +2869,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v30 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v31 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -2954,6 +2987,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 28) { migrateInquiryProcurementV29(db, appliedAt); version = 29; }
     if (version === 29) { migrateInquiryApprovedQuantityV30(db, appliedAt); version = 30; }
     if (version === 30) { migrateInquiryDisplayV31(db, appliedAt); version = 31; }
+    if (version === 31) { migrateTransferUpgradeV32(db, appliedAt); version = 32; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3172,7 +3206,7 @@ function rowToDocument(row, lingxing = null) {
 }
 
 const AUDIT_OPERATIONS = [
-  "entry", "review", "reject", "confirm", "cancel", "withdraw", "import_stage", "legacy_import",
+  "entry", "review", "reject", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import",
   "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf",
   "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed",
   "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started",
@@ -3242,6 +3276,7 @@ function auditResult(operation, payload = {}) {
   if (operation === "review") return "商务已批准";
   if (operation === "reject") return "商务已拒绝";
   if (operation === "import_stage") return "已暂存";
+  if (operation === "transfer_upgrade_import") return `转仓升级已导入 ${payload.rowCount} 行，普通库存不变`;
   if (operation === "transit_import") return "在途已入账";
   if (operation === "transit_import_revert") return "在途导入已撤销";
   if (operation === "transit_status") return "物流状态已更新";
@@ -3257,7 +3292,7 @@ function auditResult(operation, payload = {}) {
   if (operation === "upgrade_relocation_created") return "已登记移仓发货";
   if (operation === "upgrade_relocation_complete") return "移仓库存已完成升级入库";
   if (operation === "upgrade_relocation_started") return "已发起移仓流程";
-  if (operation === "upgrade_relocation_procurement") return "采购信息已登记";
+  if (operation === "upgrade_relocation_procurement") return "RMA及移仓地址已登记";
   if (operation === "upgrade_relocation_operation") return "移除订单已登记";
   if (operation === "upgrade_relocation_corrected") return "移仓资料已更正";
   if (operation === "upgrade_relocation_cancelled") return "未发货移仓流程已取消";
@@ -3622,14 +3657,14 @@ export class InventoryDatabase {
   }
 
   clearInquiryDisplay({ role, requestId }) {
-    if (!["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员和采购可手动清空询库显示");
+    if (!["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员、采购和物流可手动清空询库显示");
     return this.idempotent("approvals:inquiries:clear", requestId, { role }, () => {
       // 对应审批页面的“已完成 / 已拒绝”，不改变业务状态、版本或来源资格。
       const result = this.db.prepare(`UPDATE inquiry_documents SET approval_hidden = 1
         WHERE approval_hidden = 0 AND model IN (SELECT model FROM catalog_models WHERE category IN ('硒鼓', '墨盒'))
           AND (status = 'rejected' OR (status = 'archived' AND
             (archived_by_role IN ('assistant', 'assistant-1', 'assistant-2') OR
-              (archived_by_role = 'purchasing' AND model IN (SELECT model FROM catalog_models WHERE category = '墨盒')))))`).run();
+              (archived_by_role IN ('purchasing', 'logistics') AND model IN (SELECT model FROM catalog_models WHERE category = '墨盒')))))`).run();
       return { ok: true, hiddenCount: Number(result.changes) };
     });
   }
@@ -3733,7 +3768,7 @@ export class InventoryDatabase {
   }
 
   replyInquiry({ id, role, supplierQuantity, shippingWarehouse, procurementNote, expectedRevision, requestId }) {
-    if (!["purchasing", "alan"].includes(role)) throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购或Alan可填写供应商库存回复");
+    if (!["purchasing", "logistics", "alan"].includes(role)) throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购、物流或Alan可填写供应商库存回复");
     const quantity = Number(supplierQuantity);
     const warehouse = String(shippingWarehouse ?? "").trim();
     if (!Number.isInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
@@ -3754,13 +3789,13 @@ export class InventoryDatabase {
   }
 
   archiveInquiry({ id, role, plan, date, version, expectedRevision, requestId }) {
-    if (!ASSISTANT_ROLE_SET.has(role) && role !== "purchasing") throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购归档，硒鼓询库由助理归档");
+    if (!ASSISTANT_ROLE_SET.has(role) && !["purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购或物流归档，硒鼓询库由助理归档");
     const fields = { plan: String(plan ?? "").trim(), date: inquiryShipDate(date), version: String(version ?? "").trim() };
     if (!fields.plan || !fields.version) throw new BusinessError(400, "missing_inquiry_archive_fields", "请填写发货计划号、发货日期和原版本");
     return this.idempotent(`inquiry:archive:${id}`, requestId, { id, role, ...fields, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_assistant"]);
       const ink = this.getModel(row.model).category === "墨盒";
-      if (ink ? role !== "purchasing" : !ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购归档，硒鼓询库由助理归档");
+      if (ink ? !["purchasing", "logistics"].includes(role) : !ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购或物流归档，硒鼓询库由助理归档");
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET plan = ?, ship_date = ?, version = ?, status = 'archived',
         archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
@@ -3791,7 +3826,7 @@ export class InventoryDatabase {
       FROM upgrade_jobs WHERE id IN (SELECT id FROM jobs)
     UNION ALL SELECT CASE WHEN operation_type IN ('direct_complete', 'relocation_complete') THEN '升级入库' ELSE '升级操作' END,
       operation_no, status FROM upgrade_operations WHERE upgrade_id IN (SELECT id FROM jobs)`).all({ id }).map(row => ({
-        ...row, status: ({ awaiting_procurement: '待采购填写', awaiting_operation: '待运营填写', awaiting_shipping: '待确认发货',
+        ...row, status: ({ awaiting_procurement: '待物流填写', awaiting_operation: '待运营填写', awaiting_shipping: '待确认发货',
           shipped: '已登记发货', withdrawn: '已撤回', cancelled: '已取消', active: '有效', completed: '已完成' })[row.status] ?? row.status,
       }));
   }
@@ -3804,7 +3839,7 @@ export class InventoryDatabase {
   }
 
   recallInquiry({ id, role, expectedRevision, requestId }) {
-    if (!["purchasing", "business"].includes(role)) throw new BusinessError(403, "inquiry_recall_forbidden", "仅采购或商务可回撤已归档的墨盒询库");
+    if (!["purchasing", "logistics", "business"].includes(role)) throw new BusinessError(403, "inquiry_recall_forbidden", "仅采购、物流或商务可回撤已归档的墨盒询库");
     return this.idempotent(`inquiry:recall:${id}`, requestId, { id, role, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["archived"]);
       if (this.getModel(row.model).category !== "墨盒" || row.supplier_quantity <= 0) throw new BusinessError(409, "inquiry_recall_unavailable", "仅有正数回复且已归档的墨盒询库可回撤");
@@ -3814,16 +3849,16 @@ export class InventoryDatabase {
       const entry = events.find(event => event.type === 'entry');
       const review = events.findLast(event => event.type === 'review');
       if (!entry || !review) throw new BusinessError(409, "inquiry_history_missing", "原申请或商务审核历史缺失，无法恢复数量，请核对该单历史");
-      const target = role === 'purchasing' ? 'pending_purchasing' : 'pending_business';
+      const target = ['purchasing', 'logistics'].includes(role) ? 'pending_purchasing' : 'pending_business';
       const requested = entry.payload.requestedQuantity;
-      const approved = role === 'purchasing' ? review.payload.approvedQuantity : null;
+      const approved = ['purchasing', 'logistics'].includes(role) ? review.payload.approvedQuantity : null;
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET requested_quantity = ?, approved_quantity = ?, business_note = ?, reviewed_by_role = ?, reviewed_at = ?,
         supplier_quantity = NULL, shipping_warehouse = '', procurement_note = '', replied_by_role = NULL, replied_at = NULL,
         plan = '', ship_date = '', version = '', archived_by_role = NULL, archived_at = NULL, lingxing_snapshot_json = NULL,
         fba_shipped_at = NULL, fba_confirmed_by_role = NULL, approval_hidden = 0, status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(requested, approved, role === 'purchasing' ? review.payload.businessNote : '', role === 'purchasing' ? review.role : null,
-          role === 'purchasing' ? review.at : null, target, at, id);
+        .run(requested, approved, ['purchasing', 'logistics'].includes(role) ? review.payload.businessNote : '', ['purchasing', 'logistics'].includes(role) ? review.role : null,
+          ['purchasing', 'logistics'].includes(role) ? review.at : null, target, at, id);
       this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review.id,
         before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity, supplierQuantity: row.supplier_quantity,
           businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
@@ -3879,7 +3914,7 @@ export class InventoryDatabase {
   }
 
   requirePurchasingUpgradeRole(role) {
-    if (role !== "purchasing") throw new BusinessError(403, "upgrade_purchasing_required", "仅采购角色可登记升级完成数量或采购信息");
+    if (!["purchasing", "logistics"].includes(role)) throw new BusinessError(403, "upgrade_purchasing_required", "仅采购或物流角色可登记升级完成数量");
   }
 
   requireOperationUpgradeRole(role, document) {
@@ -4201,7 +4236,7 @@ export class InventoryDatabase {
     `).get(id);
     if (!row) return null;
     const statusText = {
-      awaiting_procurement: "待采购填写",
+      awaiting_procurement: "待物流填写",
       awaiting_operation: "待运营填写",
       awaiting_shipping: "待发起岗位确认发货",
       shipped: "已登记发货",
@@ -4609,13 +4644,13 @@ export class InventoryDatabase {
   recordRelocationProcurement({ id, role, rma, relocationAddress, expectedRevision, requestId }) {
     const workId = Number(id);
     const fields = { rma: String(rma ?? "").trim(), relocationAddress: String(relocationAddress ?? "").trim() };
-    this.requirePurchasingUpgradeRole(role);
+    if (role !== "logistics") throw new BusinessError(403, "upgrade_logistics_required", "仅物流角色可填写 RMA 及移仓地址");
     if (!fields.rma) throw new BusinessError(400, "missing_rma", "请填写 RMA");
     if (!fields.relocationAddress) throw new BusinessError(400, "missing_relocation_address", "请填写移仓地址");
     return this.idempotent(`upgrade:relocation:procurement:${workId}`, requestId, { id: workId, role, ...fields, expectedRevision }, () => {
       const row = this.db.prepare("SELECT * FROM upgrade_relocation_work_items WHERE id = ?").get(workId);
       if (!row) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
-      if (row.status !== "awaiting_procurement") throw new BusinessError(409, "invalid_relocation_step", "当前移仓流程不在采购填写步骤");
+      if (row.status !== "awaiting_procurement") throw new BusinessError(409, "invalid_relocation_step", "当前移仓流程不在物流填写步骤");
       if (!Number.isInteger(Number(expectedRevision)) || Number(row.revision) !== Number(expectedRevision)) {
         throw new BusinessError(409, "upgrade_stale_revision", "移仓流程已被其他操作更新，请刷新后重试");
       }
@@ -4689,7 +4724,7 @@ export class InventoryDatabase {
       if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
       this.requireUpgradeRole(role);
       if (work.initiated_by_role !== role) throw new BusinessError(403, "relocation_initiator_required", "只有发起本次移仓的岗位可以选择包裹、填写 FBA 剩余并确认移仓发货");
-      if (work.status !== "awaiting_shipping") throw new BusinessError(409, "invalid_relocation_step", "采购和运营步骤完成后才能登记移仓发货");
+      if (work.status !== "awaiting_shipping") throw new BusinessError(409, "invalid_relocation_step", "物流和运营步骤完成后才能登记移仓发货");
       if (!Number.isInteger(Number(expectedRevision)) || Number(work.revision) !== Number(expectedRevision)) {
         throw new BusinessError(409, "upgrade_stale_revision", "移仓流程已被其他操作更新，请刷新后重试");
       }
@@ -5127,7 +5162,7 @@ export class InventoryDatabase {
       FROM document_events e
       LEFT JOIN allocation_documents d ON d.id = e.document_id
       WHERE e.id = ?
-        AND e.event_type IN ('entry', 'review', 'reject', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
+        AND e.event_type IN ('entry', 'review', 'reject', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
     `).get(eventId) ?? null;
   }
 
@@ -5207,7 +5242,7 @@ export class InventoryDatabase {
     const teams = [...new Set((payload.teams ?? [payload.team ?? payload.department]).filter(Boolean))];
     if (!group || (teams.length === 1 && teams[0] === group)) return row;
     // 未带团队的公共库存事件不按处理人臆造归属。
-    return teams.length === 0 && ['legacy_placeholder_removed'].includes(row.event_type) ? row : null;
+    return teams.length === 0 && ['legacy_placeholder_removed', 'transfer_upgrade_import'].includes(row.event_type) ? row : null;
   }
 
   auditRecord(row) {
@@ -5245,7 +5280,7 @@ export class InventoryDatabase {
       effectKnown = true;
       onHandDelta = 0;
       lockedDelta = 0;
-    } else if (["transit_import", "transit_import_revert", "transit_status", "transit_on_shelf", "transit_off_shelf", "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed", "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started", "upgrade_relocation_procurement", "upgrade_relocation_operation", "upgrade_relocation_corrected", "upgrade_relocation_cancelled", "upgrade_relocation_created", "upgrade_relocation_complete", "upgrade_direct_start_withdraw", "upgrade_direct_complete_withdraw", "upgrade_relocation_shipment_withdraw", "upgrade_relocation_complete_withdraw"].includes(operation)) {
+    } else if (["transfer_upgrade_import", "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf", "transit_off_shelf", "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed", "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started", "upgrade_relocation_procurement", "upgrade_relocation_operation", "upgrade_relocation_corrected", "upgrade_relocation_cancelled", "upgrade_relocation_created", "upgrade_relocation_complete", "upgrade_direct_start_withdraw", "upgrade_direct_complete_withdraw", "upgrade_relocation_shipment_withdraw", "upgrade_relocation_complete_withdraw"].includes(operation)) {
       effectKnown = true;
       onHandDelta = optionalPayloadNumber(payload.onHandDelta) ?? 0;
       lockedDelta = optionalPayloadNumber(payload.lockedDelta) ?? 0;
@@ -5438,7 +5473,7 @@ export class InventoryDatabase {
 
   createTransitPreviewToken({ kind, role, fileName, fileHash, templateHash, payload, ttlMs = 15 * 60 * 1000 }) {
     if (!TRANSIT_ROLE_SET.has(role)) throw new BusinessError(403, kind === "status" ? "transit_status_forbidden" : "transit_import_forbidden", kind === "status" ? "当前角色无权更新物流状态" : "当前角色无权导入在途库存");
-    if (!(kind === "import" || kind === "status")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
+    if (!(kind === "import" || kind === "status" || kind === "transfer_upgrade")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
     if (kind === "import") this.requireTransitImportTeams(role, payload.rows);
     return this.transaction(() => {
       const token = crypto.randomBytes(32).toString("base64url");
@@ -5483,6 +5518,7 @@ export class InventoryDatabase {
     }
     const normalizeRow = (item) => {
       const data = item?.data ?? item ?? {};
+      if (kind === "transfer_upgrade") return { sourceRow: Number(item?.sourceRow ?? 0), data: Object.fromEntries(TRANSFER_UPGRADE_FIELDS.map(([key]) => [key, String(data[key] ?? "")])) };
       if (kind === "import") {
         return {
           sourceRow: Number(item?.sourceRow ?? data.sourceRow ?? 0),
@@ -5513,7 +5549,7 @@ export class InventoryDatabase {
       const expected = normalizeRow(expectedRows[index]);
       const actual = actualRows[index];
       if (actual.sourceRow !== expected.sourceRow) throw new BusinessError(409, "preview_rows_mismatch", "提交源文件行与预览结果不一致，请重新预览");
-      const keys = kind === "import"
+      const keys = kind === "transfer_upgrade" ? TRANSFER_UPGRADE_FIELDS.map(([key]) => key) : kind === "import"
         ? ["model", "quantity", "fnsku", "shippingMethod", "plan", "date", "rawDate", "team", "version", "packPerBox"]
         : ["plan", "status"];
       if (keys.some((key) => actual.data[key] !== expected.data[key])) {
@@ -5525,6 +5561,30 @@ export class InventoryDatabase {
       if (Number(consumed.changes) !== 1) throw new BusinessError(409, "preview_token_used", "这份预览已提交过，请先查看导入或更新结果");
     }
     return { stored, snapshot, rows: actualRows };
+  }
+
+  getTransferUpgrades() {
+    return this.db.prepare(`SELECT r.*, b.file_name, b.sheet_name, b.imported_by_role, b.imported_at
+      FROM transfer_upgrade_rows r JOIN transfer_upgrade_imports b ON b.id = r.import_id
+      ORDER BY b.id DESC, r.source_row, r.id`).all().map(row => ({ id: Number(row.id), importId: Number(row.import_id),
+        sourceRow: Number(row.source_row), fileName: row.file_name, sheetName: row.sheet_name,
+        importedByRole: row.imported_by_role, importedAt: row.imported_at, data: JSON.parse(row.data_json) }));
+  }
+
+  importTransferUpgrades({ role, previewToken, fileName, fileHash, templateHash, rows, requestId }) {
+    if (!TRANSIT_ROLE_SET.has(role)) throw new BusinessError(403, "transfer_import_forbidden", "当前角色无权导入转仓升级表格");
+    return this.idempotent("transfer-upgrade:import", requestId, { role, previewToken, fileName, fileHash, templateHash, rows }, () => {
+      const proof = this.consumeTransitPreviewToken({ kind: "transfer_upgrade", role, token: previewToken, fileName, fileHash, templateHash, rows });
+      const errors = validateTransferUpgradeRows(proof.rows);
+      if (errors.length) throw new BusinessError(422, "invalid_transfer_rows", errors[0].message, { errors });
+      const at = new Date().toISOString();
+      const importId = Number(this.db.prepare(`INSERT INTO transfer_upgrade_imports(file_name,file_sha256,sheet_name,imported_by_role,imported_at)
+        VALUES(?,?,'转仓升级',?,?)`).run(proof.stored.file_name, proof.stored.file_sha256, role, at).lastInsertRowid);
+      const insert = this.db.prepare("INSERT INTO transfer_upgrade_rows(import_id,source_row,data_json) VALUES(?,?,?)");
+      for (const row of proof.rows) insert.run(importId, row.sourceRow, JSON.stringify(row.data));
+      this.addEvent(null, "transfer_upgrade_import", role, at, null, { importId, fileName: proof.stored.file_name, sheetName: "转仓升级", rowCount: proof.rows.length, models: [...new Set(proof.rows.map(row => row.data.model))], requestId });
+      return { ok: true, importId, rowCount: proof.rows.length };
+    });
   }
 
   requireTransitImportTeams(role, rows) {

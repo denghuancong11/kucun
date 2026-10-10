@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
-import { BusinessError, InventoryDatabase, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
+import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { LingxingHost } from './lingxing-host.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -96,6 +96,7 @@ function defaultPermissions() {
       "operation-1": byRole(true, true, true, true),
       "operation-2": byRole(true, true, true, true),
       purchasing: byRole(true, true, true, true),
+      logistics: byRole(true, true, true, true),
       alan: byRole(true, true, true, true),
       business: byRole(true, true, true, true),
     };
@@ -167,6 +168,7 @@ async function loadPermissions() {
       }
     }
     for (const category of controlledCategories) {
+      if (parsed?.[category] && !Object.hasOwn(parsed[category], "logistics")) parsed[category].logistics = { ...parsed[category].purchasing };
       if (parsed?.[category] && !Object.hasOwn(parsed[category], "alan")) parsed[category].alan = { ...parsed[category].purchasing };
     }
     return validatePermissions(parsed);
@@ -181,7 +183,7 @@ function requestRole(request) {
   return roles.includes(role) ? role : null;
 }
 
-const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing", "alan"]);
+const grossProfitHiddenRoles = new Set(["assistant-1", "assistant-2", "purchasing", "logistics", "alan"]);
 
 function approvalDocumentForRole(document, role) {
   if (!document || !grossProfitHiddenRoles.has(role) || !document.lingxing
@@ -217,7 +219,7 @@ async function handlePermissionsApi(request, response, pathname) {
     }
     const matrix = await loadPermissions();
     const slice = {};
-    for (const category of allCategories) slice[category] = matrix[category]?.[role === "alan" ? "purchasing" : role] ?? openPermissions;
+    for (const category of allCategories) slice[category] = matrix[category]?.[["alan", "logistics"].includes(role) ? "purchasing" : role] ?? openPermissions;
     sendJson(response, 200, { ok: true, role, permissions: slice });
     return true;
   }
@@ -247,7 +249,7 @@ async function parseJsonRequest(request) {
 async function categoryPermissions(role, category) {
   if (!controlledCategories.includes(category)) return openPermissions;
   const matrix = await loadPermissions();
-  return matrix[category]?.[role === "alan" ? "purchasing" : role] ?? { summary: false, detail: false, expand: false, actions: false };
+  return matrix[category]?.[["alan", "logistics"].includes(role) ? "purchasing" : role] ?? { summary: false, detail: false, expand: false, actions: false };
 }
 
 async function requireActions(role, category) {
@@ -521,7 +523,7 @@ function filteredInquiryExport(visible, role, query) {
     .sort((a, b) => (b.record.createdAt ?? "").localeCompare(a.record.createdAt ?? ""))
     .filter(item => (type === "all" || item.kind === type) && (category === "all" || item.record.category === category)
       && (progress === "all" || active(item))
-      && (scope === "all" || role === "purchasing" && item.kind === "inquiry" && (item.record.status === "pending_purchasing" || item.record.category === "墨盒" && item.record.status === "pending_assistant"))
+      && (scope === "all" || ["purchasing", "logistics"].includes(role) && item.kind === "inquiry" && (item.record.status === "pending_purchasing" || item.record.category === "墨盒" && item.record.status === "pending_assistant"))
       && (!keyword || [item.record.operator, item.record.model, item.record.asin, item.record.documentNo].some(value => value.toLocaleLowerCase().includes(keyword))));
   const groups = new Map();
   for (const item of items) {
@@ -535,7 +537,7 @@ function inquiryExportWorkbook(records) {
   const headers = ["型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
   const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
     row.department, row.store, row.operator, row.fnsku, new Date(row.createdAt).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }),
-    row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "墨盒" && row.archivedByRole === "purchasing") ? "已完成" : "" : row.statusText])];
+    row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "墨盒" && ["purchasing", "logistics"].includes(row.archivedByRole ?? "")) ? "已完成" : "" : row.statusText])];
   const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
   const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
     const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 0 ? ' s="1"' : '';
@@ -571,14 +573,14 @@ function inquiryExportWorkbook(records) {
 async function handleApprovalsApi(request, response, pathname) {
   const role = requireRole(request);
   if (pathname === "/api/approvals/inquiries/clear" && request.method === "POST") {
-    if (!["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员和采购可手动清空询库显示");
+    if (!["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员、采购和物流可手动清空询库显示");
     const payload = await parseJsonRequest(request);
     sendJson(response, 200, inventory.clearInquiryDisplay({ role, requestId: payload.requestId }));
     return true;
   }
   const exporting = pathname === "/api/approvals/inquiries/export";
   if ((pathname === "/api/approvals" || exporting) && request.method === "GET") {
-    if (exporting && !["admin", "purchasing"].includes(role)) throw new BusinessError(403, "inquiry_export_forbidden", "仅管理员和采购可导出询库明细");
+    if (exporting && !["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_export_forbidden", "仅管理员、采购和物流可导出询库明细");
     const result = inventory.approvalView({ refreshDisplay: !exporting });
     const sync = inventory.syncState();
     const visible = { allocations: [], inquiries: [] };
@@ -631,7 +633,7 @@ async function handleApprovalsApi(request, response, pathname) {
   if (match && request.method === "POST") {
     const id = Number(match[1]);
     const action = match[2];
-    const allowedRoles = { review: ["business"], reply: ["purchasing", "alan"], archive: ["purchasing", ...assistantRoleSet], recall: ["purchasing", "business"] }[action];
+    const allowedRoles = { review: ["business"], reply: ["purchasing", "logistics", "alan"], archive: ["purchasing", "logistics", ...assistantRoleSet], recall: ["purchasing", "logistics", "business"] }[action];
     if (!allowedRoles.includes(role)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
     await getInquiryForRole(id, role);
     const payload = await parseJsonRequest(request);
@@ -1188,6 +1190,20 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
   }
 }
 
+function parseTransferUpgrade(buffer, fileName) {
+  if (path.extname(fileName).toLowerCase() !== ".xlsx") throw new BusinessError(400, "transfer_xlsx_required", "转仓升级请上传包含“转仓升级”工作表的 XLSX 文件");
+  const table = readTableRows(buffer, fileName, { sheetName: "转仓升级", headerGroups: TRANSFER_UPGRADE_FIELDS.map(([,label]) => [label]) });
+  const headers = TRANSFER_UPGRADE_FIELDS.map(([,label]) => label);
+  for (let index = 0; index < headers.length; index++) {
+    if (String(table.rows[1]?.[index] ?? "").trim() !== headers[index]) throw new BusinessError(422, "transfer_headers", `工作表“转仓升级”第2—3行表头第 ${index+1} 列应为“${headers[index]}”`);
+  }
+  if (table.rows[2]?.some(value => String(value).trim())) throw new BusinessError(422, "transfer_headers", "工作表“转仓升级”第2—3行为合并表头，数据应从第4行开始");
+  const rows = table.rows.slice(3).map((values,index) => ({ sourceRow: index+4, values }))
+    .filter(row => row.values.some(value => String(value).trim()))
+    .map(row => ({ sourceRow: row.sourceRow, data: Object.fromEntries(TRANSFER_UPGRADE_FIELDS.map(([key],index) => [key, key === "date" ? normalizeTransitDate(row.values[index], undefined, table.date1904) || String(row.values[index] ?? "") : String(row.values[index] ?? "")])) }));
+  return { fileName, sheetName: "转仓升级", headers, rows, errors: validateTransferUpgradeRows(rows) };
+}
+
 function dateFromParts(year, month, day) {
   const y = Number(year); const m = Number(month); const d = Number(day);
   if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d) || y < 1900 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 31) return "";
@@ -1574,6 +1590,28 @@ const server = http.createServer(async (request, response) => {
         scopeDirectByTeam,
       });
       sendJson(response, 200, { ok: true, records, sync: inventory.syncState() });
+      return;
+    }
+    if (pathname === "/api/transfer-upgrades" && request.method === "GET") {
+      requireRole(request);
+      sendJson(response, 200, { ok: true, records: inventory.getTransferUpgrades(), sync: inventory.syncState() });
+      return;
+    }
+    if (pathname === "/api/transfer-upgrades/preview" && request.method === "POST") {
+      const role = requireRole(request);
+      if (!transitRoleSet.has(role)) throw new BusinessError(403, "transfer_import_forbidden", "当前角色无权导入转仓升级表格");
+      const body = await readBody(request);
+      const fileName = decodeFileNameHeader(request.headers["x-file-name"], "upload.xlsx");
+      const parsed = parseTransferUpgrade(body, fileName), fileSha256 = hashBuffer(body), templateSha256 = hashTemplate(parsed.headers);
+      const proof = parsed.errors.length === 0 ? inventory.createTransitPreviewToken({ kind: "transfer_upgrade", role, fileName, fileHash: fileSha256,
+        templateHash: templateSha256, payload: { rows: parsed.rows } }) : null;
+      sendJson(response, 200, { ok: true, ...parsed, fileSha256, templateSha256, ...(proof ? { previewToken: proof.token } : {}) });
+      return;
+    }
+    if (pathname === "/api/transfer-upgrades/import" && request.method === "POST") {
+      const role = requireRole(request), payload = await parseJsonRequest(request);
+      sendJson(response, 200, inventory.importTransferUpgrades({ role, previewToken: requirePreviewToken(payload), fileName: payload.fileName,
+        fileHash: payload.fileHash, templateHash: payload.templateHash, rows: Array.isArray(payload.rows) ? payload.rows : [], requestId: requireNonBlank(payload, "requestId", "提交编号") }));
       return;
     }
     /* 需求三：在途导入、物流状态更新与上架。上传/转换写入均由服务端事务、幂等键和角色校验保障。 */

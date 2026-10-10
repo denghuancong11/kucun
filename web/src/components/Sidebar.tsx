@@ -17,6 +17,7 @@ const roleOptions: { value: Role; label: string }[] = [
   { value: "operation-1", label: "运营·一团" },
   { value: "operation-2", label: "运营·二团" },
   { value: "purchasing", label: "采购" },
+  { value: "logistics", label: "物流" },
   { value: "alan", label: "Alan" },
   { value: "business", label: "商务" },
 ];

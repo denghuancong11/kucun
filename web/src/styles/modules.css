@@ -769,3 +769,4 @@
 .approval-data-row > .approval-procurement-cell { white-space: normal; overflow: visible; }
 .approval-procurement-cell input, .approval-procurement-cell select { width: 100%; min-width: 0; }
 .inquiry-procurement-form { display: grid; gap: 8px; }
+.transfer-upgrade-table { min-width: 1800px; } .transfer-upgrade-table td { white-space: pre-wrap; } .transfer-upgrade-table small { display: block; }

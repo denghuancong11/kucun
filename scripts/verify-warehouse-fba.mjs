@@ -177,7 +177,7 @@ try {
   await api("/api/upgrades/relocation-work-items", "assistant-1", { fbaArchiveId: fbaArchive.id, requestId: rid() }, 409);
   check("FBA 来源独立，无店铺字段且不受 90 天限制；团队与来源并发约束保留");
 
-  work = (await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`, "purchasing", {
+  work = (await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`, "logistics", {
     rma: "TEST-RMA",
     relocationAddress: "Synthetic destination",
     expectedRevision: work.revision,

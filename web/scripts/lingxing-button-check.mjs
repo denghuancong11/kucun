@@ -22,7 +22,7 @@ for(let i=0;i<2;i++) {
  row=db.reviewAllocation({id:row.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:row.revision,requestId:rid()}).record;
  row=db.confirmAllocation({id:row.id,role:'assistant-1',expectedRevision:row.revision,requestId:rid()}).record;
  let work=db.initiateRelocationUpgrade({allocationId:row.id,role:'operation-1',requestId:rid()}).workItem;
- work=db.recordRelocationProcurement({id:work.id,role:'purchasing',rma:'测试RMA',relocationAddress:'测试仓',expectedRevision:work.revision,requestId:rid()}).workItem;
+ work=db.recordRelocationProcurement({id:work.id,role:"logistics",rma:'测试RMA',relocationAddress:'测试仓',expectedRevision:work.revision,requestId:rid()}).workItem;
  work=db.recordRelocationOperation({id:work.id,role:'operation-1',removalOrderNo:`BUTTON-ORDER-${i}`,expectedRevision:work.revision,requestId:rid()}).workItem;
  works.push(work);
 }
@@ -163,7 +163,7 @@ try {
  // 当前来源保留第一笔历史发货，再建立同来源第二笔待发货移仓。
  const created=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocation-work-items');
  await a.getByRole('button',{name:'发起移仓升级',exact:true}).click();const secondResult=await(await created).json();assert.equal(secondResult.ok,true);let secondWork=secondResult.workItem;
- secondWork=db.recordRelocationProcurement({id:secondWork.id,role:'purchasing',rma:'第二笔RMA',relocationAddress:'第二笔地址',expectedRevision:secondWork.revision,requestId:rid()}).workItem;
+ secondWork=db.recordRelocationProcurement({id:secondWork.id,role:"logistics",rma:'第二笔RMA',relocationAddress:'第二笔地址',expectedRevision:secondWork.revision,requestId:rid()}).workItem;
  secondWork=db.recordRelocationOperation({id:secondWork.id,role:'operation-1',removalOrderNo:'BUTTON-SECOND-SAME-SOURCE',expectedRevision:secondWork.revision,requestId:rid()}).workItem;
  await role(a,'admin');await nav(a,'升级库存');await choose(0);
  const historic=a.locator('[data-relocation-id="'+relocation.id+'"]'),secondCard=a.locator('[data-relocation-work-id="'+secondWork.id+'"]');

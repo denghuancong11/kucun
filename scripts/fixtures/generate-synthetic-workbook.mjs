@@ -30,7 +30,7 @@ function columnName(index) {
   return result;
 }
 
-function zip(entries) {
+export function zip(entries) {
   const localParts = [];
   const centralParts = [];
   let offset = 0;

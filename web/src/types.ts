@@ -1,10 +1,10 @@
 export type RequirementKey = "req1" | "req3" | "req4" | "approvals" | "audit";
 
 /* 助理与运营分别按团队办理；硒鼓库存明细和公开调拨摘要保持跨团可见。 */
-export type Role = "admin" | "assistant-1" | "assistant-2" | "operation-1" | "operation-2" | "purchasing" | "business" | "alan";
+export type Role = "admin" | "assistant-1" | "assistant-2" | "operation-1" | "operation-2" | "purchasing" | "business" | "alan" | "logistics";
 
 /** 在途导入、物流更新及页面访问角色；助理数据范围仍由服务端按团队复核。 */
-export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing"];
+export const TRANSIT_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2", "purchasing", "logistics"];
 export const TRANSIT_VIEW_ROLES: readonly Role[] = [...TRANSIT_ROLES, "alan"];
 export const TRANSIT_SHELF_ROLES: readonly Role[] = ["admin", "assistant-1", "assistant-2"];
 
@@ -650,7 +650,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;
@@ -699,3 +699,21 @@ export interface AuditPayload {
   records: AuditRecord[];
   sync: SyncState;
 }
+
+export const TRANSFER_UPGRADE_FIELDS = [
+  ["model", "型号"], ["source", "来源"], ["plan", "发货计划号"], ["date", "发货时间"],
+  ["version", "版本号"], ["fnsku", "已贴FNSKU"], ["returnQuantity", "退仓数量"],
+  ["warehouse", "目前所在海外仓"], ["store", "退仓店铺"], ["status", "状况"], ["rma", "RMA"],
+  ["countedQuantity", "实际清点数量"], ["inProgressQuantity", "升级中数量"],
+  ["completedQuantity", "升级完数量"], ["completedVersion", "升级完，版本号"],
+] as const;
+export type TransferUpgradeData = Record<typeof TRANSFER_UPGRADE_FIELDS[number][0], string>;
+export type TransferUpgradeRow = { sourceRow: number; data: TransferUpgradeData };
+export interface TransferUpgradePreview {
+  fileName: string; sheetName: string; fileSha256: string; templateSha256: string; previewToken?: string;
+  rows: TransferUpgradeRow[]; errors: Array<{ sheet: string; row: number; field: string; message: string }>;
+}
+export interface TransferUpgradeRecord extends TransferUpgradeRow {
+  id: number; importId: number; fileName: string; sheetName: string; importedByRole: Role; importedAt: string;
+}
+export type TransferUpgradesPayload = { records: TransferUpgradeRecord[]; sync: SyncState };

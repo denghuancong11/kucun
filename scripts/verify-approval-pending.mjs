@@ -108,9 +108,9 @@ try{
  // The original procurement POST never reached the service. Another purchaser advances it first.
  let work=(await api('/api/upgrades/relocation-work-items','operation-1',{inquiryId:qDone.id,requestId:rid()})).workItem;
  const oldProcurement={rma:'ORIGINAL-RMA',relocationAddress:'原采购地址',expectedRevision:work.revision,requestId:rid()};
- work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',{rma:'COLLEAGUE-RMA',relocationAddress:'同事已确认地址',expectedRevision:work.revision,requestId:rid()})).workItem;
+ work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'COLLEAGUE-RMA',relocationAddress:'同事已确认地址',expectedRevision:work.revision,requestId:rid()})).workItem;
  assert.equal(work.status,'awaiting_operation');
- await unchangedFailure(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',oldProcurement,409,'invalid_relocation_step',true);
+ await unchangedFailure(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",oldProcurement,409,'invalid_relocation_step',true);
  assert.equal(db.db.prepare('SELECT COUNT(*) n FROM idempotency_requests WHERE request_id=?').get(oldProcurement.requestId).n,0);
  check('采购同岗推进后旧未提交请求获得成功回滚证据，已提交禁权403和团队403不误报未提交');
  const previewFileName='恢复证据硒鼓.csv',csv='ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\nSYNTH-TONER-001,7,4,XPROOF,SyntheticWarehouseB,PROOF-TOKEN,2026-09-22,一团,V1';

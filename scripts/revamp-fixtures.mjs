@@ -47,7 +47,7 @@ export function seedVisualFixtures(stateRoot) {
     const sources = Array.from({ length: 28 }, (_, i) => allocation('SYNTH-TONER-001', i, 3));
     const source = sources[0];
     let work = db.initiateRelocationUpgrade({ allocationId: source.id, role: 'operation-1', requestId: rid() }).workItem;
-    work = db.recordRelocationProcurement({ id: work.id, role: 'purchasing', rma: 'RMA-VISUAL', relocationAddress: '洛杉矶升级仓', expectedRevision: work.revision, requestId: rid() }).workItem;
+    work = db.recordRelocationProcurement({ id: work.id, role: "logistics", rma: 'RMA-VISUAL', relocationAddress: '洛杉矶升级仓', expectedRevision: work.revision, requestId: rid() }).workItem;
     work = db.recordRelocationOperation({ id: work.id, role: 'operation-1', removalOrderNo: 'REMOVE-VISUAL', expectedRevision: work.revision, requestId: rid() }).workItem;
     work = db.syncRelocationLogistics({ id: work.id, role: 'operation-1', capturedAt: displayTime, shipments: [{ externalId: 'PKG-VISUAL', storeId: 'STORE-VISUAL', storeName: 'VISUALUS', countryCode: 'US', orderNo: 'REMOVE-VISUAL', fnsku: source.fnsku, carrier: 'UPS', trackingNo: 'TRACK-VISUAL', shipDate: '2026-09-10', quantity: 2 }], requestId: rid() }).workItem;
     db.shipRelocationUpgrade({ id: work.id, role: 'operation-1', fbaRemainingQuantity: 2, externalItems: [{ lineId: work.externalShipments[0].lineId, quantity: 2 }], expectedRevision: work.revision, requestId: rid() });

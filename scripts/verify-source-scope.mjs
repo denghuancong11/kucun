@@ -86,7 +86,7 @@ try{
   for(const [index,document] of [d1,d2].entries()) {
    const suffix=String(index+1),assistant='assistant-'+suffix,operation='operation-'+suffix;
    let work=(await api('/api/upgrades/relocation-work-items',assistant,{allocationId:document.id,requestId:rid()})).workItem;
-   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',{rma:'RMA'+work.id,relocationAddress:'回库验证仓',expectedRevision:work.revision,requestId:rid()})).workItem;
+   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'RMA'+work.id,relocationAddress:'回库验证仓',expectedRevision:work.revision,requestId:rid()})).workItem;
    work=(await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,operation,{removalOrderNo:'ORDER'+work.id,expectedRevision:work.revision,requestId:rid()})).workItem;
    work=db.syncRelocationLogistics({id:work.id,role:assistant,shipments:[{externalId:'PACK'+work.id,storeId:'FIX',orderNo:'ORDER'+work.id,fnsku:'XSAME',quantity:4,carrier:'UPS',trackingNo:'TRACK'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
    const shipped=await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,assistant,{fbaRemainingQuantity:0,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:4}],expectedRevision:work.revision,requestId:rid()});

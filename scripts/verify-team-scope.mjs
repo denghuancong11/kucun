@@ -98,7 +98,7 @@ try {
   for(const source of [{allocationId:second.id},{inquiryId:inquiry.id,...(category==='墨盒'?{sourceRevision:inquiry.revision}:{})}]) {
    await api('/api/upgrades/relocation-work-items','operation-1',{...source,requestId:rid()},403);
    let work=(await api('/api/upgrades/relocation-work-items','operation-2',{...source,requestId:rid()})).workItem;
-   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,'purchasing',{rma:'RMA',relocationAddress:'仓库',expectedRevision:work.revision,requestId:rid()})).workItem;
+   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'RMA',relocationAddress:'仓库',expectedRevision:work.revision,requestId:rid()})).workItem;
    await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,'operation-1',{removalOrderNo:'TEAMORDER',expectedRevision:work.revision,requestId:rid()},403);
    await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,'operation-2',{removalOrderNo:'TEAMORDER-'+work.id,expectedRevision:work.revision,requestId:rid()});
    await api('/api/lingxing/jobs','operation-1',{action:'logistics',workId:work.id,requestId:rid()},403);

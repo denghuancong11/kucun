@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { confirmPendingBusinessRequest, fetchSync, readPendingBusinessRequests, type PendingBusinessRequest } from "../api";
 import type { Role } from "../types";
 
-const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", alan: "Alan", business: "商务" };
+const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", logistics: "物流", alan: "Alan", business: "商务" };
 const actionNames: Array<[RegExp, string]> = [
+  [/^\/api\/transfer-upgrades\/import$/, "转仓升级导入"],
   [/^\/api\/approvals\/inquiries\/clear$/, "询库数据流-手动清空"],
   [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
   [/^\/api\/allocations$/, "调拨录入"], [/\/allocations\/\d+\/review$/, "调拨审核"], [/\/allocations\/\d+\/confirm$/, "调拨完成"],
   [/^\/api\/upgrades\/direct$/, "在库升级发起"], [/\/upgrades\/direct\/\d+\/complete$/, "在库升级入库"], [/\/upgrades\/relocations\/\d+\/complete$/, "移仓升级入库"],
-  [/^\/api\/upgrades\/relocation-work-items$/, "移仓升级发起"], [/\/procurement$/, "采购资料"], [/\/operation$/, "运营订单"], [/\/ship$/, "移仓发货"],
+  [/^\/api\/upgrades\/relocation-work-items$/, "移仓升级发起"], [/\/procurement$/, "物流资料"], [/\/operation$/, "运营订单"], [/\/ship$/, "移仓发货"],
   [/^\/api\/transit\/import$/, "在途导入"], [/\/transit\/status\/apply$/, "物流更新"], [/\/on-shelf$/, "在途上架"],
 ];
 function describe(record: PendingBusinessRequest) {
