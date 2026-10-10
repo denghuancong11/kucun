@@ -8,6 +8,7 @@ import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
 import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { relocationAccounts, accountStore, processRelocationAddress } from './relocation-address.mjs';
+import {TRANSFER_STAGES,TRANSFER_EDITABLE,TRANSFER_REVERSAL_HEADERS,transferUpdateWorkbook,transferUpdateValues} from './transfer-workbook.mjs';
 import { LingxingHost } from './lingxing-host.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -1261,6 +1262,54 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
   }
 }
 
+async function handleTransferUpdate(request,response,pathname,role,stage) {
+  if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
+  if(!Object.hasOwn(TRANSFER_STAGES,stage))throw new BusinessError(422,'transfer_stage','请选择RMA、实际清点数量或升级进度');
+  const fields=TRANSFER_UPGRADE_FIELDS,headers=['转仓单号',...fields.map(([,label])=>label),'记录版本'];
+  const records=inventory.getTransferUpgrades();
+  if(pathname.endsWith('/template')&&request.method==='GET') {
+    const selected=records.filter(r=>stage==='rma'||stage==='count'&&r.data.rma||stage==='progress'&&r.data.countedQuantity!=='');
+    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-'+TRANSFER_STAGES[stage]+'更新模板.xlsx')});
+    response.end(transferUpdateWorkbook(selected,stage,fields,crc32));return;
+  }
+  if(pathname.endsWith('/import')&&request.method==='POST'){
+    sendJson(response,200,inventory.updateTransferUpgrades({...await parseJsonRequest(request),role,stage}));return;
+  }
+  if(!pathname.endsWith('/preview')||request.method!=='POST')throw new BusinessError(404,'route_not_found','找不到模板操作');
+  const body=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'upload.xlsx');
+  if(path.extname(fileName).toLowerCase()!=='.xlsx')throw new BusinessError(422,'xlsx_required','请上传转仓升级更新模板XLSX');
+  const table=readTableRows(body,fileName,{sheetName:'转仓升级',headerGroups:headers.map(x=>[x])});
+  if(headers.some((x,i)=>String(table.rows[1]?.[i]??'')!==x)||table.rows[2]?.some(x=>String(x??'').trim()))throw new BusinessError(422,'transfer_update_headers','工作表“转仓升级”第2—3行表头不符，请下载带转仓单号的更新模板');
+  const errors=[],rows=[],seen=new Set(),reversals=new Map();
+  if(stage==='progress'){
+    const t=readTableRows(body,fileName,{sheetName:'扣回明细',headerGroups:TRANSFER_REVERSAL_HEADERS.map(x=>[x])});
+    if(TRANSFER_REVERSAL_HEADERS.some((x,i)=>String(t.rows[1]?.[i]??'')!==x))throw new BusinessError(422,'transfer_reversal_headers','工作表“扣回明细”第2—3行表头不符');
+    t.rows.slice(3).forEach((values,index)=>{
+      if(String(values[7]??'').trim()==='')return;
+      const no=String(values[0]??''),key=String(values[1]??''),record=records.find(r=>r.documentNo===no),receipt=record?.receiptBatches.find(b=>b.batchKey===key);
+      const expected=receipt?[no,key,receipt.version,receipt.warehouse,receipt.quantity,receipt.locked,receipt.issue]:[];
+      if(!receipt||expected.some((v,i)=>String(v)!==String(values[i]??''))){errors.push({sourceRow:index+4,message:'工作表“扣回明细”第 '+(index+4)+' 行，转仓单号 '+no+'，“原入库批次”：不属于本单，或只读信息已变化，请重新下载'});return;}
+      if(!reversals.has(no))reversals.set(no,[]);reversals.get(no).push({batchKey:key,quantity:Number(String(values[7]).trim())});
+    });
+  }
+  for(let i=3;i<table.rows.length;i++){
+    const values=table.rows[i],sourceRow=i+1;if(!values.some(x=>String(x??'').trim()))continue;
+    const no=String(values[0]??'');
+    try {
+      if(seen.has(no))throw new Error('“转仓单号”：重复，每单仅保留一行');seen.add(no);
+      const record=records.find(r=>r.documentNo===no);if(!record)throw new Error('“转仓单号”：不存在，不能新增记录');
+      const editable=TRANSFER_EDITABLE[stage].map(key=>1+fields.findIndex(([k])=>k===key)),expected=transferUpdateValues(record,fields);
+      for(let c=0;c<headers.length;c++)if(!editable.includes(c)&&String(values[c]??'')!==String(expected[c]??''))throw new Error('“'+headers[c]+'”：只读字段已修改或过期，请重新下载');
+      const data={documentNo:no,revision:record.revision,stage,...Object.fromEntries(TRANSFER_EDITABLE[stage].map(k=>[k,String(values[1+fields.findIndex(([key])=>key===k)]??'')])),reversals:reversals.get(no)??[]};
+      const item={sourceRow,data},validated=inventory.validateTransferUpdate(item,stage);rows.push({...item,before:validated.before,after:validated.after,quantityDelta:validated.delta});
+    }catch(error){errors.push({sourceRow,message:error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行，转仓单号 '+no+'，'+error.message});}
+  }
+  for(const no of reversals.keys())if(!seen.has(no))errors.push({sourceRow:4,message:'工作表“扣回明细”，转仓单号 '+no+'：缺少对应升级进度更新行'});
+  if(!rows.length&&!errors.length)errors.push({sourceRow:4,message:'工作表“转仓升级”第4行起没有待更新记录'});
+  const fileSha256=hashBuffer(body),templateSha256=hashTemplate([stage,...headers]),proof=errors.length?null:inventory.createTransitPreviewToken({kind:'transfer_update',role,fileName,fileHash:fileSha256,templateHash:templateSha256,payload:{rows}});
+  sendJson(response,200,{ok:true,fileName,stage,fileSha256,templateSha256,rows,errors,previewToken:proof?.token});
+}
+
 function parseTransferUpgrade(buffer, fileName) {
   if (path.extname(fileName).toLowerCase() !== ".xlsx") throw new BusinessError(400, "transfer_xlsx_required", "转仓升级请上传包含“转仓升级”工作表的 XLSX 文件");
   const table = readTableRows(buffer, fileName, { sheetName: "转仓升级", headerGroups: TRANSFER_UPGRADE_FIELDS.map(([,label]) => [label]) });
@@ -1272,7 +1321,16 @@ function parseTransferUpgrade(buffer, fileName) {
   const rows = table.rows.slice(3).map((values,index) => ({ sourceRow: index+4, values }))
     .filter(row => row.values.some(value => String(value).trim()))
     .map(row => ({ sourceRow: row.sourceRow, data: Object.fromEntries(TRANSFER_UPGRADE_FIELDS.map(([key],index) => [key, key === "date" ? normalizeTransitDate(row.values[index], undefined, table.date1904) || String(row.values[index] ?? "") : String(row.values[index] ?? "")])) }));
-  return { fileName, sheetName: "转仓升级", headers, rows, errors: validateTransferUpgradeRows(rows) };
+  const errors=validateTransferUpgradeRows(rows);
+  for(const row of rows){
+    for(const [key,label] of TRANSFER_UPGRADE_FIELDS.slice(10)){
+      const value=String(row.data[key]??'').trim();
+      if(value&&!/^xxx$/i.test(value)&&!value.includes('填写项'))errors.push({sheet:'转仓升级',row:row.sourceRow,field:label,message:'工作表“转仓升级”第 '+row.sourceRow+' 行“'+label+'”：首次导入先留空，请由物流通过更新模板办理'});
+      row.data[key]='';
+    }
+    row.data.status='已在第三方海外仓';
+  }
+  return { fileName, sheetName: "转仓升级", headers, rows, errors };
 }
 
 function dateFromParts(year, month, day) {
@@ -1662,6 +1720,9 @@ const server = http.createServer(async (request, response) => {
       });
       sendJson(response, 200, { ok: true, records, sync: inventory.syncState() });
       return;
+    }
+    if(pathname.startsWith('/api/transfer-upgrades/update/')) {
+      await handleTransferUpdate(request,response,pathname,requireRole(request),new URL(request.url,'http://localhost').searchParams.get('stage'));return;
     }
     if (pathname === "/api/transfer-upgrades" && request.method === "GET") {
       requireRole(request);

@@ -2,7 +2,7 @@
 import { zip } from './generate-synthetic-workbook.mjs';
 import { TRANSFER_UPGRADE_FIELDS } from '../../inventory-db.mjs';
 const xml=v=>String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
-export const transferSample=['SYNTH-TRANSFER','第三方海外仓','TRANSFER-PLAN','2026-10-10','V01','000012中文',0,'海外仓原值','STOREUS','待清点','RMA-001',-2,1.25,'待核对','V02'];
+export const transferSample=['SYNTH-TRANSFER','第三方海外仓','TRANSFER-PLAN','2026-10-10','V01','000012中文',0,'海外仓原值','STOREUS','已在第三方海外仓','','','','',''];
 export function transferWorkbook(rows=[transferSample,transferSample],sheetName='转仓升级') {
  const headers=TRANSFER_UPGRADE_FIELDS.map(([,label])=>label),row=(values,n)=>`<row r="${n}">${values.map((v,i)=>v===null?'':`<c r="${String.fromCharCode(65+i)}${n}" ${typeof v==='number'?'':'t="inlineStr"'}>${typeof v==='number'?`<v>${v}</v>`:`<is><t xml:space="preserve">${xml(v)}</t></is>`}</c>`).join('')}</row>`;
  const sheet=`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${row(headers,2)}${rows.map((v,i)=>row(v,i+4)).join('')}</sheetData><mergeCells count="15">${headers.map((_,i)=>`<mergeCell ref="${String.fromCharCode(65+i)}2:${String.fromCharCode(65+i)}3"/>`).join('')}</mergeCells></worksheet>`;

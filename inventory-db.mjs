@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { accountStore, relocationAccounts, processRelocationAddress, lingxingStore } from './relocation-address.mjs';
 
-export const INVENTORY_SCHEMA_VERSION = 33;
+export const INVENTORY_SCHEMA_VERSION = 34;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -41,9 +41,9 @@ const ASSISTANT_ROLE_SET = new Set(ASSISTANT_ROLES);
 export const TRANSFER_UPGRADE_FIELDS = Object.freeze([["model","型号"],["source","来源"],["plan","发货计划号"],["date","发货时间"],["version","版本号"],["fnsku","已贴FNSKU"],["returnQuantity","退仓数量"],["warehouse","目前所在海外仓"],["store","退仓店铺"],["status","状况"],["rma","RMA"],["countedQuantity","实际清点数量"],["inProgressQuantity","升级中数量"],["completedQuantity","升级完数量"],["completedVersion","升级完，版本号"]]);
 export function validateTransferUpgradeRows(rows) {
   if (!rows.length) return [{ sheet: "转仓升级", row: 4, field: "", message: "工作表“转仓升级”第4行起没有可导入数据" }];
-  return rows.flatMap(row => TRANSFER_UPGRADE_FIELDS.flatMap(([key, label]) => {
+  return rows.flatMap(row => TRANSFER_UPGRADE_FIELDS.slice(0,9).flatMap(([key, label]) => {
     const value = String(row.data?.[key] ?? "").trim();
-    const reason = !value ? "必填，不能为空" : /^xxx$/i.test(value) || value.includes("填写项") ? "仍为模板示例或说明，请填写实际业务值" : "";
+    const reason = !value ? "必填，不能为空" : /^xxx$/i.test(value) || value.includes("填写项") ? "仍为模板示例或说明，请填写实际业务值" : key === "returnQuantity" && (!Number.isSafeInteger(Number(value)) || Number(value)<0) ? "须为非负整数（销售套数）" : "";
     return reason ? [{ sheet: "转仓升级", row: row.sourceRow, field: label, message: `工作表“转仓升级”第 ${row.sourceRow} 行“${label}”：${reason}` }] : [];
   }));
 }
@@ -1625,6 +1625,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateInquiryDisplayV31(db, createdAt);
   migrateTransferUpgradeV32(db, createdAt);
   migrateRelocationWorkflowV33(db, createdAt);
+  migrateTransferWorkflowV34(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2888,6 +2889,30 @@ function migrateRelocationWorkflowV33(db, at) {
   db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(33,?,?)').run(at,'移仓账号及原始地址、当前升级中数量、独立升级入库批次与批量更新预览');
 }
 
+function migrateTransferWorkflowV34(db, at) {
+  const legacy=db.prepare('SELECT id,import_id,source_row,data_json FROM transfer_upgrade_rows').all();
+  if(legacy.length) throw new Error('存量转仓记录需确认办理阶段和入库事实，未自动迁移：'+JSON.stringify(legacy));
+  db.exec("ALTER TABLE transfer_upgrade_rows ADD COLUMN document_no TEXT; CREATE UNIQUE INDEX uq_transfer_document_no ON transfer_upgrade_rows(document_no); ALTER TABLE transfer_upgrade_rows ADD COLUMN revision INTEGER NOT NULL DEFAULT 1; ALTER TABLE transfer_upgrade_rows ADD COLUMN updated_at TEXT; ALTER TABLE stock_batches ADD COLUMN transfer_upgrade_id INTEGER REFERENCES transfer_upgrade_rows(id);");
+  const views=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='view'").all();
+  const triggers=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all();
+  const indexes=db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='upgrade_inventory_ledger' AND sql IS NOT NULL").all();
+  for(const x of views)db.exec('DROP VIEW "'+x.name+'"');
+  for(const x of triggers)db.exec('DROP TRIGGER "'+x.name+'"');
+  const ledgerSequence=db.prepare("SELECT seq FROM sqlite_sequence WHERE name='upgrade_inventory_ledger'").get()?.seq;
+  const schema=db.prepare("SELECT sql FROM sqlite_master WHERE name='upgrade_inventory_ledger'").get().sql;
+  db.exec(schema.replace(/CREATE TABLE (?:IF NOT EXISTS )?"?upgrade_inventory_ledger"?/, 'CREATE TABLE upgrade_inventory_ledger_v34')
+    .replace('upgrade_id INTEGER NOT NULL','upgrade_id INTEGER').replace("'direct_line', 'relocation'", "'direct_line', 'relocation', 'transfer'")
+    .replace("'relocation_completion_reverse'", "'relocation_completion_reverse', 'transfer_receipt', 'transfer_completion_reverse'")
+    .replace("metadata_json TEXT NOT NULL DEFAULT '{}'", "metadata_json TEXT NOT NULL DEFAULT '{}', CHECK ((source_type='transfer' AND upgrade_id IS NULL) OR (source_type<>'transfer' AND upgrade_id IS NOT NULL))"));
+  db.exec('INSERT INTO upgrade_inventory_ledger_v34 SELECT * FROM upgrade_inventory_ledger; DROP TABLE upgrade_inventory_ledger; ALTER TABLE upgrade_inventory_ledger_v34 RENAME TO upgrade_inventory_ledger;');
+  if(ledgerSequence!=null)db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='upgrade_inventory_ledger'").run(ledgerSequence);
+  for(const x of indexes)db.exec(x.sql);for(const x of views)db.exec(x.sql);for(const x of triggers)db.exec(x.sql);
+  const preview=db.prepare("SELECT sql FROM sqlite_master WHERE name='transit_preview_tokens'").get().sql;
+  db.exec(preview.replace('transit_preview_tokens','transit_preview_tokens_v34').replace("'relocation_update'", "'relocation_update', 'transfer_update'"));
+  db.exec('INSERT INTO transit_preview_tokens_v34 SELECT * FROM transit_preview_tokens; DROP TABLE transit_preview_tokens; ALTER TABLE transit_preview_tokens_v34 RENAME TO transit_preview_tokens; CREATE INDEX idx_transit_preview_expiry ON transit_preview_tokens(expires_at);');
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(34,?,?)').run(at,'转仓分阶段模板办理、独立公共入库批次及反向流水');
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2897,9 +2922,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v32 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v33 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -3017,6 +3042,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 30) { migrateInquiryDisplayV31(db, appliedAt); version = 31; }
     if (version === 31) { migrateTransferUpgradeV32(db, appliedAt); version = 32; }
     if (version === 32) { migrateRelocationWorkflowV33(db, appliedAt); version = 33; }
+    if (version === 33) { migrateTransferWorkflowV34(db, appliedAt); version = 34; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3235,7 +3261,7 @@ function rowToDocument(row, lingxing = null) {
 }
 
 const AUDIT_OPERATIONS = [
-  "entry", "review", "reject", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import",
+  "entry", "review", "reject", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import", "transfer_upgrade_update",
   "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf",
   "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed",
   "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started",
@@ -3305,6 +3331,7 @@ function auditResult(operation, payload = {}) {
   if (operation === "review") return "商务已批准";
   if (operation === "reject") return "商务已拒绝";
   if (operation === "import_stage") return "已暂存";
+  if (operation === "transfer_upgrade_update") return `转仓${({rma:"RMA",count:"清点数量",progress:"升级进度"})[payload.stage]}已更新，${payload.after.status}`;
   if (operation === "transfer_upgrade_import") return `转仓升级已导入 ${payload.rowCount} 行，普通库存不变`;
   if (operation === "transit_import") return "在途已入账";
   if (operation === "transit_import_revert") return "在途导入已撤销";
@@ -3505,8 +3532,8 @@ export class InventoryDatabase {
   visibleStockBatchKeys(model, category, visibleGroup, scopeAllCategories = false) {
     if (!visibleGroup || (!scopeAllCategories && category !== "墨盒")) return null;
     const teamsByBatch = this.stockBatchSourceTeams();
-    return new Set(this.db.prepare("SELECT batch_key FROM stock_batches WHERE model = ?").all(model)
-      .filter((row) => teamsByBatch.get(row.batch_key)?.size === 1 && teamsByBatch.get(row.batch_key)?.has(visibleGroup))
+    return new Set(this.db.prepare("SELECT batch_key,transfer_upgrade_id FROM stock_batches WHERE model = ?").all(model)
+      .filter((row) => row.transfer_upgrade_id != null || teamsByBatch.get(row.batch_key)?.size === 1 && teamsByBatch.get(row.batch_key)?.has(visibleGroup))
       .map((row) => row.batch_key));
   }
 
@@ -3539,7 +3566,7 @@ export class InventoryDatabase {
         version: legacy ? null : row.version,
         fnsku: legacy ? null : row.fnsku,
         packPerBox: row.pack_per_box == null ? null : String(row.pack_per_box),
-        batchKey: row.batch_key, warehouse: row.warehouse, shippingMethod: row.shipping_method, sourceTeam: row.source_team || null,
+        batchKey: row.batch_key, warehouse: row.warehouse, shippingMethod: row.shipping_method, sourceTeam: row.source_team || null, isPublic: row.transfer_upgrade_id != null, transferDocumentNo: row.transfer_upgrade_id == null ? null : this.db.prepare("SELECT document_no FROM transfer_upgrade_rows WHERE id=?").get(row.transfer_upgrade_id)?.document_no,
         revision: Number(row.revision),
         isLegacyPlaceholder: legacy,
       });
@@ -3568,7 +3595,7 @@ export class InventoryDatabase {
     const visibleStockRows = (model, category) => {
       const rows = stockDetails[model] ?? [];
       if (!visibleGroup || !scopedCategory(category)) return rows;
-      return rows.filter((row) => teamsByBatch.get(row.batchKey)?.size === 1 && teamsByBatch.get(row.batchKey)?.has(visibleGroup));
+      return rows.filter((row) => row.isPublic || teamsByBatch.get(row.batchKey)?.size === 1 && teamsByBatch.get(row.batchKey)?.has(visibleGroup));
     };
     const visibleTransitRows = (model, category) => {
       const rows = inTransitDetails[model] ?? [];
@@ -5214,11 +5241,15 @@ export class InventoryDatabase {
       FROM document_events e
       LEFT JOIN allocation_documents d ON d.id = e.document_id
       WHERE e.id = ?
-        AND e.event_type IN ('entry', 'review', 'reject', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
+        AND e.event_type IN ('entry', 'review', 'reject', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transfer_upgrade_update', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
     `).get(eventId) ?? null;
   }
 
   upgradeLedgerForAuditEvent(row) {
+    if(row.event_type==='transfer_upgrade_update') {
+      const p=parseEventPayload(row.payload_json);
+      return this.db.prepare("SELECT * FROM upgrade_inventory_ledger WHERE source_type='transfer' AND source_id=? AND request_id=? ORDER BY id").all(p.transferId,p.requestId);
+    }
     if (!String(row.event_type).startsWith("upgrade_")) return [];
     const payload = parseEventPayload(row.payload_json);
     let operationId = Number(payload.operationId);
@@ -5294,7 +5325,7 @@ export class InventoryDatabase {
     const teams = [...new Set((payload.teams ?? [payload.team ?? payload.department]).filter(Boolean))];
     if (!group || (teams.length === 1 && teams[0] === group)) return row;
     // 未带团队的公共库存事件不按处理人臆造归属。
-    return teams.length === 0 && ['legacy_placeholder_removed', 'transfer_upgrade_import'].includes(row.event_type) ? row : null;
+    return teams.length === 0 && ['legacy_placeholder_removed', 'transfer_upgrade_import', 'transfer_upgrade_update'].includes(row.event_type) ? row : null;
   }
 
   auditRecord(row) {
@@ -5332,7 +5363,7 @@ export class InventoryDatabase {
       effectKnown = true;
       onHandDelta = 0;
       lockedDelta = 0;
-    } else if (["transfer_upgrade_import", "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf", "transit_off_shelf", "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed", "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started", "upgrade_relocation_procurement", "upgrade_relocation_operation", "upgrade_relocation_corrected", "upgrade_relocation_cancelled", "upgrade_relocation_created", "upgrade_relocation_complete", "upgrade_direct_start_withdraw", "upgrade_direct_complete_withdraw", "upgrade_relocation_shipment_withdraw", "upgrade_relocation_complete_withdraw"].includes(operation)) {
+    } else if (["transfer_upgrade_update", "transfer_upgrade_import", "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf", "transit_off_shelf", "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed", "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started", "upgrade_relocation_procurement", "upgrade_relocation_operation", "upgrade_relocation_corrected", "upgrade_relocation_cancelled", "upgrade_relocation_created", "upgrade_relocation_complete", "upgrade_direct_start_withdraw", "upgrade_direct_complete_withdraw", "upgrade_relocation_shipment_withdraw", "upgrade_relocation_complete_withdraw"].includes(operation)) {
       effectKnown = true;
       onHandDelta = optionalPayloadNumber(payload.onHandDelta) ?? 0;
       lockedDelta = optionalPayloadNumber(payload.lockedDelta) ?? 0;
@@ -5364,7 +5395,7 @@ export class InventoryDatabase {
     const category = model ? (this.getModel(model)?.category ?? payload.category ?? null) : (payload.category ?? null);
     const payloadTeams = Array.isArray(payload.teams) ? payload.teams.map((value) => String(value).trim()).filter(Boolean) : [];
     const team = String(row.currentTeam ?? row.department ?? payload.team ?? (payloadTeams.length === 1 ? payloadTeams[0] : payload.department ?? "")).trim() || undefined;
-    const businessNo = operation === "upgrade_relocation_cancelled" ? payload.workNo : payload.upgradeNo ?? row.document_no ?? null;
+    const businessNo = operation === "upgrade_relocation_cancelled" ? payload.workNo : payload.transferNo ?? payload.upgradeNo ?? row.document_no ?? null;
     const documentId = sourceAvailable ? Number(row.document_id) : null;
 
     return {
@@ -5525,7 +5556,7 @@ export class InventoryDatabase {
 
   createTransitPreviewToken({ kind, role, fileName, fileHash, templateHash, payload, ttlMs = 15 * 60 * 1000 }) {
     if (!TRANSIT_ROLE_SET.has(role)) throw new BusinessError(403, kind === "status" ? "transit_status_forbidden" : "transit_import_forbidden", kind === "status" ? "当前角色无权更新物流状态" : "当前角色无权导入在途库存");
-    if (!(kind === "import" || kind === "status" || kind === "transfer_upgrade" || kind === "relocation_update")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
+    if (!(kind === "import" || kind === "status" || kind === "transfer_upgrade" || kind === "relocation_update" || kind === "transfer_update")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
     if (kind === "import") this.requireTransitImportTeams(role, payload.rows);
     return this.transaction(() => {
       const token = crypto.randomBytes(32).toString("base64url");
@@ -5570,6 +5601,7 @@ export class InventoryDatabase {
     }
     const normalizeRow = (item) => {
       const data = item?.data ?? item ?? {};
+      if (kind === "transfer_update") return {sourceRow:Number(item.sourceRow),data:{update:stableJson(data)}};
       if (kind === "relocation_update") return {sourceRow:Number(item.sourceRow),data:Object.fromEntries(['id','revision','workNo','rma','relocationAddress'].map(key=>[key,String(data[key]??'')]))};
       if (kind === "transfer_upgrade") return { sourceRow: Number(item?.sourceRow ?? 0), data: Object.fromEntries(TRANSFER_UPGRADE_FIELDS.map(([key]) => [key, String(data[key] ?? "")])) };
       if (kind === "import") {
@@ -5602,7 +5634,7 @@ export class InventoryDatabase {
       const expected = normalizeRow(expectedRows[index]);
       const actual = actualRows[index];
       if (actual.sourceRow !== expected.sourceRow) throw new BusinessError(409, "preview_rows_mismatch", "提交源文件行与预览结果不一致，请重新预览");
-      const keys = kind === "relocation_update" ? ['id','revision','workNo','rma','relocationAddress'] : kind === "transfer_upgrade" ? TRANSFER_UPGRADE_FIELDS.map(([key]) => key) : kind === "import"
+      const keys = kind === "transfer_update" ? ["update"] : kind === "relocation_update" ? ['id','revision','workNo','rma','relocationAddress'] : kind === "transfer_upgrade" ? TRANSFER_UPGRADE_FIELDS.map(([key]) => key) : kind === "import"
         ? ["model", "quantity", "fnsku", "shippingMethod", "plan", "date", "rawDate", "team", "version", "packPerBox"]
         : ["plan", "status"];
       if (keys.some((key) => actual.data[key] !== expected.data[key])) {
@@ -5616,12 +5648,78 @@ export class InventoryDatabase {
     return { stored, snapshot, rows: actualRows };
   }
 
+  transferReceiptBatches(id) {
+    return this.db.prepare("SELECT l.*,b.version,b.warehouse FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key WHERE l.source_type='transfer' AND l.source_id=? AND l.entry_type='transfer_receipt' ORDER BY l.id").all(id).map(row=>{
+      const reversed=Number(this.db.prepare("SELECT COALESCE(SUM(on_hand_delta),0) n FROM upgrade_inventory_ledger WHERE related_ledger_id=? AND entry_type='transfer_completion_reverse'").get(row.id).n);
+      const quantity=Number(row.on_hand_delta)+reversed,balance=this.getBalance(row.batch_key);
+      return {ledgerId:Number(row.id),batchKey:row.batch_key,version:row.version,warehouse:row.warehouse,originalQuantity:Number(row.on_hand_delta),quantity,locked:balance.locked,onHand:balance.onHand,issue:balance.locked>0||balance.onHand!==quantity?'该次入库当前仍有锁定或下游占用':''};
+    });
+  }
+
+  validateTransferUpdate(item, stage) {
+    const input=item.data,row=this.db.prepare('SELECT * FROM transfer_upgrade_rows WHERE document_no=?').get(input.documentNo);
+    const fail=(field,message,status=422)=>{throw new BusinessError(status,'transfer_update_invalid','工作表“转仓升级”第 '+item.sourceRow+' 行，转仓单号 '+(input.documentNo||'未填写')+'，“'+field+'”：'+message);};
+    if(!row)fail('转仓单号','找不到原记录，不能通过更新新增转仓单');
+    if(input.stage!==stage || !['rma','count','progress'].includes(stage))fail('办理阶段','请使用对应阶段模板');
+    if(Number(input.revision)!==row.revision)fail('记录版本','已被其他操作更新，请重新下载模板',409);
+    const before=JSON.parse(row.data_json),after={...before};
+    const integer=(key,label)=>{const raw=String(input[key]??'').trim(),n=Number(raw);if(!raw||!Number.isSafeInteger(n)||n<0)fail(label,'须填写非负整数（销售套数）');return n;};
+    if(stage==='rma') {
+      const rma=String(input.rma??'').trim();if(!rma||/^xxx$/i.test(rma)||rma.includes('填写项'))fail('RMA','请填写实际RMA，不能留空或使用模板说明');after.rma=rma;
+    } else {
+      if(!before.rma)fail('RMA','须先完成RMA步骤');
+      if(stage==='count')after.countedQuantity=String(integer('countedQuantity','实际清点数量'));
+      else {
+        if(before.countedQuantity==='')fail('实际清点数量','须先单独确认实际清点数量');
+        after.inProgressQuantity=String(integer('inProgressQuantity','升级中数量'));
+        after.completedQuantity=String(integer('completedQuantity','升级完数量'));
+      }
+    }
+    const counted=Number(after.countedQuantity),progressing=Number(after.inProgressQuantity),completed=Number(after.completedQuantity),delta=completed-Number(before.completedQuantity);
+    if(after.countedQuantity!=='' && (counted>Number(after.returnQuantity)||progressing+completed>counted))fail('数量','升级中数量＋累计升级完数量≤实际清点数量≤退仓数量');
+    const reversals=input.reversals??[];
+    if(stage!=='progress' && reversals.length)fail('扣回数量','仅升级进度步骤可指定扣回');
+    if(delta>0) {
+      const version=String(input.completedVersion??'').trim();if(!version||/^xxx$/i.test(version)||version.includes('填写项'))fail('升级完，版本号','新增入库必须填写真实版本');after.completedVersion=version;
+      const model=this.getModel(before.model);if(!model||!['硒鼓','墨盒'].includes(model.category))fail('型号','型号 '+before.model+' 的库存目录或类目未确定，请先核对，不能自动猜测或新建');
+    }
+    const receipts=new Map(this.transferReceiptBatches(row.id).map(x=>[x.batchKey,x]));
+    if(delta<0) {
+      if(new Set(reversals.map(x=>x.batchKey)).size!==reversals.length || reversals.some(x=>!Number.isSafeInteger(x.quantity)||x.quantity<=0) || reversals.reduce((sum,x)=>sum+x.quantity,0)!==-delta)fail('扣回数量','各批扣回数量合计须等于减少量 '+(-delta));
+      for(const x of reversals){const receipt=receipts.get(x.batchKey);if(!receipt||x.quantity>receipt.quantity)fail('扣回入库批次',x.batchKey+' 不属于本单或超过其有效入库量');if(receipt.issue)fail('扣回入库批次',x.batchKey+'：'+receipt.issue,409);}
+    }else if(reversals.length)fail('扣回数量','累计量未减少，不应填写扣回数量');
+    after.status=after.rma ? after.countedQuantity===''?'待确认实际清点数量':counted>0&&progressing===0&&completed===counted?'升级完成':'转仓和升级中':'已在第三方海外仓';
+    return {row,before,after,delta,receipts,reversals};
+  }
+
+  updateTransferUpgrades({role,stage,previewToken,fileName,fileHash,templateHash,rows,requestId}) {
+    if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
+    return this.idempotent('transfer-upgrade:update',requestId,{role,stage,previewToken,fileName,fileHash,templateHash,rows},()=>{
+      const proof=this.consumeTransitPreviewToken({kind:'transfer_update',role,token:previewToken,fileName,fileHash,templateHash,rows});
+      const updates=proof.snapshot.rows;
+      if(new Set(updates.map(x=>x.data.documentNo)).size!==updates.length)throw new BusinessError(422,'transfer_duplicate_update','同一转仓单在一次更新中只能有一行');
+      const checked=updates.map(x=>this.validateTransferUpdate(x,stage)),at=new Date().toISOString();
+      for(const {row,before,after,delta,receipts,reversals} of checked){
+        const eventId=this.addEvent(null,'transfer_upgrade_update',role,at,null,{transferId:row.id,transferNo:row.document_no,stage,model:before.model,category:this.getModel(before.model)?.category,before,after,quantity:Math.abs(delta),onHandDelta:delta,lockedDelta:0,reversals,fileName:proof.stored.file_name,fileHash:proof.stored.file_sha256,sourceRow:updates.find(x=>x.data.documentNo===row.document_no).sourceRow,requestId});
+        if(delta>0){
+          const key='TRANSFER-RECEIPT:'+eventId;
+          this.db.prepare("INSERT INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,warehouse,pack_per_box,source_team,relocation_receipt_key,shipping_method,transfer_upgrade_id) VALUES(?,?,?,?,?,?,0,?,'Aster海外仓',NULL,'',?,'Aster海外仓-升级后库存',?)").run(key,before.model,before.plan,before.date,after.completedVersion,before.fnsku,at,'transfer:'+row.id+':'+eventId,row.id);
+          this.addUpgradeLedger(null,'transfer',row.id,key,'transfer_receipt',delta,0,role,at,requestId,{transferNo:row.document_no,sourceWarehouse:before.warehouse,eventId});
+        }else if(delta<0){
+          for(const x of reversals)this.addUpgradeLedger(null,'transfer',row.id,x.batchKey,'transfer_completion_reverse',-x.quantity,0,role,at,requestId,{transferNo:row.document_no,eventId},null,receipts.get(x.batchKey).ledgerId,requestId);
+        }
+        this.db.prepare('UPDATE transfer_upgrade_rows SET data_json=?,revision=revision+1,updated_at=? WHERE id=?').run(JSON.stringify(after),at,row.id);
+      }
+      return {ok:true,rowCount:checked.length,quantityDelta:checked.reduce((sum,x)=>sum+x.delta,0)};
+    });
+  }
+
   getTransferUpgrades() {
     return this.db.prepare(`SELECT r.*, b.file_name, b.sheet_name, b.imported_by_role, b.imported_at
       FROM transfer_upgrade_rows r JOIN transfer_upgrade_imports b ON b.id = r.import_id
       ORDER BY b.id DESC, r.source_row, r.id`).all().map(row => ({ id: Number(row.id), importId: Number(row.import_id),
         sourceRow: Number(row.source_row), fileName: row.file_name, sheetName: row.sheet_name,
-        importedByRole: row.imported_by_role, importedAt: row.imported_at, data: JSON.parse(row.data_json) }));
+        importedByRole: row.imported_by_role, importedAt: row.imported_at, documentNo:row.document_no, revision:Number(row.revision), updatedAt:row.updated_at, data: JSON.parse(row.data_json), receiptBatches:this.transferReceiptBatches(row.id), history:this.db.prepare("SELECT role,occurred_at,payload_json FROM document_events WHERE event_type='transfer_upgrade_update' AND json_extract(payload_json,'$.transferId')=? ORDER BY id").all(row.id).map(e=>({role:e.role,at:e.occurred_at,...JSON.parse(e.payload_json)})) }));
   }
 
   importTransferUpgrades({ role, previewToken, fileName, fileHash, templateHash, rows, requestId }) {
@@ -5634,7 +5732,11 @@ export class InventoryDatabase {
       const importId = Number(this.db.prepare(`INSERT INTO transfer_upgrade_imports(file_name,file_sha256,sheet_name,imported_by_role,imported_at)
         VALUES(?,?,'转仓升级',?,?)`).run(proof.stored.file_name, proof.stored.file_sha256, role, at).lastInsertRowid);
       const insert = this.db.prepare("INSERT INTO transfer_upgrade_rows(import_id,source_row,data_json) VALUES(?,?,?)");
-      for (const row of proof.rows) insert.run(importId, row.sourceRow, JSON.stringify(row.data));
+      for (const row of proof.rows) {
+        const data={...row.data,status:'已在第三方海外仓',rma:'',countedQuantity:'',inProgressQuantity:'',completedQuantity:'',completedVersion:''};
+        const id=Number(insert.run(importId,row.sourceRow,JSON.stringify(data)).lastInsertRowid);
+        this.db.prepare('UPDATE transfer_upgrade_rows SET document_no=?,updated_at=? WHERE id=?').run('TC-'+String(id).padStart(8,'0'),at,id);
+      }
       this.addEvent(null, "transfer_upgrade_import", role, at, null, { importId, fileName: proof.stored.file_name, sheetName: "转仓升级", rowCount: proof.rows.length, models: [...new Set(proof.rows.map(row => row.data.model))], requestId });
       return { ok: true, importId, rowCount: proof.rows.length };
     });

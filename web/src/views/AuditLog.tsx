@@ -5,9 +5,10 @@ import { Icon } from "../components/Icon";
 import { Panel, displayTime } from "../components/ui";
 import type { AuditAction, AuditRecord, Role, Tone } from "../types";
 
-type VisibleAuditAction = Extract<AuditAction, "transfer_upgrade_import" | "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
+type VisibleAuditAction = Extract<AuditAction, "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
 
 const auditActions: ReadonlyArray<{ value: VisibleAuditAction; label: string; tone: Tone }> = [
+  {value:"transfer_upgrade_update",label:"转仓升级办理",tone:"green"},
   {value:"transfer_upgrade_import",label:"转仓升级导入",tone:"blue"},
   {value:"transit_import",label:"在途导入",tone:"blue"},
   {value:"transit_status",label:"物流更新",tone:"blue"},

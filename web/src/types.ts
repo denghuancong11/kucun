@@ -41,6 +41,8 @@ export interface ModelSummary {
 export interface StockDetail {
   shippingMethod?: string;
   warehouse: string;
+  isPublic?: boolean;
+  transferDocumentNo?: string | null;
   sourceTeam?: string | null;
   quantity: number;
   baseQuantity: number;
@@ -656,7 +658,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;
@@ -720,6 +722,9 @@ export interface TransferUpgradePreview {
   rows: TransferUpgradeRow[]; errors: Array<{ sheet: string; row: number; field: string; message: string }>;
 }
 export interface TransferUpgradeRecord extends TransferUpgradeRow {
+  documentNo: string; revision: number; updatedAt: string;
+  receiptBatches: {ledgerId:number;batchKey:string;version:string;warehouse:string;originalQuantity:number;quantity:number;locked:number;onHand:number;issue:string}[];
+  history: {role:Role;at:string;stage:string;before:TransferUpgradeData;after:TransferUpgradeData}[];
   id: number; importId: number; fileName: string; sheetName: string; importedByRole: Role; importedAt: string;
 }
 export type TransferUpgradesPayload = { records: TransferUpgradeRecord[]; sync: SyncState };

@@ -72,7 +72,7 @@ try {
   assert.deepEqual(foreignKeys, []);
   assert.equal(quickCheck, "ok");
   assert.equal(migration.fromVersion, 26);
-  assert.equal(migration.toVersion, 33);
+  assert.equal(migration.toVersion, 34);
   assert.equal(migration.sourceInventory?.verifiedTransitRows, 47);
   assert.equal(migration.sourceInventory.transitChanges.length, 47);
   assert.equal(migration.sourceInventory.stockChanges.length, 47);

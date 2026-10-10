@@ -1,7 +1,9 @@
 // Exact v32 table definitions captured from baseline 9c2e7c6. Only use on isolated migration fixtures.
 import fs from 'node:fs';
+import {restoreSchema33Fixture} from './schema33-fixture.mjs';
 const definitions=JSON.parse(fs.readFileSync(new URL('./schema32-relocation-tables.json',import.meta.url),'utf8'));
 export function restoreSchema32Fixture(db) {
+ if(db.prepare("PRAGMA user_version").get().user_version>=34)restoreSchema33Fixture(db);
  const dependents=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE type IN ('view','trigger') OR (type='index' AND sql IS NOT NULL AND tbl_name IN ('upgrade_relocation_work_items','upgrade_relocations','stock_batches','transit_preview_tokens'))").all();
  db.exec('PRAGMA foreign_keys=OFF; BEGIN');
  try {

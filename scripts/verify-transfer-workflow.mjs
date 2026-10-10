@@ -1,0 +1,107 @@
+// Transfer workflow acceptance: isolated DB, real XLSX files and real Edge UI. No production writes.
+import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import {spawn,execFileSync} from 'node:child_process';import {once} from 'node:events';
+import {createInventoryDatabase,InventoryDatabase,ROLES} from '../inventory-db.mjs';import {transferWorkbook,transferSample} from './fixtures/transfer-workbook.mjs';import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';import {chromium} from '../web/node_modules/playwright-core/index.mjs';
+const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'.test-output/transfer-workflow'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-transfer-flow-'));await fs.mkdir(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});let db=new InventoryDatabase(state),child,browser,page,observer,failure;const port=await freePort(),base=`http://127.0.0.1:${port}`,rid=()=>crypto.randomUUID(),checks=[],errors=[];
+const check=n=>{checks.push(n);console.log('PASS '+n);}, snapshot=()=>JSON.stringify(['catalog_models','stock_batches','inventory_ledger','upgrade_inventory_ledger','transit_batches','transfer_upgrade_rows','document_events','idempotency_requests'].map(t=>db.db.prepare('SELECT * FROM '+t).all()));
+const record=no=>db.getTransferUpgrades().find(r=>r.documentNo===no), common=r=>({expectedRevision:r.revision,requestId:rid()});
+async function start(){const instanceId=createTestInstanceId('transfer-flow');child=spawn(process.execPath,[path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'pipe',env:{...process.env,ASTER_STATE_ROOT:state,HOST:'127.0.0.1',PORT:String(port),PROD:'1',ASTER_TEST_INSTANCE_ID:instanceId}});child.stderr.on('data',d=>process.stderr.write(d));await waitForOwnedServer({base,child,instanceId});}async function stop(){if(child?.exitCode===null){const p=once(child,'exit');child.kill();await p;}child=null;}
+async function api(url,role='logistics',body,status=200){const r=await fetch(base+url,{method:body?'POST':'GET',headers:{'x-role':role,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;}
+async function preview(buffer,stage,role='logistics',status=200){const r=await fetch(base+(stage?'/api/transfer-upgrades/update/preview?stage='+stage:'/api/transfer-upgrades/preview'),{method:'POST',headers:{'x-role':role,'x-file-name':encodeURIComponent('工作流.xlsx')},body:buffer});const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;}
+const payload=p=>({previewToken:p.previewToken,fileName:p.fileName,fileHash:p.fileSha256,templateHash:p.templateSha256,rows:p.rows,requestId:rid()});
+async function commit(p,status=200,body=payload(p)){const before=snapshot();const r=await api('/api/transfer-upgrades/update/import?stage='+p.stage,'logistics',body,status);if(status!==200)assert.equal(snapshot(),before);return r;}
+let serial=0;
+const python=process.env.ASTER_TEST_PYTHON||'C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe';
+async function file(stage,changes,reversals=[]){const r=await fetch(base+'/api/transfer-upgrades/update/template?stage='+stage,{headers:{'x-role':'logistics'}});assert.equal(r.status,200);const p=path.join(out,`update-${++serial}-${stage}.xlsx`);await fs.writeFile(p,Buffer.from(await r.arrayBuffer()));execFileSync(python,['-X','utf8','-c',`import openpyxl,json,sys
+p=sys.argv[1];w=openpyxl.load_workbook(p);s=w['转仓升级'];changes=json.loads(sys.argv[2]);cols={c.value:c.column for c in s[2]}
+assert len(cols)==17
+assert 'A2:A3' in list(map(str,s.merged_cells.ranges))
+for row in range(s.max_row,3,-1):
+ no=s.cell(row,1).value
+ if no not in changes:s.delete_rows(row);continue
+ for k,v in changes[no].items():s.cell(row,cols[k]).value=v
+if '扣回明细' in w:
+ s=w['扣回明细'];rs=json.loads(sys.argv[3])
+ for row in range(4,s.max_row+1):
+  key=s.cell(row,2).value
+  for x in rs:
+   if x['batchKey']==key:s.cell(row,8).value=x['quantity']
+w.save(p)
+`,p,JSON.stringify(changes),JSON.stringify(reversals)],{windowsHide:true});return {path:p,buffer:await fs.readFile(p)};}
+async function update(stage,changes,reversals=[]){const f=await file(stage,changes,reversals),p=await preview(f.buffer,stage);assert.deepEqual(p.errors,[]);await commit(p);return p;}
+async function invalid(stage,changes,match,reversals=[]){const before=snapshot(),f=await file(stage,changes,reversals),p=await preview(f.buffer,stage);assert(!p.previewToken);assert(p.errors.some(e=>match.test(e.message)),JSON.stringify(p.errors));assert.equal(snapshot(),before);return p;}
+async function make(model='SYNTH-INK-001',q=100){const values=[...transferSample];values[0]=model;values[6]=q;const p=await preview(transferWorkbook([values]));assert.deepEqual(p.errors,[]);await api('/api/transfer-upgrades/import','logistics',payload(p));return db.getTransferUpgrades()[0].documentNo;}
+async function wait(fn){let last;for(let i=0;i<120;i++){try{return await fn();}catch(e){last=e;await new Promise(r=>setTimeout(r,100));}}throw last;}
+async function nav(p,role,view='升级库存'){await p.getByLabel('切换当前操作角色',{exact:true}).selectOption(role);await p.locator('.sidebar .nav-item',{hasText:view}).click();if(view==='升级库存')await p.getByRole('tab',{name:'转仓升级',exact:true}).click();}
+try{
+ await start();
+ for(const quantity of [-1,1.5,'']){const row=[...transferSample];row[6]=quantity;const before=snapshot(),p=await preview(transferWorkbook([row]));assert(!p.previewToken);assert(p.errors.some(e=>e.field==='退仓数量'));assert.equal(snapshot(),before);}
+ const late=[...transferSample];late[10]='PREMATURE-RMA';assert((await preview(transferWorkbook([late]))).errors.some(e=>e.field==='RMA'));
+ const originalStock=JSON.stringify(db.db.prepare('SELECT * FROM stock_balances').all());const no=await make(),second=await make('SYNTH-TONER-001',80);assert.equal(record(no).data.countedQuantity,'');assert.equal(record(no).data.status,'已在第三方海外仓');assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM stock_balances').all()),originalStock);
+ for(const role of ROLES.filter(r=>r!=='logistics'))for(const endpoint of ['template','preview','import']){const r=await fetch(base+'/api/transfer-upgrades/update/'+endpoint+'?stage=rma',{method:endpoint==='template'?'GET':'POST',headers:{'x-role':role},...(endpoint==='template'?{}:{body:'{}'})});assert.equal(r.status,403);}
+ let f=await file('rma',{[no]:{RMA:'RMA-0001'},[second]:{RMA:'RMA-0002'}}),p=await preview(f.buffer,'rma');assert.equal(record(no).data.rma,'');const firstBody=payload(p);await commit(p,200,firstBody);assert((await commit(p,200,firstBody)).deduped);assert.equal(record(no).data.status,'待确认实际清点数量');assert.equal(record(no).history.length,1);await commit(p,409,{...firstBody,requestId:rid()});
+ check('首次分阶段创建、稳定单号；所有非物流更新被拒绝；RMA独立办理、预览不保存、同请求重试只一次');
+ for(const value of ['',-1,1.5,101])await invalid('count',{[no]:{'实际清点数量':value}},/非负整数|数量/);
+ await invalid('count',{[no]:{'实际清点数量':60,'型号':'SYNTH-TONER-001'}},/只读字段/);
+ await update('count',{[no]:{'实际清点数量':60},[second]:{'实际清点数量':0}});assert.equal(record(second).data.countedQuantity,'0');assert.equal(record(second).data.status,'转仓和升级中');assert.equal(record(no).data.inProgressQuantity,'');assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM stock_balances').all()),originalStock);
+ await update('rma',{[no]:{RMA:'RMA-CORRECTED'}});assert.equal(record(no).data.status,'转仓和升级中');
+ check('清点量空值、负数、小数、超退仓和只读字段篡改拒绝；0独立保存不入库；RMA修正不退回流程');
+ for(const [progress,completed]of [[-1,0],[0,1.5],[30,31],['',0]])await invalid('progress',{[no]:{'升级中数量':progress,'升级完数量':completed,'升级完，版本号':'002'}},/非负整数|数量/);
+ await invalid('progress',{[no]:{'升级中数量':0,'升级完数量':20,'升级完，版本号':''}},/真实版本/);
+ const unknown=await make('UNMAPPED-MODEL',5);await update('rma',{[unknown]:{RMA:'U'}});await update('count',{[unknown]:{'实际清点数量':5}});await invalid('progress',{[unknown]:{'升级中数量':0,'升级完数量':5,'升级完，版本号':'002'}},/库存目录或类目未确定/);
+ await update('progress',{[no]:{'升级中数量':10,'升级完数量':20,'升级完，版本号':'002'}});let receipts=record(no).receiptBatches;assert.equal(receipts.length,1);assert.equal(receipts[0].quantity,20);const firstKey=receipts[0].batchKey;
+ let b=db.db.prepare('SELECT * FROM stock_batches WHERE batch_key=?').get(firstKey);assert.equal(b.pack_per_box,null);assert.equal(b.warehouse,'Aster海外仓');assert.equal(b.shipping_method,'Aster海外仓-升级后库存');assert.equal(b.version,'002');assert.equal(b.fnsku,'000012中文');assert.equal(b.source_team,'');
+ await update('progress',{[no]:{'升级中数量':5,'升级完数量':35,'升级完，版本号':'003'}});receipts=record(no).receiptBatches;assert.deepEqual(receipts.map(x=>x.quantity),[20,15]);assert.deepEqual(receipts.map(x=>x.version),['002','003']);const secondKey=receipts[1].batchKey;
+ await update('progress',{[no]:{'升级中数量':4,'升级完数量':35,'升级完，版本号':''}});assert.deepEqual(record(no).receiptBatches,receipts);assert.equal(record(no).data.completedVersion,'003');
+ await invalid('count',{[no]:{'实际清点数量':38}},/数量/);
+ check('数量关系与真实新增版本校验；未知型号拒绝；20→35仅入库15；同35仅更新进度、旧版本批次不变，仓库/发货方式/FNSKU正确');
+ const allocBody=(key,quantity,team)=>{const batch=db.db.prepare('SELECT * FROM stock_batches WHERE batch_key=?').get(key);return {model:batch.model,sourceBatchKey:key,plan:batch.plan,date:batch.ship_date,version:batch.version,quantity,department:team,store:'AUS',operator:rid(),fnsku:batch.fnsku,asin:'BPUBLIC01',requestId:rid()};};
+ for(const [role,team]of [['operation-1','一团'],['operation-2','二团']]){const cat=await api('/api/inventory/catalog',role);assert(cat.stockDetails['SYNTH-INK-001'].some(x=>x.batchKey===firstKey&&x.isPublic));const before=snapshot();const denied=await api('/api/allocations',role,allocBody(firstKey,5,team),400);assert.match(denied.error,/套\/箱|套\/箱|包装/);assert.equal(snapshot(),before);}
+ db.db.prepare("UPDATE stock_batches SET pack_per_box='5' WHERE transfer_upgrade_id=?").run(record(no).id);
+ const concurrent=await Promise.all([fetch(base+'/api/allocations',{method:'POST',headers:{'x-role':'operation-1','content-type':'application/json'},body:JSON.stringify(allocBody(firstKey,15,'一团'))}),fetch(base+'/api/allocations',{method:'POST',headers:{'x-role':'operation-2','content-type':'application/json'},body:JSON.stringify(allocBody(firstKey,15,'二团'))})]);assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);const granted=await concurrent.find(r=>r.status===200).json();assert.equal(db.getBalance(firstKey).locked,15);assert.equal(db.getBalance(firstKey).available,5);
+ await invalid('progress',{[no]:{'升级中数量':4,'升级完数量':30}},/锁定或下游占用/,[{batchKey:firstKey,quantity:5}]);
+ await api('/api/allocations/'+granted.record.id+'/review','business',{decision:'reject',...common(granted.record)});
+ await update('progress',{[no]:{'升级中数量':4,'升级完数量':20}},[{batchKey:secondKey,quantity:15}]);assert.equal(db.getBalance(secondKey).onHand,0);assert.equal(record(no).receiptBatches[1].originalQuantity,15);
+ check('两团共享同一公共批次；无套/箱均阻止；隔离补齐后并发15+15只准一笔；少量锁定也阻止扣回，解除后指定批次扣回15成功');
+ // Real downstream issue (no remaining lock) must still block any reversal of its receipt.
+ let allocation=(await api('/api/allocations','operation-1',allocBody(firstKey,5,'一团'))).record;allocation=(await api('/api/allocations/'+allocation.id+'/review','business',{decision:'approve',approvedQuantity:5,...common(allocation)})).record;await api('/api/allocations/'+allocation.id+'/confirm','assistant-1',common(allocation));assert.equal(db.getBalance(firstKey).locked,0);assert.equal(db.getBalance(firstKey).onHand,15);
+ await invalid('progress',{[no]:{'升级中数量':4,'升级完数量':19}},/锁定或下游占用/,[{batchKey:firstKey,quantity:1}]);
+ await update('progress',{[no]:{'升级中数量':0,'升级完数量':60,'升级完，版本号':'004'}});assert.equal(record(no).data.status,'升级完成');const thirdKey=record(no).receiptBatches[2].batchKey;
+ await update('count',{[no]:{'实际清点数量':80}});assert.equal(record(no).data.status,'转仓和升级中');await update('count',{[no]:{'实际清点数量':60}});assert.equal(record(no).data.status,'升级完成');
+ await update('progress',{[no]:{'升级中数量':0,'升级完数量':55}},[{batchKey:thirdKey,quantity:5}]);assert.equal(record(no).data.status,'转仓和升级中');
+ await update('progress',{[no]:{'升级中数量':0,'升级完数量':60,'升级完，版本号':'005'}});const fourthKey=record(no).receiptBatches[3].batchKey;
+ await update('progress',{[no]:{'升级中数量':0,'升级完数量':50}},[{batchKey:thirdKey,quantity:5},{batchKey:fourthKey,quantity:5}]);assert.equal(record(no).receiptBatches[2].quantity,30);assert.equal(record(no).receiptBatches[3].quantity,0);
+ check('实际下游已出库即使锁定0仍拦截；清点量小于退仓也可完成；修正清点/扣回重算状态；指定多个入库批次反向记账，历史保留');
+ // Update batch validates atomically; current lock acquired after preview is checked again on confirm.
+ f=await file('progress',{[no]:{'升级中数量':0,'升级完数量':49},[second]:{'升级中数量':0,'升级完数量':0}},[{batchKey:thirdKey,quantity:1}]);p=await preview(f.buffer,'progress');assert.deepEqual(p.errors,[]);
+ db.db.prepare("UPDATE stock_batches SET pack_per_box='1' WHERE batch_key=?").run(thirdKey);
+ const hold=(await api('/api/allocations','operation-2',allocBody(thirdKey,1,'二团'))).record;await commit(p,409);await api('/api/allocations/'+hold.id+'/review','business',{decision:'reject',...common(hold)});await commit(p);assert.equal(record(no).data.completedQuantity,'49');
+ f=await file('rma',{[no]:{RMA:'STALE'}});const stale=await preview(f.buffer,'rma');await update('rma',{[no]:{RMA:'CURRENT'}});await commit(stale,409);assert.equal(record(no).data.rma,'CURRENT');
+ let pp=await preview((await file('progress',{[no]:{'升级中数量':0,'升级完数量':50,'升级完，版本号':'006'}})).buffer,'progress');const bodies=[payload(pp),payload(pp)],results=await Promise.all(bodies.map(body=>fetch(base+'/api/transfer-upgrades/update/import?stage=progress',{method:'POST',headers:{'x-role':'logistics','content-type':'application/json'},body:JSON.stringify(body)})));assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);assert.equal(record(no).data.completedQuantity,'50');
+ check('预览后新增占用在确认时重新拦截且整批无变化，解除后原预览可办；过期版本拒绝；并发两次确认仅一笔成功');
+ const audit=await api('/api/audit?action=transfer_upgrade_update','operation-2');assert(audit.records.some(x=>x.businessNo===no&&x.onHandDelta===15));assert(audit.records.some(x=>x.onHandDelta===-15));assert(audit.records.every(x=>x.role==='logistics'));
+ for(const role of ROLES)assert.equal((await api('/api/transfer-upgrades',role)).records.length,3);
+ // Real browser uses templates, never online manual quantity submission.
+ browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});page=await browser.newPage({viewport:{width:1600,height:1000}});observer=await browser.newPage({viewport:{width:1600,height:1000}});for(const pg of [page,observer]){pg.on('pageerror',e=>errors.push(e.message));await pg.goto(base);}
+ await nav(page,'logistics');await nav(observer,'operation-2');assert.equal(await observer.getByLabel('转仓办理阶段').count(),0);await wait(async()=>assert.equal(await page.locator('[data-transfer-id]').count(),3));
+ const download=page.waitForEvent('download');await page.getByRole('button',{name:'下载RMA更新模板',exact:true}).click();await (await download).saveAs(path.join(out,'page-downloaded-template.xlsx'));
+ await page.getByLabel('转仓办理阶段').selectOption('count');f=await file('count',{[second]:{'实际清点数量':-1}});await page.locator('#transfer-update-file').setInputFiles(f.path);await page.getByText(/须填写非负整数/).waitFor();assert(await page.getByRole('button',{name:'确认更新转仓升级',exact:true}).isDisabled());
+ f=await file('count',{[second]:{'实际清点数量':40}});await page.locator('#transfer-update-file').setInputFiles(f.path);await page.getByRole('table',{name:'转仓更新预览'}).waitFor();assert.equal(record(second).data.countedQuantity,'0');
+ let lost=true,sent=[];await page.route('**/api/transfer-upgrades/update/import?*',async route=>{sent.push(route.request().postDataJSON());const r=await route.fetch();if(lost){lost=false;await route.fulfill({status:200,contentType:'application/json',body:'{invalid'});}else await route.fulfill({response:r});});
+ await page.getByRole('button',{name:'确认更新转仓升级',exact:true}).click();await page.getByRole('button',{name:'重试确认',exact:true}).waitFor();assert.equal(record(second).data.countedQuantity,'40');const saved=snapshot();await page.getByRole('button',{name:'重试确认',exact:true}).click();await page.getByRole('button',{name:'重试确认',exact:true}).waitFor({state:'hidden'});assert.equal(snapshot(),saved);assert.deepEqual(sent[0],sent[1]);await page.unroute('**/api/transfer-upgrades/update/import?*');
+ await wait(async()=>assert.equal(await observer.locator('[data-transfer-id="'+record(second).id+'"]').locator('td').nth(12).innerText(),'40'));
+ await page.getByLabel('转仓办理阶段').selectOption('progress');f=await file('progress',{[second]:{'升级中数量':0,'升级完数量':40,'升级完，版本号':'0004'}});await page.locator('#transfer-update-file').setInputFiles(f.path);await page.getByRole('button',{name:'确认更新转仓升级',exact:true}).click();await wait(()=>assert.equal(record(second).data.status,'升级完成'));
+
+ await page.getByLabel('转仓办理阶段').selectOption('rma');f=await file('rma',{[second]:{RMA:'REFRESH-RETRY'}});await page.locator('#transfer-update-file').setInputFiles(f.path);
+ lost=true;sent=[];await page.route('**/api/transfer-upgrades/update/import?*',async route=>{sent.push(route.request().postDataJSON());const r=await route.fetch();if(lost){lost=false;await route.fulfill({status:200,contentType:'application/json',body:'{invalid'});}else await route.fulfill({response:r});});
+ await page.getByRole('button',{name:'确认更新转仓升级',exact:true}).click();await page.getByRole('button',{name:'重试确认',exact:true}).waitFor();const beforeRecovery=snapshot();await page.reload();await nav(page,'logistics');const recovery=page.getByRole('region',{name:'待确认业务提交'});await recovery.getByText(/转仓升级办理/).waitFor();await recovery.getByRole('button',{name:'确认本次提交',exact:true}).click();await page.waitForFunction(()=>!sessionStorage.getItem('aster-pending-business-requests'));assert.equal(snapshot(),beforeRecovery);assert.deepEqual(sent[0],sent[1]);await page.unroute('**/api/transfer-upgrades/update/import?*');
+ // Independently inspect downloaded template text/number types and protected cells.
+ const inspect=JSON.parse(execFileSync(python,['-X','utf8','-c',"import openpyxl,json,sys\nw=openpyxl.load_workbook(sys.argv[1]);s=w['转仓升级'];print(json.dumps({'headers':[s.cell(2,c).value for c in range(1,18)],'fnsku':s.cell(4,7).value,'fnskuType':s.cell(4,7).data_type,'qtyType':s.cell(4,8).data_type,'lockedNo':s.cell(4,1).protection.locked,'editableRma':s.cell(4,12).protection.locked},ensure_ascii=False))",path.join(out,'page-downloaded-template.xlsx')],{encoding:'utf8',windowsHide:true}));assert.equal(inspect.headers[0],'转仓单号');assert.equal(inspect.fnsku,'000012中文');assert.equal(inspect.fnskuType,'s');assert.equal(inspect.qtyType,'n');assert.equal(inspect.lockedNo,true);assert.equal(inspect.editableRma,false);
+ for(const [role,team]of [['operation-1','一团'],['operation-2','二团']]){await nav(observer,role,'库存汇总');await observer.getByRole('group',{name:'按类目筛选',exact:true}).getByRole('button',{name:/^墨盒/}).click();await observer.getByLabel('按型号关键字搜索',{exact:true}).fill('SYNTH-INK-001');const summary=observer.locator('.inventory-summary-row').filter({hasText:'SYNTH-INK-001'});await summary.waitFor();if(await summary.getAttribute('aria-expanded')!=='true')await summary.click();const batchRow=observer.locator('.detail-stock-table > tbody > tr').filter({has:observer.locator('.ver-chip',{hasText:'006'})});await batchRow.getByText('公共库存 · '+no,{exact:true}).waitFor();await batchRow.locator('.alloc-toggle').click();await observer.locator('.allocation-panel').getByText("当前批次套/箱数据异常",{exact:false}).waitFor();assert(await observer.getByRole('button',{name:'录入并预锁定',exact:true}).isDisabled());await observer.screenshot({path:path.join(out,'public-stock-'+role+'.png'),fullPage:true});const cat=await api('/api/inventory/catalog',role);const pub=cat.stockDetails['SYNTH-INK-001'].filter(x=>x.isPublic);assert.equal(pub.reduce((sum,x)=>sum+x.quantity,0),45);assert(cat.models.find(x=>x.model==='SYNTH-INK-001').inStock>=45);assert(pub.every(x=>x.shippingMethod==='Aster海外仓-升级后库存'&&x.warehouse==='Aster海外仓'));}
+ check('刷新后的丢回执恢复仍仅一次；独立openpyxl核对实际下载17列、合并表头、文本前导零、数值类型及只读单号；两团当前汇总共用45套');
+ await page.screenshot({path:path.join(out,'transfer-workflow-page.png'),fullPage:true});await page.reload();await nav(page,'logistics');await wait(async()=>assert.equal(await page.locator('[data-transfer-id]').count(),3));assert.deepEqual(errors,[]);
+ check('真实Edge下载、上传、预览、错误修正与成功状态；丢回执重试一次；另一角色跨客户端更新；刷新及页面无异常');
+ const persisted=snapshot();await stop();db.close();db=new InventoryDatabase(state);await start();assert.equal(snapshot(),persisted);await page.reload();await nav(page,'logistics');await wait(async()=>assert.equal(await page.locator('[data-transfer-id]').count(),3));db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.equal(db.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
+ check('重启后数量、历史、单号、公共库存、原批次与反向流水一致；完整性及库存恒等式通过');
+}catch(e){failure=e.stack;throw e;}finally{await fs.writeFile(path.join(out,'result.json'),JSON.stringify({state,base,checks,errors,failure,productionWrites:0},null,2));await browser?.close();await stop();db.close();}
+console.log('TRANSFER_WORKFLOW_PASS '+checks.length);
+
