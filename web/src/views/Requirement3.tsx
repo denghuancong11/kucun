@@ -145,14 +145,12 @@ export function Requirement3View({ role }: { role: Role }) {
   return (
     <div className="transit-page">
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
-      {transitAccess && <div className="transit-toolbar">
+      {transitAccess && <TransferUpgradeImport key={role} role={role}>
         <label className="btn btn-primary" htmlFor="transit-import-file">{busy === "preview" ? "读取中…" : "导入在途表格"}</label>
         <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
         <label className="btn btn-ghost" htmlFor="transit-status-file">{busy === "status-preview" ? "读取中…" : "导入更新物流表格"}</label>
         <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
-      </div>}
-
-      {transitAccess && <TransferUpgradeImport key={role} role={role} />}
+      </TransferUpgradeImport>}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
         <div className="transit-status-header">

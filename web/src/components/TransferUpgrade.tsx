@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchTransferUpgrades, importTransferUpgrade, previewTransferUpgrade } from "../api";
 import { useBusinessAction } from "../hooks/useBusinessAction";
@@ -8,7 +8,7 @@ import { displayTime, EmptyState, Panel } from "./ui";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理一团", "assistant-2": "助理二团", "operation-1": "运营一团", "operation-2": "运营二团", purchasing: "采购", logistics: "物流", business: "商务", alan: "Alan" };
 
-export function TransferUpgradeImport({ role }: { role: Role }) {
+export function TransferUpgradeImport({ role, children }: { role: Role; children: ReactNode }) {
   const [preview, setPreview] = useState<TransferUpgradePreview | null>(null);
   const [reading, setReading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -29,8 +29,9 @@ export function TransferUpgradeImport({ role }: { role: Role }) {
       templateHash: preview.templateSha256, rows: preview.rows, requestId: createRequestId("transfer-upgrade-import") };
     void action.perform({ execute: () => importTransferUpgrade(role, payload), message: `已导入 ${preview.rows.length} 条转仓升级记录，请在“升级库存 → 转仓升级”查看。` });
   };
-  return <section aria-label="转仓升级导入">
+  return <section aria-label="表格导入">
     <div className="transit-toolbar">
+      {children}
       <label className="btn btn-ghost" htmlFor="transfer-upgrade-file">{reading ? "读取中…" : "导入转仓升级表格"}</label>
       <input id="transfer-upgrade-file" className="visually-hidden" type="file" accept=".xlsx" disabled={reading || action.disabled}
         onChange={event => { void upload(event.target.files?.[0]); event.target.value = ""; }} />
