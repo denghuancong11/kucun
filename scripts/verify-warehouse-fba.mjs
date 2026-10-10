@@ -168,18 +168,18 @@ try {
   assert.equal(fbaArchive.quantity, 200);
   db.db.prepare("UPDATE fba_archives SET archived_at='2026-01-01T00:00:00.000Z' WHERE id=?").run(fbaArchive.id);
   assert.ok((await api("/api/upgrades")).relocationCandidates.some(candidate => candidate.fbaArchiveId === fbaArchive.id));
-  await api("/api/upgrades/relocation-work-items", "operation-2", { fbaArchiveId: fbaArchive.id, requestId: rid() }, 403);
-  let work = (await api("/api/upgrades/relocation-work-items", "assistant-1", { fbaArchiveId: fbaArchive.id, requestId: rid() })).workItem;
+  await api("/api/upgrades/relocation-work-items", "operation-2", { fbaArchiveId: fbaArchive.id, account:"AUS", requestId: rid() }, 403);
+  let work = (await api("/api/upgrades/relocation-work-items", "assistant-1", { fbaArchiveId: fbaArchive.id, account:"AUS", requestId: rid() })).workItem;
   assert.equal(work.sourceKind, "fba");
   assert.equal(work.sourceQuantityBefore, fbaArchive.quantity);
   assert.equal(work.fnsku, fbaArchive.fnsku);
-  assert.equal(work.store, null);
-  await api("/api/upgrades/relocation-work-items", "assistant-1", { fbaArchiveId: fbaArchive.id, requestId: rid() }, 409);
-  check("FBA 来源独立，无店铺字段且不受 90 天限制；团队与来源并发约束保留");
+  assert.equal(work.store, "AUS");
+  await api("/api/upgrades/relocation-work-items", "assistant-1", { fbaArchiveId: fbaArchive.id, account:"AUS", requestId: rid() }, 409);
+  check("FBA 来源独立，发起时保存所选账号且不受 90 天限制；团队与来源并发约束保留");
 
   work = (await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`, "logistics", {
     rma: "TEST-RMA",
-    relocationAddress: "Synthetic destination",
+    relocationAddress: "Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315",
     expectedRevision: work.revision,
     requestId: rid(),
   })).workItem;
@@ -223,7 +223,7 @@ try {
     assert.equal((await execute("claim")).job, null);
     const capture = job.target.action === "metrics"
       ? { items: [{ asin: "SYNTH00001", sales7d: 7, sales30d: 30, orderGrossProfit: 3, fbaAvailable: 30, fbaPendingTransfer: 0, fbaTransferring: 0, fbaInbound: 0 }] }
-      : { shipments: [{ externalId: "TEST-PACKAGE", storeId: "SYNTH-STORE", storeName: "Synthetic Store", countryCode: "US", orderNo: "TEST-REMOVAL-ORDER", fnsku: fbaArchive.fnsku, quantity: 80, carrier: "TEST-CARRIER", trackingNo: "TEST-TRACKING", shipDate: "2026-01-01" }] };
+      : { shipments: [{ externalId: "TEST-PACKAGE", storeId: "SYNTH-STORE", storeName: "A-US 美国", countryCode: "US", orderNo: "TEST-REMOVAL-ORDER", fnsku: fbaArchive.fnsku, quantity: 80, carrier: "TEST-CARRIER", trackingNo: "TEST-TRACKING", shipDate: "2026-01-01" }] };
     assert.equal((await execute("finish", { id: job.id, capture: { ...capture, capturedAt: new Date().toISOString() } })).job.state, "succeeded");
   }
   work = db.getRelocationWorkItem(work.id);
@@ -232,20 +232,20 @@ try {
   check("指标与FBA物流并行排队、串行执行，合成指标与物流对象正确保存");
 
   assert.equal(db.db.prepare("SELECT SUM(on_hand) q FROM stock_balances").get().q, localSourceQuantity);
-  check("采购与运营交接不自动发货或增加本地库存");
-  const ship = { fbaRemainingQuantity: 120, externalItems: [{ lineId: work.externalShipments[0].lineId, quantity: 80 }], expectedRevision: work.revision, requestId: rid() };
-  let upgrade = (await api(`/api/upgrades/relocation-work-items/${work.id}/ship`, "assistant-1", ship)).upgrade;
-  assert.equal(upgrade.fbaRemainingQuantity, 120);
-  assert.equal(upgrade.shippedQuantity, 80);
-  assert.equal((await api(`/api/upgrades/relocation-work-items/${work.id}/ship`, "assistant-1", ship)).deduped, true);
+  check("采购与运营交接和物流自动发货不增加本地库存");
+  let upgrade=db.getUpgrade(work.upgradeId);
+  assert.equal(upgrade.fbaRemainingQuantity,120);assert.equal(upgrade.shippedQuantity,80);
+  const captureRetry={id:work.id,role:'assistant-1',shipments:work.externalShipments.map(r=>({...r,quantity:80})),capturedAt:new Date().toISOString(),requestId:rid()};
+  db.syncRelocationLogistics(captureRetry);assert.equal(db.syncRelocationLogistics(captureRetry).deduped,true);assert.equal(db.getUpgrade(work.upgradeId).shippedQuantity,80);
+  upgrade=db.getUpgrade(work.upgradeId);
   let relocation = upgrade.relocations[0];
-  const completion = { completedQuantity: 30, newVersion: "TEST-V2", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: rid() };
-  await api(`/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", { ...completion, targetWarehouse: "" }, 400);
+  const completion = { completedQuantity: 30, inProgressQuantity:50, newVersion: "TEST-V2", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: rid() };
+  await api(`/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", { ...completion, targetWarehouse: "" }, 422);
   upgrade = (await api(`/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion)).upgrade;
   assert.equal((await api(`/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion)).deduped, true);
   relocation = upgrade.relocations[0];
   upgrade = (await api(`/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", {
-    completedQuantity: 50,
+    completedQuantity: 80, inProgressQuantity:0,
     newVersion: "TEST-V3",
     targetWarehouse: "SyntheticWarehouseB",
     expectedRevision: relocation.revision,

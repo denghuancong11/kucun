@@ -1,6 +1,6 @@
 # Unismar 耗材库存系统
 
-该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 28。
+该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 33。
 
 ## 运行环境
 
@@ -48,7 +48,7 @@ npm run initialize
 npm start
 ```
 
-首次初始化会创建 schema 28 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
+首次初始化会创建 schema 33 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
 
 ## 历史数据库迁移与私有来源
 
@@ -61,15 +61,17 @@ $env:ASTER_PRIVATE_INBOUND_SOURCES = 'C:\private\legacy-inbound-sources.local.js
 npm run migrate
 ```
 
-`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 28 数据库无需重复迁移。
+`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 28–32 使用同一受控脚本升级至 schema 33；当前版本无需重复迁移。
 
 原运行配置中的仓库名称保存在被忽略的 `.local-private/runtime-config.local.json`。没有该本地文件时，新副本使用合成默认名称；也可通过 `ASTER_OVERSEAS_WAREHOUSES` 环境变量覆盖，多个名称以分号分隔。
+
+移仓账号的简称、房间号保存在本地 `.local-private/warehouse-accounts.local.json`，由已确认的地址表生成，也可通过 `ASTER_WAREHOUSE_ACCOUNTS` 指定文件。部署时保留该文件和仓库配置，复制到候选版本后重新计算发布指纹；它们不提交 Git。缺少账号简称或房间号时，RMA更新会明确报错，不补值。运行合成仓库回归时设置 `ASTER_OVERSEAS_WAREHOUSES=SyntheticWarehouseA;SyntheticWarehouseB`，避免使用本机正式仓库名称。
 
 ## 领星扩展
 
 从仓库根目录运行 `node scripts/build-edge-extension.mjs` 可同步采集脚本并生成 `web/public/aster-lingxing-extension.zip`。也可在 Edge 的扩展管理页启用开发人员模式，加载 `edge-extension/` 目录。
 
-扩展不会保存领星密码或绕过登录验证。使用者需在浏览器中自行登录，并在扩展设置里配置库存服务地址。扩展源码位于 `edge-extension/`，采集脚本的维护源位于 `scripts/`。
+扩展不会保存领星密码或绕过登录验证。使用者需在浏览器中自行登录，并在扩展设置里配置库存服务地址。扩展源码位于 `edge-extension/`，采集脚本的维护源位于 `scripts/`。 移仓同步沿用“移除入库单”，读取该页面全部分页和展开后的匹配包裹商品行；按账号、订单号、FNSKU自动写入承运商、运单号与累计已发货量。同一包裹不重复扣减来源余额，同步本身不入库。此范围不保证领星未推送到该页面的历史包裹，不能表述为完整历史订单取数。
 
 ## 部署脚本
 

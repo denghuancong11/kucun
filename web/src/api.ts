@@ -269,7 +269,7 @@ export function completeDirectUpgrade(
 
 export function initiateRelocationUpgrade(
   role: Role,
-  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; sourceRevision?: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string },
+  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; sourceRevision?: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string; account?: string },
 ): Promise<unknown> {
   return requestJson("/api/upgrades/relocation-work-items", role, {
     method: "POST",
@@ -292,7 +292,7 @@ export function recordRelocationOperation(
   role: Role,
   id: number,
   payload: { removalOrderNo: string; expectedRevision: number; requestId: string },
-): Promise<unknown> {
+): Promise<{automaticSync?: {state:string;message:string;requestId:string}}> {
   return requestJson(`/api/upgrades/relocation-work-items/${id}/operation`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   });
@@ -316,7 +316,7 @@ export function shipRelocationUpgrade(
 export function completeRelocationUpgrade(
   role: Role,
   id: number,
-  payload: { sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string },
+  payload: { inProgressQuantity?: number; reversals?: {ledgerId:number;quantity:number}[]; sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string },
 ): Promise<unknown> {
   return requestJson(`/api/upgrades/relocations/${id}/complete`, role, {
     method: "POST",
@@ -435,4 +435,17 @@ export function importTransferUpgrade(role: Role, payload: { previewToken: strin
 }
 export function fetchTransferUpgrades(role: Role): Promise<TransferUpgradesPayload> {
   return requestJson("/api/transfer-upgrades", role);
+}
+
+export type RelocationUpdatePreview = {fileName:string;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{id:string;revision:string;workNo:string;rma:string;relocationAddress:string};processedAddress:string}[]};
+export function previewRelocationUpdate(role:Role,file:File):Promise<RelocationUpdatePreview> {
+  return requestJson('/api/upgrades/relocation-update/preview',role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});
+}
+export function importRelocationUpdate(role:Role,payload:unknown):Promise<unknown> {
+  return requestJson('/api/upgrades/relocation-update/import',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+}
+export async function downloadRelocationTemplate(role:Role) {
+  const response=await fetch('/api/upgrades/relocation-update/template',{cache:'no-store',headers:{'x-role':role}});
+  if(!response.ok)throw new Error((await response.json()).error || '更新模板读取失败');
+  const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download='移仓升级-更新模板.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }

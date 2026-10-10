@@ -1,3 +1,4 @@
+import {restoreSchema32Fixture} from './fixtures/schema32-fixture.mjs';
 // All writes target temporary SQLite and an owned random-port server.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -24,7 +25,7 @@ async function rejected(r,p,status,code,role='purchasing'){const before=snapshot
 let failure;
 try{
  for(const [model,category]of [['PROC-TONER','硒鼓'],['PROC-INK','墨盒']])db.db.prepare('INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at) VALUES(?,?,0,0,?)').run(model,category,new Date().toISOString());
- assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,32);assert.ok(db.db.prepare('PRAGMA table_info(inquiry_documents)').all().some(c=>c.name==='procurement_note'&&c.notnull===1));check('新建v32库具有独立采购备注字段');
+ assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,33);assert.ok(db.db.prepare('PRAGMA table_info(inquiry_documents)').all().some(c=>c.name==='procurement_note'&&c.notnull===1));check('新建v33库具有独立采购备注字段');
  await start();const beforeStock=stock(),a=await ready('PROC-TONER'),b=await ready('PROC-INK');
  for(const q of [0,7])for(const w of ['',null,'其他仓','ca','CA,SC'])await rejected(a,body(a,q,w),400,w?'invalid_shippingWarehouse':'missing_shippingWarehouse');
  for(const q of ['',null,-1,1.5])await rejected(a,body(a,q),400,q===''||q===null?'missing_supplier_quantity':'invalid_quantity');
@@ -64,7 +65,7 @@ try{
  db.initiateRelocationUpgrade({role:'operation-1',inquiryId:a.id,requestId:rid()});
  await stop();db.assertInventoryInvariants();db.close();db=null;
  // Explicit synthetic schema29 history: restore original business quantities to represent the old behavior.
- const old=new DatabaseSync(databasePath);old.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
+ const old=new DatabaseSync(databasePath);restoreSchema32Fixture(old);old.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
  for(const r of old.prepare('SELECT id FROM inquiry_documents WHERE supplier_quantity IS NOT NULL').all()){
   const original=JSON.parse(old.prepare("SELECT payload_json FROM inquiry_events WHERE inquiry_id=? AND event_type='review'").get(r.id).payload_json).approvedQuantity;
   old.prepare('UPDATE inquiry_documents SET approved_quantity=? WHERE id=?').run(original,r.id);
@@ -80,11 +81,11 @@ try{
  old.prepare('UPDATE inquiry_documents SET shipping_warehouse=? WHERE id=?').run('历史自由文本供应仓',a.id);old.prepare('UPDATE inquiry_documents SET shipping_warehouse=? WHERE id=?').run('',b.id);
  const oldSnapshot=snapshot(old),oldColumns=old.prepare('PRAGMA table_info(inquiry_documents)').all().map(c=>'"'+c.name+'"').join(',');old.close();
  const migrationProcess=spawn(process.execPath,[path.join(root,'scripts/migrate-inventory-v3.mjs'),'--state-root',state,'--backup-root',path.join(state,'controlled-backups')],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,ASTER_PRIVATE_INBOUND_SOURCES:path.join(state,'missing-source.json')}});let migrationOutput='';migrationProcess.stdout.on('data',v=>migrationOutput+=v);migrationProcess.stderr.on('data',v=>migrationOutput+=v);const [code]=await once(migrationProcess,'exit');assert.equal(code,0,migrationOutput);
- db=new InventoryDatabase(state);const after=snapshot();for(const [name,rows]of Object.entries(oldSnapshot)){if(['schema_migrations','system_meta'].includes(name))continue;assert.deepEqual(name==='inquiry_documents'?db.db.prepare('SELECT '+oldColumns+' FROM inquiry_documents').all().map(r=>({...r})):after[name],rows,name);}
+ db=new InventoryDatabase(state);const after=snapshot();for(const [name,rows]of Object.entries(oldSnapshot)){if(['schema_migrations','system_meta'].includes(name))continue;assert.deepEqual(name==='inquiry_documents'?db.db.prepare('SELECT '+oldColumns+' FROM inquiry_documents').all().map(r=>({...r})):rows.length?db.db.prepare('SELECT '+Object.keys(rows[0]).map(k=>'"'+k+'"').join(',')+' FROM "'+name+'"').all().map(r=>({...r})):after[name],rows,name);}
  assert.equal(db.getInquiry(a.id).shippingWarehouse,'历史自由文本供应仓');assert.equal(db.getInquiry(b.id).shippingWarehouse,'');assert.equal(db.getInquiry(a.id).procurementNote,pa.procurementNote);assert.equal(db.syncState().dataVersion,Number(oldSnapshot.system_meta.find(r=>r.key==='data_version').value)+1);
  const backupDirs=await fs.readdir(path.join(state,'controlled-backups'));assert.equal(backupDirs.length,1);const backup=new DatabaseSync(path.join(state,'controlled-backups',backupDirs[0],'data/aster-inventory.sqlite'),{readOnly:true});assert.equal(backup.prepare('PRAGMA user_version').get().user_version,29);assert.deepEqual(snapshot(backup),oldSnapshot);backup.close();
  const migratedZero=db.replyInquiry({id:positive.id,role:'purchasing',...body(db.getInquiry(positive.id),0,'SC','升级后零回复')}).record;
  for(const field of ['requestedQuantity','approvedQuantity','supplierQuantity','quantity'])assert.equal(migratedZero[field],0);assert.equal(migratedZero.procurementNote,'升级后零回复');
- assert.equal(migrateInventoryDatabaseToCurrent({databasePath}).changed,false);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);check('受控v29→v32迁移有完整v29备份，历史自由文本和零回复空仓和旧审核量不覆盖；其他业务表原样，重复迁移无变化');
+ assert.equal(migrateInventoryDatabaseToCurrent({databasePath}).changed,false);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);check('受控v29→v33迁移有完整v29备份，历史自由文本和零回复空仓和旧审核量不覆盖；其他业务表原样，重复迁移无变化');
 }catch(e){failure=e.stack;throw e;}finally{await stop();db?.close();await fs.writeFile(path.join(out,'api-result.json'),JSON.stringify({state,base,checks,rejections,failure},null,2));}
 console.log(`INQUIRY_PROCUREMENT_API_PASS ${checks.length} groups; ${rejections.length} rejected requests unchanged`);

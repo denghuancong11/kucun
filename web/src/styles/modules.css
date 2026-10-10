@@ -747,7 +747,9 @@
 .relocation-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; font-size:13px; }
 .relocation-document .upgrade-inline-complete { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid #edf0f5; }
 .relocation-document .upgrade-inline-complete input, .relocation-document .upgrade-inline-complete select { min-width:0; width:auto; flex:1 1 170px; }
-.relocation-document .upgrade-inline-complete .field { min-width:0; }
+.relocation-document .upgrade-inline-complete .field { min-width:0; flex:1 1 170px; }
+.relocation-document .upgrade-inline-complete .field input, .relocation-document .upgrade-inline-complete .field select { flex:none; width:100%; }
+.relocation-document .upgrade-inline-complete .dialog-error { flex-basis:100%; }
 .relocation-document .form-hint { flex-basis:100%; }
 .relocation-external-shipments { margin-top:14px; border-top:1px solid #edf0f5; padding-top:14px; }
 .package-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }

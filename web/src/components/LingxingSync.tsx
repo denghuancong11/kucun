@@ -5,21 +5,22 @@ import { canSyncLingxing, lingxingTargetKey, type LingxingTarget } from '../ling
 import type { Role } from '../types';
 import { createRequestId } from '../utils/ids';
 
-type Props = {role:Role;target:LingxingTarget;sourceKey?:string;disabled?:boolean;onSynced:()=>Promise<unknown>};
+type Props = {initialRequestId?:string;role:Role;target:LingxingTarget;sourceKey?:string;disabled?:boolean;onSynced:()=>Promise<unknown>};
 
 export function LingxingSync(props: Props) {
   if (!canSyncLingxing(props.role, props.target.action)) return null;
   const key = `${props.role}:${lingxingTargetKey(props.target)}${props.sourceKey ? `:${props.sourceKey}` : ''}`;
-  return <SyncButton key={key} {...props} storageKey={`aster-lingxing-request:${key}`} />;
+  return <SyncButton key={key+":"+(props.initialRequestId??"")} {...props} storageKey={`aster-lingxing-request:${key}`} />;
 }
 
-function SyncButton({role,target,disabled,onSynced,storageKey}: Props & {storageKey:string}) {
+function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}: Props & {storageKey:string}) {
   // 各按钮持有自己提交的请求；其他窗口的新任务不会覆盖当前按钮。
   // 本机保留请求编号，重新打开时向服务器查询该任务的真实结果。
   const [initial] = useState(() => {
-    try { return {requestId:sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey),error:''}; }
+    try { return {requestId:initialRequestId || sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey),error:''}; }
     catch { return {requestId:null,error:'浏览器无法读取同步请求记录，暂未发起新同步。请恢复浏览器存储后重试。'}; }
   });
+  useEffect(()=>{if(initialRequestId){try{sessionStorage.setItem(storageKey,initialRequestId);}catch{/* 查询仍可使用服务器返回的编号 */}}},[initialRequestId,storageKey]);
   const [requestId,setRequestId] = useState(initial.requestId);
   const [submitting,setSubmitting] = useState(false);
   const [submitError,setSubmitError] = useState(initial.error);

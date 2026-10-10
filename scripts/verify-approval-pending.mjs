@@ -45,8 +45,8 @@ async function unchangedFailure(route,role,body,status,code,requestNotApplied){
  requestProof.push({route,role,status,code,requestId:body.requestId,requestNotApplied:requestNotApplied,allTablesAndSyncUnchanged:true});return data;
 }
 const view=()=>api('/api/approvals');
-async function allocation(quantity,operator){return(await api('/api/allocations','operation-1',{model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity,department:'一团',store:'TESTUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
-async function inquiry(operator,model='SYNTH-TONER-001'){return(await api('/api/inquiries','operation-1',{model,quantity:10,department:'一团',store:'TESTUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
+async function allocation(quantity,operator){return(await api('/api/allocations','operation-1',{model:'SYNTH-TONER-001',plan:'TEST-PLAN-TONER',date:'2026-02-10',version:'V11',quantity,department:'一团',store:'AUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
+async function inquiry(operator,model='SYNTH-TONER-001'){return(await api('/api/inquiries','operation-1',{model,quantity:10,department:'一团',store:'AUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
 async function review(r,kind='inquiries',decision='approve',quantity=10){return(await api(`/api/${kind}/${r.id}/review`,'business',{decision,approvedQuantity:quantity,businessNote:'隔离跨周期回归',expectedRevision:r.revision,requestId:rid()})).record;}
 async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:rid()})).record;}
 async function archive(r){return(await api(`/api/inquiries/${r.id}/archive`,'assistant-1',{plan:'PENDING-PLAN',date:'2026-09-24',version:'V1',expectedRevision:r.revision,requestId:rid()})).record;}
@@ -95,7 +95,7 @@ try{
  try{
    // The original request is already committed. A later permission denial must not claim otherwise.
    const savedInkKey=db.db.prepare("SELECT request_id FROM idempotency_requests WHERE scope='inquiry:create' AND json_extract(response_json,'$.record.id')=?").get(inkPending.id).request_id;
-   await unchangedFailure('/api/inquiries','operation-1',{model:'SYNTH-INK-001',quantity:10,department:'一团',store:'TESTUS',operator:'指标类目权限',fnsku:'XPENDING01',asin:'BPENDING01',requestId:savedInkKey},403,'action_forbidden',false);
+   await unchangedFailure('/api/inquiries','operation-1',{model:'SYNTH-INK-001',quantity:10,department:'一团',store:'AUS',operator:'指标类目权限',fnsku:'XPENDING01',asin:'BPENDING01',requestId:savedInkKey},403,'action_forbidden',false);
    const beforeDenied=snapshot();const denied=await api('/api/lingxing/jobs','business',{action:'metrics',documents:[{kind:'inquiry',id:inkPending.id}],requestId:rid()},403);
    assert.equal(denied.code,'lingxing_scope_forbidden');assert.deepEqual(snapshot(),beforeDenied);
    metricsAuthorization.push({case:'old_pending_actions_forbidden',status:403,document:{kind:'inquiry',id:inkPending.id},code:denied.code,allBusinessTablesUnchanged:true});
@@ -108,7 +108,7 @@ try{
  // The original procurement POST never reached the service. Another purchaser advances it first.
  let work=(await api('/api/upgrades/relocation-work-items','operation-1',{inquiryId:qDone.id,requestId:rid()})).workItem;
  const oldProcurement={rma:'ORIGINAL-RMA',relocationAddress:'原采购地址',expectedRevision:work.revision,requestId:rid()};
- work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'COLLEAGUE-RMA',relocationAddress:'同事已确认地址',expectedRevision:work.revision,requestId:rid()})).workItem;
+ work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'COLLEAGUE-RMA',relocationAddress:'Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315',expectedRevision:work.revision,requestId:rid()})).workItem;
  assert.equal(work.status,'awaiting_operation');
  await unchangedFailure(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",oldProcurement,409,'invalid_relocation_step',true);
  assert.equal(db.db.prepare('SELECT COUNT(*) n FROM idempotency_requests WHERE request_id=?').get(oldProcurement.requestId).n,0);

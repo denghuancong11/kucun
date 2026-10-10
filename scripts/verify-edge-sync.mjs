@@ -14,7 +14,7 @@ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'aster-background-')),stateRoot
 await fs.mkdir(path.join(stateRoot,'data'),{recursive:true});createInventoryDatabase({databasePath:path.join(stateRoot,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(stateRoot),rid=()=>crypto.randomUUID();
 db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
-const common={model:'SYNTH-TONER-001',fnsku:'X011111111',department:'一团',store:'隔离US',operator:'后台验证',role:'operation-1',quantity:20};
+const common={model:'SYNTH-TONER-001',fnsku:'X011111111',department:'一团',store:'AUS',operator:'后台验证',role:'operation-1',quantity:20};
 const a=db.createInquiry({...common,asin:'BFIXTURE01',requestId:rid()}).record;
 const b=db.createInquiry({...common,asin:'BFIXTURE00',requestId:rid()}).record;
 const bad=db.createInquiry({...common,asin:'BFIXTURE02',requestId:rid()}).record;
@@ -22,7 +22,7 @@ let source=db.createAllocation({...common,asin:a.asin,plan:'TEST-PLAN-TONER',dat
 source=db.reviewAllocation({id:source.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:source.revision,requestId:rid()}).record;
 source=db.confirmAllocation({id:source.id,role:'assistant-1',expectedRevision:source.revision,requestId:rid()}).record;
 let work=db.initiateRelocationUpgrade({allocationId:source.id,role:'operation-1',requestId:rid()}).workItem;
-work=db.recordRelocationProcurement({id:work.id,role:"logistics",rma:'TEST',relocationAddress:'隔离仓',expectedRevision:work.revision,requestId:rid()}).workItem;
+work=db.recordRelocationProcurement({id:work.id,role:"logistics",rma:'TEST',relocationAddress:'Supplier (RMA#: TEST)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:555000000',expectedRevision:work.revision,requestId:rid()}).workItem;
 work=db.recordRelocationOperation({id:work.id,role:'operation-1',removalOrderNo:'TEST-ORDER',expectedRevision:work.revision,requestId:rid()}).workItem;
 const before=db.getCatalog(),port=await freePort(),base=`http://127.0.0.1:${port}`;
 let server,context,background,extensionId,login=false,mode='normal';
@@ -48,7 +48,7 @@ try{
  context.on('weberror',event=>errors.push(event.error().message));
  const metricSource=await fs.readFile(path.join(root,'scripts/verify-lingxing-page-collector.mjs'),'utf8');
  const metricFixture=metricSource.match(/const fixture = `([\s\S]*?)`;\r?\n/)[1].replace('const visible = columns.slice(offset,offset+3);',"void window.__scrollTrace({offset,left:select('.vxe-table--body-wrapper.body--wrapper').scrollLeft,visibility:document.visibilityState});const visible = columns.slice(offset,offset+3);").replaceAll("fixture.mode==='empty'","(fixture.mode==='empty'||(fixture.mode==='second-empty'&&asin==='BFIXTURE02'))");
- const removalFixture=await fs.readFile(path.join(root,'scripts/fixtures/removal-inbound.html'),'utf8');
+ const removalFixture=(await fs.readFile(path.join(root,'scripts/fixtures/removal-inbound.html'),'utf8')).replaceAll('TEST-US 美国','A-US 美国');
  await context.exposeBinding('__scrollTrace',({page},data)=>{scrollTrace.push({url:page.url(),...data});});
  await context.exposeBinding('__traceQuery',({page},data)=>{queries.push({url:page.url(),...data});});
  await context.route('https://erp.lingxing.com/**',route=>{
@@ -103,7 +103,7 @@ try{
  await until(async()=>(await api('/api/lingxing/jobs?action=metrics')).worker.connected,'lease lost');await done(longJob,'succeeded',360000);assert.ok(Date.now()-longStart>=310000);timings.push({name:'long-report-with-worker-recycle',elapsedMs:Date.now()-longStart});check('长采集实际超过五分钟且中途回收SW，原物流仍完成并只保存一次');const afterWorker=await submit(metric);await done(afterWorker);timings.push({name:'worker-recycle-recovery',elapsedMs:Date.now()-resumeStart});check('Service Worker回收后由闹钟唤醒，身份和串行执行恢复');
  const oldId=(await storage()).connection.workerId;await stop();await wait(3000);await start();await until(async()=>(await api('/api/lingxing/jobs?action=metrics')).worker.connected,'restart reconnect',65000);assert.notEqual((await storage()).connection.workerId,oldId);const afterRestart=await submit(logistic);await done(afterRestart);check('库存服务重启后无需设置页，自动建立新连接并完成后续物流');
  const setting2=await context.newPage();await setting2.goto(`chrome-extension://${extensionId}/worker.html`);await setting2.locator('#disconnect').click();await until(async()=>!(await storage()).enabled,'disconnect');await setting2.close();await background.evaluate(()=>run(initialize));assert.equal((await api('/api/lingxing/jobs?action=metrics')).worker.connected,false);check('主动断开持久生效，初始化和闹钟不会自动覆盖');
- assert.deepEqual(db.getCatalog().models,before.models);assert.equal(db.db.prepare('SELECT COUNT(*) n FROM upgrade_relocations').get().n,0);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.deepEqual(errors,[]);check('同步不采纳包裹、不登记发货、不修改库存，页面与脚本无错误');
+ assert.deepEqual(db.getCatalog().models,before.models);assert.equal(db.db.prepare('SELECT COUNT(*) n FROM upgrade_relocations').get().n,1);assert.equal(db.getRelocationWorkItem(work.id).shippedQuantity,5);assert.equal(db.getRelocationWorkItem(work.id).fbaRemainingQuantity,15);assert.equal(db.getRelocationWorkItem(work.id).carrier,'UPS');assert.equal(db.getRelocationWorkItem(work.id).trackingNo,'T1 / T2');assert.deepEqual(db.relocationExternalShipments('TEST-ORDER','X011111111','AUS').map(r=>r.usedQuantity),[2,3]);assert.equal(db.db.prepare('SELECT COUNT(*) n FROM upgrade_inventory_ledger').get().n,0);db.assertInventoryInvariants();assert.deepEqual(db.db.prepare('PRAGMA foreign_key_check').all(),[]);assert.deepEqual(errors,[]);check('两页匹配商品2+3自动写入移仓单，承运商运单号和来源余15一致；反复同步仍只发货5、0入库流水，在库不变');
  await manual.screenshot({path:path.join(path.dirname(output),'edge-user-report-unchanged.png')});
 } finally {
  await fs.writeFile(output,JSON.stringify({kind:'isolated-real-edge-mock-reports',realLingxing:false,checks,errors,jobs,timings,queries,scrollTrace,stateRoot,at:new Date().toISOString()},null,2));

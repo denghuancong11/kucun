@@ -26,7 +26,7 @@ export function seedVisualFixtures(stateRoot) {
     for (const row of imported.rows) if (row.model.startsWith('APP-')) db.markTransitOnShelf({ id: row.id, role: 'assistant-1', expectedRevision: row.revision, yes: 'YES', requestId: rid() });
     function allocation(model, i, stage = 0) {
       const batch = db.getCatalog().stockDetails[model][0];
-      let r = db.createAllocation({ role: 'operation-1', model, plan: batch.plan, date: batch.date, version: batch.version, sourceBatchKey: batch.batchKey, quantity: 8, department: '一团', store: 'VISUALUS', operator: `运营${String(i + 1).padStart(2, '0')}`, asin: 'BVISUAL001', fnsku: batch.fnsku, operatorNote: '核对店铺与批次', requestId: rid() }).record;
+      let r = db.createAllocation({ role: 'operation-1', model, plan: batch.plan, date: batch.date, version: batch.version, sourceBatchKey: batch.batchKey, quantity: 8, department: '一团', store: 'AUS', operator: `运营${String(i + 1).padStart(2, '0')}`, asin: 'BVISUAL001', fnsku: batch.fnsku, operatorNote: '核对店铺与批次', requestId: rid() }).record;
       if (stage > 0) r = db.reviewAllocation({ id: r.id, role: 'business', decision: 'approve', approvedQuantity: 4, businessNote: '按申请核准', expectedRevision: r.revision, requestId: rid() }).record;
       if (stage > 2) r = db.confirmAllocation({ id: r.id, role: 'assistant-1', expectedRevision: r.revision, requestId: rid() }).record;
       return r;
@@ -47,10 +47,9 @@ export function seedVisualFixtures(stateRoot) {
     const sources = Array.from({ length: 28 }, (_, i) => allocation('SYNTH-TONER-001', i, 3));
     const source = sources[0];
     let work = db.initiateRelocationUpgrade({ allocationId: source.id, role: 'operation-1', requestId: rid() }).workItem;
-    work = db.recordRelocationProcurement({ id: work.id, role: "logistics", rma: 'RMA-VISUAL', relocationAddress: '洛杉矶升级仓', expectedRevision: work.revision, requestId: rid() }).workItem;
+    work = db.recordRelocationProcurement({ id: work.id, role: "logistics", rma: 'RMA-VISUAL', relocationAddress: 'Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315', expectedRevision: work.revision, requestId: rid() }).workItem;
     work = db.recordRelocationOperation({ id: work.id, role: 'operation-1', removalOrderNo: 'REMOVE-VISUAL', expectedRevision: work.revision, requestId: rid() }).workItem;
-    work = db.syncRelocationLogistics({ id: work.id, role: 'operation-1', capturedAt: displayTime, shipments: [{ externalId: 'PKG-VISUAL', storeId: 'STORE-VISUAL', storeName: 'VISUALUS', countryCode: 'US', orderNo: 'REMOVE-VISUAL', fnsku: source.fnsku, carrier: 'UPS', trackingNo: 'TRACK-VISUAL', shipDate: '2026-09-10', quantity: 2 }], requestId: rid() }).workItem;
-    db.shipRelocationUpgrade({ id: work.id, role: 'operation-1', fbaRemainingQuantity: 2, externalItems: [{ lineId: work.externalShipments[0].lineId, quantity: 2 }], expectedRevision: work.revision, requestId: rid() });
+    work = db.syncRelocationLogistics({ id: work.id, role: 'operation-1', capturedAt: displayTime, shipments: [{ externalId: 'PKG-VISUAL', storeId: 'STORE-VISUAL', storeName: 'A-US 美国', countryCode: 'US', orderNo: 'REMOVE-VISUAL', fnsku: source.fnsku, carrier: 'UPS', trackingNo: 'TRACK-VISUAL', shipDate: '2026-09-10', quantity: 2 }], requestId: rid() }).workItem;
     db.initiateRelocationUpgrade({ allocationId: sources[1].id, role: 'operation-1', requestId: rid() });
     db.createDirectUpgrade({ role: 'operation-1', model: 'APP-18', sourceVersion: 'V1', requestId: rid() });
     db.assertInventoryInvariants();

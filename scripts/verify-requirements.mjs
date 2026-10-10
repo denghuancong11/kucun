@@ -116,7 +116,7 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
   check(`${suffix} 移仓从执行量 ${quantity} 带出原计划、实际日期和版本`, work.sourceQuantityBefore === quantity
     && work.plan === expected.plan && work.shipDate === expected.date && work.sourceVersion === expected.version && work.sourceKind === suffix);
   result = await call("POST", `/api/upgrades/relocation-work-items/${work.id}/procurement`, "logistics", {
-    rma: `RMA-${suffix}`, relocationAddress: "供应商升级仓", expectedRevision: work.revision, requestId: requestId("procurement"),
+    rma: `RMA-${suffix}`, relocationAddress: "Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315", expectedRevision: work.revision, requestId: requestId("procurement"),
   });
   work = result.workItem;
   result = await call("POST", `/api/upgrades/relocation-work-items/${work.id}/operation`, "operation-1", {
@@ -127,19 +127,18 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
     await call('POST', `/api/upgrades/relocation-work-items/${work.id}/${retired}`, 'admin', {expectedRevision:work.revision,requestId:requestId('retired')}, 404);
   }
   check(`${suffix} 已删除移仓更正和取消接口且正常流程未改变`, JSON.stringify((await call('GET','/api/upgrades','admin')).relocationWorkItems.find(row=>row.id===work.id))===JSON.stringify(work));
-  result = saveCapture(`/api/upgrades/relocation-work-items/${work.id}/lingxing-sync`, "assistant-1", {
-    shipments: [{externalId:`EX-${suffix}`,storeId:"S1",storeName:"验收",countryCode:"US",orderNo:`REMOVE-${suffix}`,fnsku:expected.fnsku,carrier:"UPS",trackingNo:`TRACK-${suffix}`,shipDate:"2026-09-08",quantity:40}],
+  const capture = {
+    shipments: [{externalId:`EX-${suffix}`,storeId:"S1",storeName:work.store.replace(/US$/,"-US 美国"),countryCode:"US",orderNo:`REMOVE-${suffix}`,fnsku:expected.fnsku,carrier:"UPS",trackingNo:`TRACK-${suffix}`,shipDate:"2026-09-08",quantity:40}],
     capturedAt:new Date().toISOString(),requestId:requestId("logistics")
-  });
+  };
+  result = saveCapture(`/api/upgrades/relocation-work-items/${work.id}/lingxing-sync`, "assistant-1", capture);
   work=result.workItem;
-  const shipment={fbaRemainingQuantity:quantity-40, externalItems:work.externalShipments.map(row=>({lineId:row.lineId,quantity:40})), expectedRevision:work.revision,requestId:requestId("ship")};
-  result=await call("POST", `/api/upgrades/relocation-work-items/${work.id}/ship`, "assistant-1", shipment);
-  check(`${suffix} 物流采纳重试不重复登记`,(await call("POST", `/api/upgrades/relocation-work-items/${work.id}/ship`, "assistant-1", shipment)).deduped);
-  const upgrade = result.upgrade;
+  check(`${suffix} 物流自动记账重试不重复登记`,saveCapture(`/api/upgrades/relocation-work-items/${work.id}/lingxing-sync`, "assistant-1", capture).deduped);
+  const upgrade = (await call("GET","/api/upgrades","admin")).upgrades.find(row=>row.id===work.upgradeId);
   const relocation = upgrade.relocations[0];
   const catalogAfterShip = await call("GET", "/api/inventory/catalog", "admin");
   check(`${suffix} 移仓登记不重复扣减本地库存`, catalogAfterShip.models.find((row) => row.model === batch.model).inStock === modelBefore);
-  const completion = { completedQuantity: 25, newVersion: "V31", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: requestId("complete") };
+  const completion = { completedQuantity: 25, inProgressQuantity:15, newVersion: "V31", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: requestId("complete") };
   result = await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion);
   check(`${suffix} 升级完成 25，剩余 15 升级中`, result.upgrade.completedQuantity === 25 && result.upgrade.inProgressQuantity === 15);
   result = await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion);
@@ -149,7 +148,7 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
   check(`${suffix} 仅完成的 25 进入在库并继承正确 FNSKU`, target?.quantity === 25 && target.fnsku === expected.fnsku
     && catalogAfterComplete.models.find((row) => row.model === batch.model).inStock === modelBefore + 25);
   const next=result.upgrade?.relocations?.[0] ?? (await call("GET","/api/upgrades","admin")).upgrades.find(j=>j.id===upgrade.id).relocations[0];
-  const final=await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", {completedQuantity:15,newVersion:"V32",targetWarehouse:"SyntheticWarehouseA",expectedRevision:next.revision,requestId:requestId("complete-v32")});
+  const final=await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", {completedQuantity:40,inProgressQuantity:0,newVersion:"V32",targetWarehouse:"SyntheticWarehouseA",expectedRevision:next.revision,requestId:requestId("complete-v32")});
   check(`${suffix} 同移仓单两种新版本完整记账`, final.upgrade.relocations[0].completions.map(x=>`${x.version}:${x.quantity}`).join() === "V31:25,V32:15");
 
 }
@@ -248,7 +247,7 @@ try {
   check("后续同步不会覆盖已完成调拨的领星快照", result.allocations.find((row) => row.id === submitted.id).lingxing.sales30d === 170);
   const beforeInquiryBalance = await balance();
   result = await call("POST", "/api/inquiries", "operation-1", {
-    model: batch.model, quantity: 150, department: "一团", store: "USABC", operator: "询库测试员", fnsku: "XINQUIRY01", asin: "BTEST00002",
+    model: batch.model, quantity: 150, department: "一团", store: "AUS", operator: "询库测试员", fnsku: "XINQUIRY01", asin: "BTEST00002",
     operatorNote: "请询供应商现货", requestId: requestId("inquiry"), allowDuplicate: false,
   });
   const inquirySubmitted = result.record;
@@ -408,11 +407,10 @@ try {
   const ink = await call("POST","/api/inquiries","operation-1",{...allocationBody(10,"ink"),model:"SYNTH-INK-001",asin:"BINK000001"});
   check("墨盒询库仅向对应运营团队展示",!(await call("GET","/api/approvals","operation-2")).inquiries.some(r=>r.id===ink.record.id));
   let zeroWork=(await call("POST","/api/upgrades/relocation-work-items","assistant-1",{inquiryId:inquirySubmitted.id,requestId:requestId("zero-fba-start")})).workItem;
-  zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/procurement`,"logistics",{rma:"FBA零",relocationAddress:"测试仓",expectedRevision:zeroWork.revision,requestId:requestId("zero-procurement")})).workItem;
+  zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/procurement`,"logistics",{rma:"FBA零",relocationAddress:"Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315",expectedRevision:zeroWork.revision,requestId:requestId("zero-procurement")})).workItem;
   zeroWork=(await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/operation`,"operation-1",{removalOrderNo:"ZERO-FBA-ORDER",expectedRevision:zeroWork.revision,requestId:requestId("zero-operation")})).workItem;
-  zeroWork=saveCapture(`/api/upgrades/relocation-work-items/${zeroWork.id}/lingxing-sync`,"assistant-1",{shipments:[{externalId:"ZERO-FBA-PKG",storeId:"S1",storeName:"验收",countryCode:"US",orderNo:"ZERO-FBA-ORDER",fnsku:zeroWork.fnsku,carrier:"UPS",trackingNo:"ZERO-FBA-TRACK",shipDate:"2026-09-10",quantity:1}],capturedAt:new Date().toISOString(),requestId:requestId("zero-sync")}).workItem;
-  await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/ship`,"assistant-1",{fbaRemainingQuantity:0,externalItems:[{lineId:zeroWork.externalShipments[0].lineId,quantity:1}],expectedRevision:zeroWork.revision,requestId:requestId("zero-ship")});
-  check("FBA实际剩余为0且有新包裹时仍可登记发货",true);
+  zeroWork=saveCapture(`/api/upgrades/relocation-work-items/${zeroWork.id}/lingxing-sync`,"assistant-1",{shipments:[{externalId:"ZERO-FBA-PKG",storeId:"S1",storeName:"A-US 美国",countryCode:"US",orderNo:"ZERO-FBA-ORDER",fnsku:zeroWork.fnsku,carrier:"UPS",trackingNo:"ZERO-FBA-TRACK",shipDate:"2026-09-10",quantity:1}],capturedAt:new Date().toISOString(),requestId:requestId("zero-sync")}).workItem;
+  check("新增包裹自动登记且来源剩余按已记账量扣减",zeroWork.shippedQuantity===1 && zeroWork.fbaRemainingQuantity===zeroWork.sourceQuantityBefore-1);
   await call("POST",`/api/upgrades/relocation-work-items/${zeroWork.id}/cancel`,"admin",{reason:"已发货不可取消",expectedRevision:zeroWork.revision+1,requestId:requestId("cancel-shipped")},404);
   check("已发货流程拒绝取消，保留包裹已用量与发货记录",true);
   const permissionPath=path.join(stateRoot,"data","permissions.json");

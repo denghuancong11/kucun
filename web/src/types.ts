@@ -39,6 +39,7 @@ export interface ModelSummary {
 }
 
 export interface StockDetail {
+  shippingMethod?: string;
   warehouse: string;
   sourceTeam?: string | null;
   quantity: number;
@@ -448,6 +449,8 @@ export interface DirectUpgradeLine {
 }
 
 export interface UpgradeRelocation {
+  originalRelocationAddress: string | null;
+  receiptBatches: {ledgerId:number;batchKey:string;version:string;warehouse:string;quantity:number;originalQuantity:number;locked:number;onHand:number;issue:string}[];
   externalShipments: RelocationExternalShipment[];
   id: number;
   workId: number | null;
@@ -505,6 +508,7 @@ export interface RelocationExternalItem {
 }
 
 export interface RelocationWorkItem {
+  originalRelocationAddress: string | null;
   inquiryRecall: InquiryRecallInfo | null;
   id: number;
   workNo: string;
@@ -529,6 +533,7 @@ export interface RelocationWorkItem {
   store: string;
   confirmedAt: string;
   sourceQuantityBefore: number;
+  initialQuantity: number;
   soldQuantity: number | null;
   status: "awaiting_procurement" | "awaiting_operation" | "awaiting_shipping" | "shipped" | "withdrawn" | "cancelled";
   statusText: string;
@@ -607,6 +612,7 @@ export interface RelocationUpgrade extends UpgradeBase {
 export type UpgradeJob = DirectUpgrade | RelocationUpgrade;
 
 export interface UpgradeDashboardPayload {
+  relocationAccounts: {account:string;store:string}[];
   overseasWarehouses: string[];
   directSources: DirectUpgradeSource[];
   relocationCandidates: RelocationCandidate[];

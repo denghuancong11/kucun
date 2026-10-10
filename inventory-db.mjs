@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export const INVENTORY_SCHEMA_VERSION = 32;
+import { accountStore, relocationAccounts, processRelocationAddress, lingxingStore } from './relocation-address.mjs';
+
+export const INVENTORY_SCHEMA_VERSION = 33;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1622,6 +1624,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateInquiryApprovedQuantityV30(db, createdAt);
   migrateInquiryDisplayV31(db, createdAt);
   migrateTransferUpgradeV32(db, createdAt);
+  migrateRelocationWorkflowV33(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2860,6 +2863,31 @@ function migrateTransferUpgradeV32(db, at) {
     .run(at, "转仓升级独立导入批次及明细，复用预览凭证；不产生普通库存");
 }
 
+
+function migrateRelocationWorkflowV33(db, at) {
+  // 保留全部历史账及余额，不采纳缓存、不重放入库、不发起同步。
+  db.exec("ALTER TABLE upgrade_relocation_work_items ADD COLUMN account_store TEXT; ALTER TABLE upgrade_relocation_work_items ADD COLUMN original_relocation_address TEXT;");
+  db.exec("ALTER TABLE upgrade_relocations ADD COLUMN in_progress_quantity INTEGER NOT NULL DEFAULT 0 CHECK(in_progress_quantity >= 0);");
+  db.exec("UPDATE upgrade_relocations SET in_progress_quantity=shipped_quantity-completed_quantity;");
+  db.exec("UPDATE upgrade_relocation_work_items SET original_relocation_address=relocation_address, account_store=(SELECT store_name FROM relocation_sources s WHERE s.allocation_document_id=upgrade_relocation_work_items.allocation_document_id OR s.inquiry_id=upgrade_relocation_work_items.inquiry_id) WHERE fba_archive_id IS NULL;");
+  const views=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='view'").all();
+  const triggers=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all();
+  const indexes=db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='stock_batches' AND sql IS NOT NULL").all();
+  for(const item of views) db.exec('DROP VIEW "'+item.name+'"');
+  for(const item of triggers) db.exec('DROP TRIGGER "'+item.name+'"');
+  db.exec("ALTER TABLE stock_batches ADD COLUMN relocation_receipt_key TEXT NOT NULL DEFAULT ''; ALTER TABLE stock_batches ADD COLUMN shipping_method TEXT NOT NULL DEFAULT '';");
+  const schema=db.prepare("SELECT sql FROM sqlite_master WHERE name='stock_batches'").get().sql;
+  db.exec(schema.replace(/CREATE TABLE (?:IF NOT EXISTS )?"?stock_batches"?/, 'CREATE TABLE stock_batches_v33').replace('UNIQUE (model, plan, ship_date, version, fnsku, warehouse, source_team)','UNIQUE (model, plan, ship_date, version, fnsku, warehouse, source_team, relocation_receipt_key)'));
+  db.exec('INSERT INTO stock_batches_v33 SELECT * FROM stock_batches; DROP TABLE stock_batches; ALTER TABLE stock_batches_v33 RENAME TO stock_batches;');
+  for(const item of indexes) db.exec(item.sql);
+  for(const item of views) db.exec(item.sql);
+  for(const item of triggers) db.exec(item.sql);
+  const preview=db.prepare("SELECT sql FROM sqlite_master WHERE name='transit_preview_tokens'").get().sql;
+  db.exec(preview.replace('transit_preview_tokens','transit_preview_tokens_v33').replace("'transfer_upgrade'", "'transfer_upgrade', 'relocation_update'"));
+  db.exec('INSERT INTO transit_preview_tokens_v33 SELECT * FROM transit_preview_tokens; DROP TABLE transit_preview_tokens; ALTER TABLE transit_preview_tokens_v33 RENAME TO transit_preview_tokens; CREATE INDEX idx_transit_preview_expiry ON transit_preview_tokens(expires_at);');
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(33,?,?)').run(at,'移仓账号及原始地址、当前升级中数量、独立升级入库批次与批量更新预览');
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2869,9 +2897,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v31 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v32 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -2988,6 +3016,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 29) { migrateInquiryApprovedQuantityV30(db, appliedAt); version = 30; }
     if (version === 30) { migrateInquiryDisplayV31(db, appliedAt); version = 31; }
     if (version === 31) { migrateTransferUpgradeV32(db, appliedAt); version = 32; }
+    if (version === 32) { migrateRelocationWorkflowV33(db, appliedAt); version = 33; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3290,7 +3319,7 @@ function auditResult(operation, payload = {}) {
   if (operation === "upgrade_direct_start") return "在库库存已预锁定升级";
   if (operation === "upgrade_direct_complete") return "在库库存已完成版本转换";
   if (operation === "upgrade_relocation_created") return "已登记移仓发货";
-  if (operation === "upgrade_relocation_complete") return "移仓库存已完成升级入库";
+  if (operation === "upgrade_relocation_complete") return payload.onHandDelta<0 ? "移仓累计完成量减少，指定入库批次已扣回" : payload.onHandDelta===0 ? "移仓升级数量已更新，库存未变" : "移仓库存已完成升级入库";
   if (operation === "upgrade_relocation_started") return "已发起移仓流程";
   if (operation === "upgrade_relocation_procurement") return "RMA及移仓地址已登记";
   if (operation === "upgrade_relocation_operation") return "移除订单已登记";
@@ -3510,7 +3539,7 @@ export class InventoryDatabase {
         version: legacy ? null : row.version,
         fnsku: legacy ? null : row.fnsku,
         packPerBox: row.pack_per_box == null ? null : String(row.pack_per_box),
-        batchKey: row.batch_key, warehouse: row.warehouse, sourceTeam: row.source_team || null,
+        batchKey: row.batch_key, warehouse: row.warehouse, shippingMethod: row.shipping_method, sourceTeam: row.source_team || null,
         revision: Number(row.revision),
         isLegacyPlaceholder: legacy,
       });
@@ -3826,7 +3855,7 @@ export class InventoryDatabase {
       FROM upgrade_jobs WHERE id IN (SELECT id FROM jobs)
     UNION ALL SELECT CASE WHEN operation_type IN ('direct_complete', 'relocation_complete') THEN '升级入库' ELSE '升级操作' END,
       operation_no, status FROM upgrade_operations WHERE upgrade_id IN (SELECT id FROM jobs)`).all({ id }).map(row => ({
-        ...row, status: ({ awaiting_procurement: '待物流填写', awaiting_operation: '待运营填写', awaiting_shipping: '待确认发货',
+        ...row, status: ({ awaiting_procurement: '待物流更新RMA和地址', awaiting_operation: '待运营填写订单号', awaiting_shipping: '移仓和升级中',
           shipped: '已登记发货', withdrawn: '已撤回', cancelled: '已取消', active: '有效', completed: '已完成' })[row.status] ?? row.status,
       }));
   }
@@ -3972,7 +4001,7 @@ export class InventoryDatabase {
     const sourceTeam = String(sourceBatch.source_team ?? sourceBatch.team ?? "");
     const baseKey = batchKey(sourceBatch.model, sourceBatch.plan, sourceBatch.ship_date, version);
     let target = this.db.prepare(`SELECT * FROM stock_batches
-      WHERE model = ? AND plan = ? AND ship_date = ? AND version = ? AND fnsku = ? AND warehouse = ? AND source_team = ?`)
+      WHERE model = ? AND plan = ? AND ship_date = ? AND version = ? AND fnsku = ? AND warehouse = ? AND source_team = ? AND relocation_receipt_key = ''`)
       .get(sourceBatch.model, sourceBatch.plan, sourceBatch.ship_date, version, sourceBatch.fnsku, warehouse, sourceTeam);
     if (target && String(target.pack_per_box ?? "") !== String(packPerBox ?? "")) {
       throw new BusinessError(409, "pack_per_box_conflict", `目标在库批次 ${target.batch_key} 的套/箱与本次来源不一致，未合并`, {
@@ -4069,6 +4098,7 @@ export class InventoryDatabase {
       id: Number(item.id),
       relocationNo: item.relocation_no,
       workId: this.db.prepare('SELECT id FROM upgrade_relocation_work_items WHERE relocation_id=? ORDER BY id DESC LIMIT 1').get(item.id)?.id ?? null,
+      originalRelocationAddress: this.db.prepare('SELECT original_relocation_address FROM upgrade_relocation_work_items WHERE relocation_id=? ORDER BY id DESC LIMIT 1').get(item.id)?.original_relocation_address ?? null,
       completions: this.completionVersions("relocation", Number(item.id)),
       sequence: Number(item.sequence),
       sourceQuantityBefore: Number(item.source_quantity_before),
@@ -4078,7 +4108,8 @@ export class InventoryDatabase {
       fbaRemainingQuantity: Number(item.fba_remaining_quantity),
       shippedQuantity: Number(item.shipped_quantity),
       completedQuantity: Number(item.completed_quantity),
-      inProgressQuantity: Number(item.shipped_quantity) - Number(item.completed_quantity),
+      inProgressQuantity: Number(item.in_progress_quantity),
+      receiptBatches: this.relocationReceiptBatches(Number(item.id)),
       rma: item.rma,
       relocationAddress: item.relocation_address,
       removalOrderNo: item.removal_order_no,
@@ -4096,7 +4127,7 @@ export class InventoryDatabase {
       withdrawnAt: item.withdrawn_at ?? null,
       withdrawReason: item.withdraw_reason ?? null,
       externalItems: this.relocationExternalItems(Number(item.id)),
-      externalShipments: this.relocationExternalShipments(item.removal_order_no, row.fnsku),
+      externalShipments: this.relocationExternalShipments(item.removal_order_no, row.fnsku, this.db.prepare('SELECT account_store FROM upgrade_relocation_work_items WHERE relocation_id=? ORDER BY id DESC LIMIT 1').get(item.id)?.account_store ?? null),
     }));
     const activeRelocations = relocations.filter((item) => item.status === "active");
     const completedQuantity = activeRelocations.reduce((sum, item) => sum + item.completedQuantity, 0);
@@ -4124,7 +4155,7 @@ export class InventoryDatabase {
       confirmedAt: row.confirmed_at,
       newVersion: row.new_version,
       status: row.status,
-      statusText: row.status === "completed" ? "升级完成" : "升级中",
+      statusText: row.status === "completed" ? "升级完成" : "移仓和升级中",
       initiatedByRole: row.initiated_by_role,
       initiatedAt: row.initiated_at,
       revision: Number(row.revision),
@@ -4134,7 +4165,7 @@ export class InventoryDatabase {
       soldQuantity,
       shippedQuantity,
       completedQuantity,
-      inProgressQuantity: shippedQuantity - completedQuantity,
+      inProgressQuantity: activeRelocations.reduce((sum,item) => sum + item.inProgressQuantity, 0),
       relocations,
     };
   }
@@ -4153,11 +4184,11 @@ export class InventoryDatabase {
       .map((row) => ({ lineId: Number(row.line_id), quantity: Number(row.quantity), snapshot: JSON.parse(row.snapshot_json) }));
   }
 
-  relocationExternalShipments(orderNo, fnsku) {
+  relocationExternalShipments(orderNo, fnsku, store = undefined) {
     return this.db.prepare(`SELECT s.*, COALESCE((SELECT SUM(i.quantity) FROM upgrade_relocation_external_items i
       JOIN upgrade_relocations r ON r.id = i.relocation_id WHERE i.line_id = s.id AND r.status = 'active'), 0) AS used_quantity
       FROM lingxing_removal_shipments s WHERE s.order_no = ? AND s.fnsku = ? ORDER BY s.store_id, s.ship_date, s.id`)
-      .all(orderNo, fnsku).map((row) => ({
+      .all(orderNo, fnsku).filter(row=>store===undefined || (store!=null && lingxingStore(row.store_name)===store)).map((row) => ({
         lineId: Number(row.id), externalId: row.external_id, storeId: row.store_id, storeName: row.store_name,
         countryCode: row.country_code, orderNo: row.order_no, fnsku: row.fnsku, quantity: Number(row.quantity),
         usedQuantity: Number(row.used_quantity), availableQuantity: Number(row.quantity) - Number(row.used_quantity),
@@ -4173,7 +4204,7 @@ export class InventoryDatabase {
     const time = new Date(capturedAt);
     if (!capturedAt || !Number.isFinite(time.getTime())) throw new BusinessError(400, "invalid_captured_at", "领星物流缺少有效取数时间，请重新同步");
     const capture = time.toISOString();
-    const rows = shipments.map((item) => {
+    let rows = shipments.map((item) => {
       const row = {};
       for (const field of ["externalId", "storeId", "storeName", "countryCode", "orderNo", "fnsku", "carrier", "trackingNo", "shipDate"]) {
         row[field] = String(item?.[field] ?? "").trim();
@@ -4190,6 +4221,12 @@ export class InventoryDatabase {
       if (["cancelled","withdrawn"].includes(work.status)) throw new BusinessError(409, "relocation_cancelled", "本次移仓已取消或撤销，未保存新的物流数据");
       const source = this.relocationSource(work.allocation_document_id, work.inquiry_id, work.fba_archive_id);
       if (!work.removal_order_no || !source) throw new BusinessError(409, "missing_removal_order", "请先由运营填写移除订单号，再同步物流");
+      if(!work.account_store) throw new BusinessError(422,'missing_account_mapping','本次移仓缺少可核实账号，请核对后再同步');
+      if(rows.some(row=>!lingxingStore(row.storeName))) throw new BusinessError(422,'store_mapping_missing','领星店铺无法对应系统账号，请核对店铺名称');
+      rows=rows.filter(row=>lingxingStore(row.storeName)===work.account_store);
+      if(!rows.length) throw new BusinessError(422,'store_mismatch','未找到店铺 '+work.account_store+'、当前订单及 FNSKU 的包裹，原有数量保持不变');
+      const owners=this.db.prepare("SELECT w.work_no FROM upgrade_relocation_work_items w JOIN relocation_sources s ON s.allocation_document_id=w.allocation_document_id OR s.inquiry_id=w.inquiry_id OR s.fba_archive_id=w.fba_archive_id WHERE w.account_store=? AND w.removal_order_no=? AND s.fnsku=? AND w.status NOT IN ('withdrawn','cancelled')").all(work.account_store,work.removal_order_no,source.fnsku);
+      if(owners.length!==1) throw new BusinessError(409,'ambiguous_shipment_owner','包裹归属不唯一，请核对移仓单：'+owners.map(row=>row.work_no).join('、'));
       const at = new Date().toISOString();
       const upsert = this.db.prepare(`INSERT INTO lingxing_removal_shipments(external_id, store_id, store_name, country_code,
         order_no, fnsku, quantity, carrier, tracking_no, ship_date, captured_at, synced_at)
@@ -4210,6 +4247,27 @@ export class InventoryDatabase {
         upsert.run(row.externalId, row.storeId, row.storeName, row.countryCode, row.orderNo, row.fnsku, row.quantity,
           row.carrier, row.trackingNo, row.shipDate, capture, at);
       }
+      const adopted=[];
+      for(const row of rows) {
+        const line=this.relocationExternalShipments(work.removal_order_no,source.fnsku).find(item=>item.storeId===row.storeId && item.externalId===row.externalId);
+        const other=this.db.prepare('SELECT r.relocation_no FROM upgrade_relocation_external_items i JOIN upgrade_relocations r ON r.id=i.relocation_id WHERE i.line_id=? AND i.relocation_id<>? LIMIT 1').get(line.lineId,work.relocation_id??0);
+        if(other) throw new BusinessError(409,'shipment_already_used','包裹 '+row.trackingNo+' 已被 '+other.relocation_no+' 使用，请核对');
+        const used=work.relocation_id ? this.relocationExternalItems(work.relocation_id).find(item=>item.lineId===line.lineId)?.quantity??0 : 0;
+        if(row.quantity<used) throw new BusinessError(409,'shipment_quantity_decreased','已记账包裹数量减少，请核对；本次不自动改写已发货事实');
+        const quantity=row.quantity-used;
+        if(quantity>0) {
+          if(!row.carrier || !row.trackingNo) throw new BusinessError(422,'missing_logistics','匹配包裹缺少承运商或运单号');
+          adopted.push({lineId:line.lineId,quantity,snapshot:line});
+        }
+      }
+      this.adoptRelocationShipments(work,source,adopted,role,requestId);
+      const savedWork=this.db.prepare('SELECT relocation_id FROM upgrade_relocation_work_items WHERE id=?').get(workId);
+      if(savedWork.relocation_id) {
+        const packages=this.db.prepare('SELECT DISTINCT s.carrier,s.tracking_no FROM upgrade_relocation_external_items i JOIN lingxing_removal_shipments s ON s.id=i.line_id WHERE i.relocation_id=? ORDER BY s.id').all(savedWork.relocation_id);
+        const carrier=[...new Set(packages.map(row=>row.carrier).filter(Boolean))].join(' / '), tracking=[...new Set(packages.map(row=>row.tracking_no).filter(Boolean))].join(' / ');
+        this.db.prepare("UPDATE upgrade_relocations SET carrier=?,tracking_no=?,revision=revision+1,updated_at=? WHERE id=? AND (carrier<>? OR tracking_no<>?)").run(carrier,tracking,at,savedWork.relocation_id,carrier,tracking);
+        this.db.prepare("UPDATE upgrade_relocation_work_items SET carrier=?,tracking_no=?,revision=revision+1,updated_at=? WHERE id=? AND (carrier<>? OR tracking_no<>?)").run(carrier,tracking,at,workId,carrier,tracking);
+      }
       if (rows.length > 0) this.db.prepare(`UPDATE upgrade_relocation_work_items SET external_sync_status = 'synced',
         revision = revision + CASE WHEN external_sync_status = 'synced' THEN 0 ELSE 1 END,
         updated_at = CASE WHEN external_sync_status = 'synced' THEN updated_at ELSE ? END WHERE id = ?`).run(at, workId);
@@ -4224,7 +4282,7 @@ export class InventoryDatabase {
     const id = typeof idOrRow === "object" && idOrRow ? Number(idOrRow.id) : Number(idOrRow);
     const row = this.db.prepare(`
       SELECT w.*, d.document_no, d.model, d.version AS source_version, d.plan, COALESCE(s.ship_date, d.ship_date) AS ship_date,
-             d.fnsku, d.asin, d.department, d.store_name, d.confirmed_at, m.category,
+             d.fnsku, d.asin, d.department, d.store_name, d.confirmed_at, d.quantity AS initial_quantity, m.category,
              j.upgrade_no, r.relocation_no
       FROM upgrade_relocation_work_items w
       JOIN relocation_sources d ON d.allocation_document_id = w.allocation_document_id OR d.inquiry_id = w.inquiry_id OR d.fba_archive_id = w.fba_archive_id
@@ -4236,10 +4294,10 @@ export class InventoryDatabase {
     `).get(id);
     if (!row) return null;
     const statusText = {
-      awaiting_procurement: "待物流填写",
-      awaiting_operation: "待运营填写",
-      awaiting_shipping: "待发起岗位确认发货",
-      shipped: "已登记发货",
+      awaiting_procurement: "待物流更新RMA和地址",
+      awaiting_operation: "待运营填写订单号",
+      awaiting_shipping: "移仓和升级中",
+      shipped: "移仓和升级中",
       withdrawn: "发货登记已撤回",
       cancelled: "已取消",
     }[row.status] ?? row.status;
@@ -4264,9 +4322,11 @@ export class InventoryDatabase {
       shipDate: row.ship_date,
       fnsku: row.fnsku,
       department: row.department,
-      store: row.store_name,
+      store: row.account_store ?? row.store_name,
+      originalRelocationAddress: row.original_relocation_address,
       confirmedAt: row.confirmed_at,
       sourceQuantityBefore: Number(row.source_quantity_before),
+      initialQuantity: Number(row.initial_quantity),
       inquiryShipmentId: row.inquiry_shipment_id == null ? null : Number(row.inquiry_shipment_id),
       soldQuantity: Number(row.sold_quantity),
       status: row.status,
@@ -4280,12 +4340,12 @@ export class InventoryDatabase {
       removalOrderNo: row.removal_order_no ?? null,
       operationByRole: row.operation_by_role ?? null,
       operationAt: row.operation_at ?? null,
-      fbaRemainingQuantity: row.fba_remaining_quantity == null ? null : Number(row.fba_remaining_quantity),
+      fbaRemainingQuantity: this.relocationSourceQuantity(row.allocation_document_id,row.inquiry_id,null,row.fba_archive_id),
       shippedQuantity: row.shipped_quantity == null ? null : Number(row.shipped_quantity),
       carrier: row.carrier ?? null,
       trackingNo: row.tracking_no ?? null,
       externalSyncStatus: row.external_sync_status,
-      externalShipments: this.relocationExternalShipments(row.removal_order_no ?? "", row.fnsku),
+      externalShipments: this.relocationExternalShipments(row.removal_order_no ?? "", row.fnsku, row.account_store),
       externalItems: row.relocation_id == null ? [] : this.relocationExternalItems(Number(row.relocation_id)),
       shippingByRole: row.shipping_by_role ?? null,
       shippingAt: row.shipping_at ?? null,
@@ -4373,9 +4433,9 @@ export class InventoryDatabase {
       if (group && row.department !== group) continue;
       const fbaRemainingQuantity = this.relocationSourceQuantity(row.allocation_document_id, row.inquiry_id, null, row.fba_archive_id);
       if (fbaRemainingQuantity <= 0) continue;
-      const totals = row.upgrade_id == null ? { shipped: 0, completed: 0, sold: 0 } : this.db.prepare(`
+      const totals = row.upgrade_id == null ? { shipped: 0, completed: 0, sold: 0, progressing: 0 } : this.db.prepare(`
         SELECT COALESCE(SUM(shipped_quantity), 0) AS shipped,
-               COALESCE(SUM(completed_quantity), 0) AS completed, COALESCE(SUM(sold_quantity), 0) AS sold
+               COALESCE(SUM(completed_quantity), 0) AS completed, COALESCE(SUM(sold_quantity), 0) AS sold, COALESCE(SUM(in_progress_quantity), 0) AS progressing
         FROM upgrade_relocations WHERE upgrade_id = ? AND status = 'active'
       `).get(Number(row.upgrade_id));
       result.push({
@@ -4397,7 +4457,7 @@ export class InventoryDatabase {
         soldQuantity: Number(totals.sold),
         shippedQuantity: Number(totals.shipped),
         completedQuantity: Number(totals.completed),
-        inProgressQuantity: Number(totals.shipped) - Number(totals.completed),
+        inProgressQuantity: Number(totals.progressing),
         department: row.department,
         store: row.store_name,
         confirmedAt: row.confirmed_at,
@@ -4593,7 +4653,7 @@ export class InventoryDatabase {
     return sourceQuantity - Number(used.quantity);
   }
 
-  initiateRelocationUpgrade({ role, allocationId, inquiryId, fbaArchiveId, sourceRevision, requestId }) {
+  initiateRelocationUpgrade({ role, allocationId, inquiryId, fbaArchiveId, account, sourceRevision, requestId }) {
     const documentId = allocationId == null ? null : Number(allocationId);
     const inquirySourceId = inquiryId == null ? null : Number(inquiryId);
     const fbaSourceId = fbaArchiveId == null ? null : Number(fbaArchiveId);
@@ -4604,10 +4664,12 @@ export class InventoryDatabase {
       || (inquirySourceId != null && (!Number.isInteger(inquirySourceId) || inquirySourceId <= 0))) {
       throw new BusinessError(400, "invalid_allocation", "请选择一条已归档的调拨、询库或直发FBA记录");
     }
-    return this.idempotent("upgrade:relocation:initiate", requestId, { role, allocationId: documentId, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId, ...(sourceRevision == null ? {} : { sourceRevision }) }, () => {
+    return this.idempotent("upgrade:relocation:initiate", requestId, { role, allocationId: documentId, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId, ...(account == null ? {} : { account }), ...(sourceRevision == null ? {} : { sourceRevision }) }, () => {
       const document = this.relocationSource(documentId, inquirySourceId, fbaSourceId);
       if (!document || !["confirmed", "archived"].includes(document.status)) throw new BusinessError(409, "allocation_not_confirmed", "仅可选择已归档的调拨、询库或直发FBA记录");
       if (inquirySourceId != null && this.getModel(document.model).category === "墨盒") this.inquiryForUpdate(inquirySourceId, sourceRevision, ["archived"]);
+      const store = fbaSourceId == null ? document.store_name : accountStore(account);
+      if (fbaSourceId != null && !relocationAccounts().some(item => accountStore(item.account) === store)) throw new BusinessError(422, "missing_fba_account", "请为本次直发FBA移仓选择账号");
       const shipmentId = null;
       const confirmedAt = Date.parse(document.confirmed_at ?? "");
       if (document.source_kind === "allocation" && (!Number.isFinite(confirmedAt) || confirmedAt < Date.now() - 90 * 24 * 60 * 60 * 1000)) {
@@ -4619,7 +4681,7 @@ export class InventoryDatabase {
       `).get(documentId, inquirySourceId, fbaSourceId);
       if (existing) throw new BusinessError(409, "relocation_work_active", `该来源已有待处理移仓流程 ${relocationWorkNumber(existing.id)}`);
       const sourceBefore = this.relocationSourceQuantity(documentId, inquirySourceId, shipmentId, fbaSourceId);
-      if (sourceBefore <= 0) throw new BusinessError(409, "no_fba_remaining", "该归档来源没有可继续移仓的 FBA 剩余库存");
+      if (sourceBefore <= 0) throw new BusinessError(409, "no_fba_remaining", "该归档来源没有剩余可移仓量");
       const at = new Date().toISOString();
       const inserted = this.db.prepare(`
         INSERT INTO upgrade_relocation_work_items(
@@ -4629,7 +4691,7 @@ export class InventoryDatabase {
       `).run(`PENDING-${crypto.randomUUID()}`, documentId, inquirySourceId, fbaSourceId, shipmentId, sourceBefore, role, at, at);
       const workId = Number(inserted.lastInsertRowid);
       const workNo = relocationWorkNumber(workId);
-      this.db.prepare("UPDATE upgrade_relocation_work_items SET work_no = ? WHERE id = ?").run(workNo, workId);
+      this.db.prepare("UPDATE upgrade_relocation_work_items SET work_no = ?, account_store = ? WHERE id = ?").run(workNo, store, workId);
       const catalog = this.getModel(document.model);
       this.addEvent(documentId, "upgrade_relocation_started", role, at, null, {
         workId, workNo, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId, inquiryShipmentId: shipmentId, model: document.model, category: catalog?.category,
@@ -4641,39 +4703,60 @@ export class InventoryDatabase {
   }
 
 
-  recordRelocationProcurement({ id, role, rma, relocationAddress, expectedRevision, requestId }) {
+  recordRelocationProcurement(args) {
+    const {id,role,rma,relocationAddress,expectedRevision,requestId}=args;
+    return this.idempotent('upgrade:relocation:procurement:'+Number(id),requestId,{id:Number(id),role,rma:String(rma??'').trim(),relocationAddress:String(relocationAddress??'').trim(),expectedRevision},()=>this.applyRelocationProcurement(args));
+  }
+
+  applyRelocationProcurement({id,role,rma,relocationAddress,expectedRevision,requestId}) {
     const workId = Number(id);
     const fields = { rma: String(rma ?? "").trim(), relocationAddress: String(relocationAddress ?? "").trim() };
     if (role !== "logistics") throw new BusinessError(403, "upgrade_logistics_required", "仅物流角色可填写 RMA 及移仓地址");
-    if (!fields.rma) throw new BusinessError(400, "missing_rma", "请填写 RMA");
+    if (!fields.rma || /填写项|^XXX$/i.test(fields.rma)) throw new BusinessError(400, "missing_rma", "请填写 RMA");
     if (!fields.relocationAddress) throw new BusinessError(400, "missing_relocation_address", "请填写移仓地址");
-    return this.idempotent(`upgrade:relocation:procurement:${workId}`, requestId, { id: workId, role, ...fields, expectedRevision }, () => {
       const row = this.db.prepare("SELECT * FROM upgrade_relocation_work_items WHERE id = ?").get(workId);
       if (!row) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
       if (row.status !== "awaiting_procurement") throw new BusinessError(409, "invalid_relocation_step", "当前移仓流程不在物流填写步骤");
       if (!Number.isInteger(Number(expectedRevision)) || Number(row.revision) !== Number(expectedRevision)) {
         throw new BusinessError(409, "upgrade_stale_revision", "移仓流程已被其他操作更新，请刷新后重试");
       }
+      let processed;
+      try { processed = processRelocationAddress(row.account_store, fields.relocationAddress); }
+      catch(error) { throw new BusinessError(422, "relocation_address_invalid", error.message); }
       const at = new Date().toISOString();
       const changed = this.db.prepare(`
         UPDATE upgrade_relocation_work_items
-        SET rma = ?, relocation_address = ?, procurement_by_role = ?, procurement_at = ?,
+        SET original_relocation_address = ?, rma = ?, relocation_address = ?, procurement_by_role = ?, procurement_at = ?,
             status = 'awaiting_operation', revision = revision + 1, updated_at = ?
         WHERE id = ? AND revision = ? AND status = 'awaiting_procurement'
-      `).run(fields.rma, fields.relocationAddress, role, at, at, workId, Number(expectedRevision));
+      `).run(fields.relocationAddress, fields.rma, processed.address, role, at, at, workId, Number(expectedRevision));
       if (Number(changed.changes) !== 1) throw new BusinessError(409, "upgrade_concurrent_update", "移仓流程已被其他操作更新，请刷新后重试");
       const record = this.relocationWorkRecord(workId);
       this.addEvent(row.allocation_document_id, "upgrade_relocation_procurement", role, at, null, {
         inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id,
         workId, workNo: row.work_no, model: record.model, category: record.category,
         department: record.department, team: record.department, quantity: Number(row.source_quantity_before),
+        rma: fields.rma, originalAddress: fields.relocationAddress, processedAddress: processed.address, addressMapping: processed,
         onHandDelta: 0, lockedDelta: 0, requestId,
       });
       return { ok: true, workItem: record };
+
+  }
+
+  importRelocationUpdates({role,previewToken,fileName,fileHash,templateHash,rows,requestId}) {
+    if(role!=='logistics') throw new BusinessError(403,'upgrade_logistics_required','仅物流可导入更新RMA和移仓地址');
+    return this.idempotent('upgrade:relocation:import',requestId,{role,previewToken,fileName,fileHash,templateHash,rows},()=>{
+      const proof=this.consumeTransitPreviewToken({kind:'relocation_update',role,token:previewToken,fileName,fileHash,templateHash,rows});
+      if(!proof.rows.length) throw new BusinessError(422,'empty_update','没有可更新的移仓行');
+      for(const item of proof.rows) {
+        try { this.applyRelocationProcurement({id:Number(item.data.id),role,rma:item.data.rma,relocationAddress:item.data.relocationAddress,expectedRevision:Number(item.data.revision),requestId}); }
+        catch(error) { if(error instanceof BusinessError) error.message='工作表“移仓升级”第 '+item.sourceRow+' 行：'+error.message; throw error; }
+      }
+      return {ok:true,rowCount:proof.rows.length};
     });
   }
 
-  recordRelocationOperation({ id, role, removalOrderNo, expectedRevision, requestId }) {
+  recordRelocationOperation({ id, role, removalOrderNo, expectedRevision, requestId, onSaved }) {
     const workId = Number(id);
     const orderNo = String(removalOrderNo ?? "").trim();
     if (!orderNo) throw new BusinessError(400, "missing_removal_order_no", "请填写移除订单号");
@@ -4701,60 +4784,33 @@ export class InventoryDatabase {
         department: record.department, team: record.department, quantity: Number(row.source_quantity_before),
         onHandDelta: 0, lockedDelta: 0, requestId,
       });
-      return { ok: true, workItem: record };
+      return { ok: true, workItem: record, ...(onSaved ? {automaticSync:onSaved(record)} : {}) };
     });
   }
 
-  shipRelocationUpgrade({ id, role, fbaRemainingQuantity, externalItems, expectedRevision, requestId }) {
-    const workId = Number(id);
-    const fbaRemaining = Number(fbaRemainingQuantity);
-    let shipped;
-    let logistics;
-    if (externalItems != null && !Array.isArray(externalItems)) throw new BusinessError(400, "invalid_external_items", "请选择要用于本次移仓的领星包裹");
-    const selected = (externalItems ?? []).map((item) => ({ lineId: Number(item?.lineId), quantity: Number(item?.quantity) }));
-    if (selected.some((item) => !Number.isInteger(item.lineId) || item.lineId <= 0 || !Number.isInteger(item.quantity) || item.quantity <= 0)) throw new BusinessError(400, "invalid_external_items", "请选择有效的领星包裹，本次使用数量请填写大于 0 的整数");
-    if (new Set(selected.map((item) => item.lineId)).size !== selected.length) throw new BusinessError(400, "duplicate_external_item", "同一次登记不能重复选择同一个包裹商品行");
-    if (!selected.length) throw new BusinessError(400, "missing_external_items", "请先同步领星物流并选择本次移仓包裹");
-    if (!Number.isInteger(fbaRemaining) || fbaRemaining < 0) throw new BusinessError(400, "invalid_fba_remaining", "FBA 剩余库存请填写 0 或正整数");
-    return this.idempotent(`upgrade:relocation:ship:${workId}`, requestId, {
-      id: workId, role, fbaRemainingQuantity: fbaRemaining, expectedRevision,
-      externalItems: selected,
-    }, () => {
-      const work = this.db.prepare("SELECT * FROM upgrade_relocation_work_items WHERE id = ?").get(workId);
-      if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
-      this.requireUpgradeRole(role);
-      if (work.initiated_by_role !== role) throw new BusinessError(403, "relocation_initiator_required", "只有发起本次移仓的岗位可以选择包裹、填写 FBA 剩余并确认移仓发货");
-      if (work.status !== "awaiting_shipping") throw new BusinessError(409, "invalid_relocation_step", "物流和运营步骤完成后才能登记移仓发货");
-      if (!Number.isInteger(Number(expectedRevision)) || Number(work.revision) !== Number(expectedRevision)) {
-        throw new BusinessError(409, "upgrade_stale_revision", "移仓流程已被其他操作更新，请刷新后重试");
-      }
-      const document = this.relocationSource(work.allocation_document_id, work.inquiry_id, work.fba_archive_id);
-      if (!document || !["confirmed", "archived"].includes(document.status)) throw new BusinessError(409, "allocation_not_confirmed", "原来源单据已不在完成归档状态，不能登记发货");
-      const adopted = [];
-      {
-        const availableLines = new Map(this.relocationExternalShipments(work.removal_order_no, document.fnsku).map((line) => [line.lineId, line]));
-        for (const item of selected) {
-          const line = availableLines.get(item.lineId);
-          if (!line) throw new BusinessError(409, "external_shipment_source_mismatch", "所选领星包裹不属于当前移除订单和FNSKU");
-          if (item.quantity > line.availableQuantity) throw new BusinessError(409, "external_shipment_quantity_exceeded", `领星包裹 ${line.trackingNo || line.externalId} 仅剩 ${line.availableQuantity} 件可采纳，不能重复登记`);
-          if (!line.carrier || !line.trackingNo) throw new BusinessError(409, "external_shipment_logistics_missing", "所选领星包裹尚缺承运商或运单号，请更新物流后再采纳");
-          adopted.push({ lineId: item.lineId, quantity: item.quantity, snapshot: line });
-        }
-        shipped = adopted.reduce((sum, item) => sum + item.quantity, 0);
-        logistics = {
-          carrier: [...new Set(adopted.map((item) => item.snapshot.carrier))].join("、"),
-          trackingNo: [...new Set(adopted.map((item) => item.snapshot.trackingNo))].join("、"),
-        };
-      }
+  adoptRelocationShipments(work, document, adopted, role, requestId) {
+    const workId=Number(work.id), shipped=adopted.reduce((sum,item)=>sum+item.quantity,0);
+    if(!shipped) return;
+    const selected=adopted.map(item=>({lineId:item.lineId,quantity:item.quantity}));
+    const logistics={carrier:[...new Set(adopted.map(item=>item.snapshot.carrier))].join('、'),trackingNo:[...new Set(adopted.map(item=>item.snapshot.trackingNo))].join('、')};
       const externalSyncStatus = "synced";
       const sourceBefore = this.relocationSourceQuantity(work.allocation_document_id, work.inquiry_id, work.inquiry_shipment_id, work.fba_archive_id);
-      if (sourceBefore !== Number(work.source_quantity_before)) {
-        throw new BusinessError(409, "relocation_source_changed", `FBA 剩余已从 ${work.source_quantity_before} 变为 ${sourceBefore}，请重新发起本次移仓`);
-      }
-      if (fbaRemaining + shipped > sourceBefore) throw new BusinessError(422, "relocation_quantity_mismatch", "FBA剩余加本次移仓量不能超过该归档来源的剩余量");
-      // 兼容历史字段名；差额表示FBA其他减少，不据此推断销售量。
-      const sold = sourceBefore - fbaRemaining - shipped;
+      if (shipped > sourceBefore) throw new BusinessError(422, "relocation_quantity_mismatch", "新增包裹数量超过来源剩余可移仓量（"+sourceBefore+"）");
+      const fbaRemaining = sourceBefore - shipped, sold = 0;
       const at = new Date().toISOString();
+      if(work.relocation_id) {
+        const current=this.db.prepare("SELECT * FROM upgrade_relocations WHERE id=? AND status='active'").get(work.relocation_id);
+        if(!current) throw new BusinessError(409,'relocation_withdrawn','原移仓发货已撤回，不能重新采纳历史包裹');
+        const allItems=[...this.relocationExternalItems(current.id),...adopted];
+        const carrier=[...new Set(allItems.map(item=>item.snapshot.carrier))].join('、'), tracking=[...new Set(allItems.map(item=>item.snapshot.trackingNo))].join('、');
+        this.db.prepare('UPDATE upgrade_relocations SET shipped_quantity=shipped_quantity+?,fba_remaining_quantity=fba_remaining_quantity-?,carrier=?,tracking_no=?,revision=revision+1,updated_at=? WHERE id=?').run(shipped,shipped,carrier,tracking,at,current.id);
+        for(const item of adopted) this.db.prepare('INSERT INTO upgrade_relocation_external_items(relocation_id,line_id,quantity,snapshot_json,created_at) VALUES(?,?,?,?,?)').run(current.id,item.lineId,item.quantity,JSON.stringify(item.snapshot),at);
+        this.db.prepare('UPDATE upgrade_relocation_work_items SET shipped_quantity=shipped_quantity+?,fba_remaining_quantity=?,carrier=?,tracking_no=?,revision=revision+1,updated_at=? WHERE id=?').run(shipped,fbaRemaining,carrier,tracking,at,workId);
+        const eventId=this.addEvent(work.allocation_document_id,'upgrade_relocation_created',role,at,null,{workId,workNo:work.work_no,upgradeId:current.upgrade_id,relocationId:current.id,inquiryId:work.inquiry_id,fbaArchiveId:work.fba_archive_id,model:document.model,category:this.getModel(document.model).category,department:document.department,team:document.department,quantity:shipped,shippedQuantity:shipped,onHandDelta:0,lockedDelta:0,externalItems:adopted,requestId});
+        this.addUpgradeOperation({upgradeId:current.upgrade_id,relocationId:current.id,type:'relocation_shipment',quantity:shipped,eventId,requestId,role,at,metadata:{workId,externalItems:adopted}});
+        this.refreshUpgradeJobState(current.upgrade_id,at);
+        return;
+      }
       let job = this.db.prepare("SELECT * FROM upgrade_jobs WHERE (allocation_document_id = ? OR inquiry_id = ? OR fba_archive_id = ?) AND kind = 'relocation'")
         .get(work.allocation_document_id, work.inquiry_id, work.fba_archive_id);
       let upgradeId;
@@ -4818,7 +4874,7 @@ export class InventoryDatabase {
         WHERE id = ? AND revision = ? AND status = 'awaiting_shipping'
       `).run(
         upgradeId, relocationId, fbaRemaining, shipped, sold, logistics.carrier, logistics.trackingNo, externalSyncStatus,
-        role, at, at, workId, Number(expectedRevision),
+        role, at, at, workId, Number(work.revision),
       );
       if (Number(changed.changes) !== 1) throw new BusinessError(409, "upgrade_concurrent_update", "移仓流程已被其他操作更新，请刷新后重试");
       if (work.allocation_document_id != null) this.db.prepare(`
@@ -4828,20 +4884,26 @@ export class InventoryDatabase {
         DO UPDATE SET status = 'active', created_at = excluded.created_at
       `).run(work.allocation_document_id, no, at);
       return { ok: true, workItem: this.relocationWorkRecord(workId), upgrade: this.upgradeRecord(upgradeId) };
+
+  }
+
+
+  relocationReceiptBatches(id) {
+    return this.db.prepare("SELECT l.*,b.version,b.warehouse,b.relocation_receipt_key FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key WHERE l.source_type='relocation' AND l.source_id=? AND l.entry_type='relocation_receipt' ORDER BY l.id").all(id).map(row => {
+      const reversed=Number(this.db.prepare("SELECT COALESCE(SUM(on_hand_delta),0) quantity FROM upgrade_inventory_ledger WHERE related_ledger_id=? AND entry_type='relocation_completion_reverse'").get(row.id).quantity);
+      const quantity=Number(row.on_hand_delta)+reversed, balance=this.getBalance(row.batch_key);
+      const issue=!row.relocation_receipt_key ? '历史入库批次可能与其他入库合并，无法可靠归属占用，须先核对' : balance.locked>0 || balance.onHand!==quantity ? '该次入库当前仍有锁定或下游占用' : '';
+      return {ledgerId:Number(row.id),batchKey:row.batch_key,version:row.version,warehouse:row.warehouse,quantity,originalQuantity:Number(row.on_hand_delta),locked:balance.locked,onHand:balance.onHand,issue};
     });
   }
 
-  completeRelocationUpgrade({ id, role, completedQuantity, newVersion, targetWarehouse, expectedRevision, requestId }) {
-    const relocationId = Number(id);
-    const quantity = Number(completedQuantity);
-    const targetVersion = String(newVersion ?? "").trim();
-    if (!OVERSEAS_WAREHOUSES.includes(targetWarehouse)) throw new BusinessError(422, "invalid_target_warehouse", "请选择本次完成入库的目标海外仓");
+  completeRelocationUpgrade({ id, role, completedQuantity, inProgressQuantity, newVersion, targetWarehouse, reversals = [], expectedRevision, requestId }) {
+    const relocationId=Number(id), quantity=Number(completedQuantity), progressing=Number(inProgressQuantity);
+    const targetVersion=String(newVersion??'').trim();
     this.requirePurchasingUpgradeRole(role);
-    if (!Number.isInteger(quantity) || quantity <= 0) throw new BusinessError(400, "invalid_quantity", "升级完成数量请填写大于 0 的整数");
-    if (!targetVersion) throw new BusinessError(400, "missing_new_version", "请填写升级完成版本号");
-    return this.idempotent(`upgrade:relocation:complete:${relocationId}`, requestId, {
-      id: relocationId, role, completedQuantity: quantity, newVersion: targetVersion, targetWarehouse, expectedRevision,
-    }, () => {
+    if (completedQuantity==null || String(completedQuantity).trim()==='' || inProgressQuantity==null || String(inProgressQuantity).trim()==='' || !Number.isInteger(quantity) || quantity<0 || !Number.isInteger(progressing) || progressing<0) throw new BusinessError(422,'invalid_quantity','升级中数量与累计升级完数量须为非负整数');
+    if (!Array.isArray(reversals)) throw new BusinessError(422,'invalid_reversals','请选择本次扣回的入库批次与数量');
+    return this.idempotent('upgrade:relocation:complete:'+relocationId,requestId,{id:relocationId,role,completedQuantity:quantity,inProgressQuantity:progressing,newVersion:targetVersion,targetWarehouse,reversals,expectedRevision},()=>{
       const row = this.db.prepare(`
         SELECT r.*, j.upgrade_no, j.model, j.source_version, j.new_version AS job_new_version,
                j.status AS job_status, d.batch_key, d.plan, COALESCE(s.ship_date, d.ship_date) AS ship_date, d.fnsku, d.department,
@@ -4857,47 +4919,37 @@ export class InventoryDatabase {
       if (row.status !== "active") throw new BusinessError(409, "relocation_withdrawn", "该移仓发货登记已撤回");
       if (!Number.isInteger(Number(expectedRevision))) throw new BusinessError(400, "missing_revision", "当前记录信息不完整，请重新加载后操作");
       if (Number(row.revision) !== Number(expectedRevision)) throw new BusinessError(409, "upgrade_stale_revision", "移仓记录已被其他操作更新，请刷新后重试");
-      const remaining = Number(row.shipped_quantity) - Number(row.completed_quantity);
-      if (quantity > remaining) throw new BusinessError(409, "upgrade_quantity_exceeded", `升级完成数量超出本单升级中数量（当前 ${remaining}）`);
-      if (targetVersion === row.source_version) throw new BusinessError(422, "unchanged_upgrade_version", "升级完成版本号必须与原版本不同");
-      const sourceIdentity = {
-        model: row.model, plan: row.plan, ship_date: row.ship_date, version: row.source_version, fnsku: row.fnsku,
-        pack_per_box: row.source_pack_per_box,
-        source_team: row.batch_key ? this.db.prepare("SELECT source_team FROM stock_batches WHERE batch_key=?").get(row.batch_key).source_team : row.department,
-      };
-      const at = new Date().toISOString();
-      const target = this.ensureStockBatch(sourceIdentity, targetVersion, at, targetWarehouse);
-      const catalog = this.getModel(row.model);
-      const eventId = this.addEvent(row.allocation_document_id, "upgrade_relocation_complete", role, at, null, {
-        inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id,
-        upgradeId: Number(row.upgrade_id), upgradeNo: row.upgrade_no, relocationId,
-        model: row.model, category: catalog?.category, department: row.department, team: row.department,
-        sourceVersion: row.source_version, newVersion: targetVersion, targetWarehouse, quantity,
-        onHandDelta: quantity, lockedDelta: 0, externalSyncStatus: "not_synced", requestId,
-      });
-      const operationId = this.addUpgradeOperation({
-        upgradeId: Number(row.upgrade_id), relocationId, type: "relocation_complete",
-        quantity, newVersion: targetVersion, eventId, requestId, role, at,
-        metadata: { targetWarehouse, allocationId: row.allocation_document_id, inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id, sourceBatchKey: row.batch_key },
-      });
-      this.addUpgradeLedger(
-        Number(row.upgrade_id), "relocation", relocationId, target.batch_key, "relocation_receipt",
-        quantity, 0, role, at, requestId,
-        { allocationId: row.allocation_document_id, inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id, sourceBatchKey: row.batch_key, sourceVersion: row.source_version }, operationId,
-      );
-      const changed = this.db.prepare(`
-        UPDATE upgrade_relocations
-        SET completed_quantity = completed_quantity + ?, new_version = ?,
-            revision = revision + 1, updated_at = ?
-        WHERE id = ? AND revision = ? AND completed_quantity + ? <= shipped_quantity
-      `).run(quantity, targetVersion, at, relocationId, Number(expectedRevision), quantity);
-      if (Number(changed.changes) !== 1) throw new BusinessError(409, "upgrade_concurrent_update", "移仓记录已被其他操作更新，请刷新后重试");
-      this.db.prepare("UPDATE upgrade_jobs SET new_version = ? WHERE id = ?").run(targetVersion, Number(row.upgrade_id));
-      this.refreshUpgradeJobState(Number(row.upgrade_id), at);
-      return { ok: true, upgrade: this.upgradeRecord(Number(row.upgrade_id)) };
+
+      if (quantity+progressing>Number(row.shipped_quantity)) throw new BusinessError(422,'upgrade_quantity_exceeded','升级中数量＋升级完数量不能超过移仓-已发货数量（'+row.shipped_quantity+'）');
+      const delta=quantity-Number(row.completed_quantity);
+      if (delta>0 && !OVERSEAS_WAREHOUSES.includes(targetWarehouse)) throw new BusinessError(422,'invalid_target_warehouse','请选择本次新增入库的实际海外仓');
+      if (delta>0 && (!targetVersion || targetVersion===row.source_version)) throw new BusinessError(422,'invalid_upgrade_version','请填写不同于原版本的升级完版本号');
+      const receipts=new Map(this.relocationReceiptBatches(relocationId).map(item=>[item.ledgerId,item]));
+      if (delta<0) {
+        if (new Set(reversals.map(item=>Number(item.ledgerId))).size!==reversals.length || reversals.some(item=>!Number.isInteger(item.quantity)||item.quantity<=0) || reversals.reduce((sum,item)=>sum+item.quantity,0)!==-delta) throw new BusinessError(422,'reversal_quantity_mismatch','指定批次的扣回数量合计必须等于减少量 '+(-delta));
+        for(const item of reversals) {
+          const receipt=receipts.get(Number(item.ledgerId));
+          if (!receipt || item.quantity>receipt.quantity) throw new BusinessError(422,'invalid_receipt_reversal','指定入库批次不属于本次移仓或扣回数量超过其有效入库量');
+          if (receipt.issue) throw new BusinessError(409,'receipt_occupied',receipt.batchKey+'：'+receipt.issue,{receipt});
+        }
+      } else if (reversals.length) throw new BusinessError(422,'unexpected_reversals','累计完成量未减少，不应指定扣回批次');
+      const at=new Date().toISOString(),catalog=this.getModel(row.model);
+      const eventId=this.addEvent(row.allocation_document_id,'upgrade_relocation_complete',role,at,null,{inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,upgradeId:Number(row.upgrade_id),upgradeNo:row.upgrade_no,relocationId,model:row.model,category:catalog.category,department:row.department,team:row.department,before:{completedQuantity:Number(row.completed_quantity),inProgressQuantity:Number(row.in_progress_quantity)},after:{completedQuantity:quantity,inProgressQuantity:progressing},newVersion:targetVersion,targetWarehouse,quantity:Math.abs(delta),onHandDelta:delta,lockedDelta:0,reversals,requestId});
+      const operationId=delta===0 ? null : this.addUpgradeOperation({upgradeId:Number(row.upgrade_id),relocationId,type:'relocation_complete',quantity:Math.abs(delta),newVersion:delta>0?targetVersion:row.new_version,eventId,requestId,role,at,metadata:{targetWarehouse,delta,reversals}});
+      if (delta>0) {
+        const receiptKey='relocation:'+relocationId+':'+operationId;
+        const key='UPGRADE-RECEIPT:'+operationId;
+        const team=row.batch_key ? this.db.prepare('SELECT source_team FROM stock_batches WHERE batch_key=?').get(row.batch_key).source_team : row.department;
+        this.db.prepare("INSERT INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,revision,is_legacy_placeholder,warehouse,pack_per_box,source_team,relocation_receipt_key,shipping_method) VALUES(?,?,?,?,?,?,0,?,1,0,?,?,?,?,?)").run(key,row.model,row.plan,row.ship_date,targetVersion,row.fnsku,at,targetWarehouse,row.source_pack_per_box,team,receiptKey,'Aster海外仓-升级后库存');
+        this.addUpgradeLedger(Number(row.upgrade_id),'relocation',relocationId,key,'relocation_receipt',delta,0,role,at,requestId,{allocationId:row.allocation_document_id,inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,sourceBatchKey:row.batch_key,sourceVersion:row.source_version},operationId);
+      } else if (delta<0) {
+        for(const item of reversals) this.addUpgradeLedger(Number(row.upgrade_id),'relocation',relocationId,receipts.get(Number(item.ledgerId)).batchKey,'relocation_completion_reverse',-item.quantity,0,role,at,requestId,{cumulativeBefore:Number(row.completed_quantity),cumulativeAfter:quantity},operationId,Number(item.ledgerId),requestId);
+      }
+      this.db.prepare('UPDATE upgrade_relocations SET completed_quantity=?,in_progress_quantity=?,new_version=CASE WHEN ?<>\'\' THEN ? ELSE new_version END,revision=revision+1,updated_at=? WHERE id=?').run(quantity,progressing,targetVersion,targetVersion,at,relocationId);
+      this.refreshUpgradeJobState(Number(row.upgrade_id),at);
+      return {ok:true,quantityDelta:delta,upgrade:this.upgradeRecord(Number(row.upgrade_id))};
     });
   }
-
 
 
   getBalance(batch) {
@@ -5473,7 +5525,7 @@ export class InventoryDatabase {
 
   createTransitPreviewToken({ kind, role, fileName, fileHash, templateHash, payload, ttlMs = 15 * 60 * 1000 }) {
     if (!TRANSIT_ROLE_SET.has(role)) throw new BusinessError(403, kind === "status" ? "transit_status_forbidden" : "transit_import_forbidden", kind === "status" ? "当前角色无权更新物流状态" : "当前角色无权导入在途库存");
-    if (!(kind === "import" || kind === "status" || kind === "transfer_upgrade")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
+    if (!(kind === "import" || kind === "status" || kind === "transfer_upgrade" || kind === "relocation_update")) throw new BusinessError(400, "invalid_preview_kind", "文件预览类型不正确，请重新上传文件");
     if (kind === "import") this.requireTransitImportTeams(role, payload.rows);
     return this.transaction(() => {
       const token = crypto.randomBytes(32).toString("base64url");
@@ -5518,6 +5570,7 @@ export class InventoryDatabase {
     }
     const normalizeRow = (item) => {
       const data = item?.data ?? item ?? {};
+      if (kind === "relocation_update") return {sourceRow:Number(item.sourceRow),data:Object.fromEntries(['id','revision','workNo','rma','relocationAddress'].map(key=>[key,String(data[key]??'')]))};
       if (kind === "transfer_upgrade") return { sourceRow: Number(item?.sourceRow ?? 0), data: Object.fromEntries(TRANSFER_UPGRADE_FIELDS.map(([key]) => [key, String(data[key] ?? "")])) };
       if (kind === "import") {
         return {
@@ -5549,7 +5602,7 @@ export class InventoryDatabase {
       const expected = normalizeRow(expectedRows[index]);
       const actual = actualRows[index];
       if (actual.sourceRow !== expected.sourceRow) throw new BusinessError(409, "preview_rows_mismatch", "提交源文件行与预览结果不一致，请重新预览");
-      const keys = kind === "transfer_upgrade" ? TRANSFER_UPGRADE_FIELDS.map(([key]) => key) : kind === "import"
+      const keys = kind === "relocation_update" ? ['id','revision','workNo','rma','relocationAddress'] : kind === "transfer_upgrade" ? TRANSFER_UPGRADE_FIELDS.map(([key]) => key) : kind === "import"
         ? ["model", "quantity", "fnsku", "shippingMethod", "plan", "date", "rawDate", "team", "version", "packPerBox"]
         : ["plan", "status"];
       if (keys.some((key) => actual.data[key] !== expected.data[key])) {

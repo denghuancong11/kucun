@@ -86,9 +86,12 @@ export class LingxingHost {
     }
     const target = await this.authorize(role, request, true);
     if (this.db.prepare('SELECT id FROM lingxing_sync_jobs WHERE request_id=?').get(requestId)) return this.submit(role,requestId,request,requestedFrom);
+    return this.enqueue(role,requestId,request,target,requestedFrom);
+  }
+  enqueue(role,requestId,request,target,requestedFrom) {
     const available = this.status().connected;
     const id = this.db.prepare(`INSERT INTO lingxing_sync_jobs(request_id,role,request_json,requested_from,target_json,state,message,created_at,finished_at)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,json,requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待部署电脑按顺序执行':disconnected,now(),available?null:now()).lastInsertRowid;
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,JSON.stringify(request),requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待部署电脑按顺序执行':disconnected,now(),available?null:now()).lastInsertRowid;
     return { ok: true, job: this.publicJob(this.raw(id)) };
   }
   async list(role, action, workId, requestId, latest = false) {

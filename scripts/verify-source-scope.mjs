@@ -28,7 +28,7 @@ async function receive(model,category,team,quantity,plan='SAME'){
  if(category==='墨盒'){assert.ok(!('before'in result)&&!('after'in result));assert.equal(result.inventory.inStock,quantity);assert.equal(replay.inventory.inStock,quantity);}
  return {key:result.batchKey,shelf:result,transitId:row.id,body,role};
 }
-const entry=(model,key,team,q)=>({model,sourceBatchKey:key,plan:'SAME',date:'2026-09-24',version:'V1',quantity:q,department:team,store:'REGRESSIONUS',operator:team+'运营',fnsku:'XSAME',asin:team==='一团'?'BFIXONE':'BFIXTWO',requestId:rid()});
+const entry=(model,key,team,q)=>({model,sourceBatchKey:key,plan:'SAME',date:'2026-09-24',version:'V1',quantity:q,department:team,store:'AUS',operator:team+'运营',fnsku:'XSAME',asin:team==='一团'?'BFIXONE':'BFIXTWO',requestId:rid()});
 try{
  await waitForOwnedServer({base,child,instanceId});
  const roles=['admin','business','purchasing','operation-1','operation-2','assistant-1','assistant-2'];
@@ -86,22 +86,21 @@ try{
   for(const [index,document] of [d1,d2].entries()) {
    const suffix=String(index+1),assistant='assistant-'+suffix,operation='operation-'+suffix;
    let work=(await api('/api/upgrades/relocation-work-items',assistant,{allocationId:document.id,requestId:rid()})).workItem;
-   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'RMA'+work.id,relocationAddress:'回库验证仓',expectedRevision:work.revision,requestId:rid()})).workItem;
+   work=(await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`,"logistics",{rma:'RMA'+work.id,relocationAddress:'Mirella RW (RMA#: R616738)\n12000 Magnolia Ave, Suite#101\nRiverside, CA 92503 US\nTEL:562-404-9315',expectedRevision:work.revision,requestId:rid()})).workItem;
    work=(await api(`/api/upgrades/relocation-work-items/${work.id}/operation`,operation,{removalOrderNo:'ORDER'+work.id,expectedRevision:work.revision,requestId:rid()})).workItem;
-   work=db.syncRelocationLogistics({id:work.id,role:assistant,shipments:[{externalId:'PACK'+work.id,storeId:'FIX',orderNo:'ORDER'+work.id,fnsku:'XSAME',quantity:4,carrier:'UPS',trackingNo:'TRACK'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
-   const shipped=await api(`/api/upgrades/relocation-work-items/${work.id}/ship`,assistant,{fbaRemainingQuantity:0,externalItems:[{lineId:work.externalShipments[0].lineId,quantity:4}],expectedRevision:work.revision,requestId:rid()});
-   let relocation=shipped.upgrade.relocations[0];
-   for(const quantity of [2,2]) {
-    const body={completedQuantity:quantity,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',expectedRevision:relocation.revision,requestId:rid()};
+   work=db.syncRelocationLogistics({id:work.id,role:assistant,shipments:[{externalId:'PACK'+work.id,storeId:'FIX',storeName:'A-US 美国',orderNo:'ORDER'+work.id,fnsku:'XSAME',quantity:4,carrier:'UPS',trackingNo:'TRACK'+work.id,shipDate:'2026-09-24'}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
+   let relocation=db.getUpgrade(work.upgradeId).relocations[0];
+   for(const quantity of [2,4]) {
+    const body={completedQuantity:quantity,inProgressQuantity:4-quantity,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',expectedRevision:relocation.revision,requestId:rid()};
     const completed=await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body);
     const before=snapshot();assert.equal((await api(`/api/upgrades/relocations/${relocation.id}/complete`,'purchasing',body)).deduped,true);assert.equal(snapshot(),before);
     relocation=completed.upgrade.relocations[0];
    }
    const target=db.db.prepare("SELECT * FROM stock_batches WHERE model=? AND version='V2' AND source_team=?").get(model,index?'二团':'一团');
-   assert.equal(db.getBalance(target.batch_key).onHand,index?34:24);assert.equal(target.pack_per_box,'4');assert.equal(relocation.completedQuantity,4);
+   assert.equal(db.getBalance(target.batch_key).onHand,index?30:20);const receipts=relocation.receiptBatches;assert.equal(receipts.length,2);assert.equal(receipts.reduce((sum,row)=>sum+db.getBalance(row.batchKey).onHand,0),4);assert(receipts.every(row=>db.db.prepare('SELECT source_team,shipping_method FROM stock_batches WHERE batch_key=?').get(row.batchKey).source_team===(index?'二团':'一团')));assert(receipts.every(row=>db.db.prepare('SELECT shipping_method FROM stock_batches WHERE batch_key=?').get(row.batchKey).shipping_method==='Aster海外仓-升级后库存'));assert.equal(target.pack_per_box,'4');assert.equal(relocation.completedQuantity,4);
   }
-  assert.equal(db.db.prepare("SELECT COUNT(*) n FROM stock_batches WHERE model=? AND version='V2'").get(model).n,2);
-  check(`${category} 两团移仓分次2/2回库沿原来源分别合入本团升级目标，重放不重复入账`);
+  assert.equal(db.db.prepare("SELECT COUNT(*) n FROM stock_batches WHERE model=? AND version='V2'").get(model).n,6);
+  check(`${category} 两团移仓累计2/4分别新增独立2/2批次，保留本团归属且普通批次不变，重放不重复入账`);
   evidence.push({category,model,one,two,started,targets});
  }
  // An admin/purchasing initiator does not become the source owner.

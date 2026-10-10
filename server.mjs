@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
 import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
+import { relocationAccounts, accountStore, processRelocationAddress } from './relocation-address.mjs';
 import { LingxingHost } from './lingxing-host.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -570,6 +571,89 @@ function inquiryExportWorkbook(records) {
   return Buffer.concat([...locals, central, end]);
 }
 
+const RELOCATION_UPDATE_HEADERS=['移仓单号','型号','来源','发货计划号','发货时间','版本号','已贴FNSKU','初始调拨数量','来源剩余可移仓量','调拨店铺','状况','RMA','移仓地址','订单号','承运商','运单号','移仓-已发货数量','升级中数量','升级完数量','升级完，版本号'];
+function relocationUpdateValues(w) {
+  return [w.workNo,w.model,{allocation:'调拨',inquiry:'询库',fba:'直发FBA'}[w.sourceKind],w.plan,w.shipDate,w.sourceVersion,w.fnsku,w.initialQuantity,w.fbaRemainingQuantity,w.store,w.statusText,w.rma??'',w.originalRelocationAddress??'',w.removalOrderNo??'',w.carrier??'',w.trackingNo??'',w.shippedQuantity??0,0,0,''];
+}
+async function handleRelocationTemplate(request,response,pathname,role) {
+  if(role!=='logistics') throw new BusinessError(403,'upgrade_logistics_required','仅物流可下载及导入RMA、移仓地址更新模板');
+  if(pathname.endsWith('/template') && request.method==='GET') {
+    const permissions=await loadPermissions();
+    const records=inventory.getRelocationWorkItems().filter(row=>row.status==='awaiting_procurement' && ['summary','detail','expand','actions'].every(key=>(permissions[row.category]?.[role]??openPermissions)[key]));
+    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-更新模板.xlsx')});
+    response.end(relocationUpdateWorkbook(records));return;
+  }
+  if(pathname.endsWith('/preview') && request.method==='POST') {
+    const body=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'upload.xlsx');
+    if(path.extname(fileName).toLowerCase()!=='.xlsx') throw new BusinessError(422,'xlsx_required','请上传移仓升级更新模板 XLSX');
+    const table=readTableRows(body,fileName,{sheetName:'移仓升级',headerGroups:RELOCATION_UPDATE_HEADERS.map(label=>[label])});
+    if(RELOCATION_UPDATE_HEADERS.some((label,i)=>String(table.rows[1]?.[i]??'').trim()!==label)) throw new BusinessError(422,'relocation_headers','工作表“移仓升级”第2行表头不匹配，请下载带移仓单号的更新模板');
+    const errors=[],rows=[],seen=new Set();
+    for(let index=2;index<table.rows.length;index++) {
+      const values=table.rows[index],sourceRow=index+1;
+      if(!values.some(value=>String(value??'').trim()))continue;
+      const workNo=String(values[0]??'').trim();
+      try {
+        if(seen.has(workNo)) throw new Error('同一移仓单号重复，请每单仅保留一行');seen.add(workNo);
+        const raw=inventory.db.prepare('SELECT id FROM upgrade_relocation_work_items WHERE work_no=?').get(workNo);
+        if(!raw)throw new Error('移仓单号不存在，不能新增移仓单');
+        const work=inventory.getRelocationWorkItem(raw.id);await requireRelocationSourceVisibility(work,role);
+        if(work.status!=='awaiting_procurement')throw new Error('已进入后续环节或已取消，不能用旧模板覆盖');
+        const expected=relocationUpdateValues(work);
+        for(let col=0;col<expected.length;col++) if(![11,12].includes(col) && String(values[col]??'')!==String(expected[col]??'')) throw new Error('只读字段“'+RELOCATION_UPDATE_HEADERS[col]+'”已修改或过期，请重新下载模板');
+        const rma=String(values[11]??'').trim(),address=String(values[12]??'').trim();
+        if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('RMA 不能为空或模板说明');
+        const processed=processRelocationAddress(work.store,address);
+        rows.push({sourceRow,data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address});
+      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message}); }
+    }
+    if(!rows.length && !errors.length)errors.push({sourceRow:3,message:'工作表“移仓升级”第3行起没有待更新记录'});
+    const fileSha256=hashBuffer(body),templateSha256=hashTemplate(RELOCATION_UPDATE_HEADERS);
+    const proof=errors.length?null:inventory.createTransitPreviewToken({kind:'relocation_update',role,fileName,fileHash:fileSha256,templateHash:templateSha256,payload:{rows}});
+    sendJson(response,200,{ok:true,fileName,fileSha256,templateSha256,rows,errors,previewToken:proof?.token});return;
+  }
+  if(pathname.endsWith('/import') && request.method==='POST') {
+    const payload=await parseJsonRequest(request);
+    for(const row of payload.rows??[]) await requireRelocationSourceVisibility(inventory.getRelocationWorkItem(Number(row.data.id)),role);
+    sendJson(response,200,inventory.importRelocationUpdates({...payload,role}));return;
+  }
+  throw new BusinessError(404,'route_not_found','找不到模板操作');
+}
+
+function relocationUpdateWorkbook(records) {
+  const rows = [["仅填写 RMA 和原始移仓地址；移仓单号及其他字段只读。"], RELOCATION_UPDATE_HEADERS, ...records.map(relocationUpdateValues)];
+  const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
+  const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
+    const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 1 ? ' s="1"' : r > 1 && [11,12].includes(c) ? ' s="2"' : '';
+    return value == null || value === "" ? '<c r="' + ref + '"' + style + '/>' : typeof value === "number"
+      ? '<c r="' + ref + '"><v>' + value + '</v></c>'
+      : '<c r="' + ref + '" t="inlineStr"' + style + '><is><t xml:space="preserve">' + xml(value) + '</t></is></c>';
+  }).join('') + '</row>').join('');
+  const widths = RELOCATION_UPDATE_HEADERS.map((_,i)=>i===12?55:22);
+  const entries = [
+    ["[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ["_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ["xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="移仓升级" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ["xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ["xl/styles.xml", '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="0" fillId="0" borderId="0" xfId="0" applyProtection="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/><protection locked="0"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
+    ["xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:T' + rows.length + '"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="2" topLeftCell="A3" state="frozen"/></sheetView></sheetViews><cols>' + widths.map((width, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + width + '" customWidth="1"/>').join('') + '</cols><sheetData>' + sheetRows + '</sheetData><sheetProtection sheet="1" objects="1" scenarios="1" selectLockedCells="0" selectUnlockedCells="0"/></worksheet>'],
+  ];
+  const locals = [], directory = []; let offset = 0;
+  for (const [file, text] of entries) {
+    const name = Buffer.from(file), source = Buffer.from(text), compressed = zlib.deflateRawSync(source), crc = crc32(source);
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8); local.writeUInt16LE(0x21, 12);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(source.length, 22); local.writeUInt16LE(name.length, 26); name.copy(local, 30);
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10); central.writeUInt16LE(0x21, 14);
+    central.writeUInt32LE(crc, 16); central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(source.length, 24); central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42); name.copy(central, 46);
+    locals.push(local, compressed); directory.push(central); offset += local.length + compressed.length;
+  }
+  const central = Buffer.concat(directory), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, central, end]);
+}
+
 async function handleApprovalsApi(request, response, pathname) {
   const role = requireRole(request);
   if (pathname === "/api/approvals/inquiries/clear" && request.method === "POST") {
@@ -691,6 +775,7 @@ async function handleUpgradesApi(request, response, pathname) {
   const role = requireRole(request);
   const visibleGroup = operationGroups[role] ?? null;
   const scopeDirectByTeam = Boolean(operationGroups[role]);
+  if(pathname.startsWith('/api/upgrades/relocation-update/')) return handleRelocationTemplate(request,response,pathname,role);
 
   if (pathname === "/api/upgrades" && request.method === "GET") {
     const dashboard = inventory.getUpgradeDashboard({ visibleGroup, scopeDirectByTeam });
@@ -701,6 +786,7 @@ async function handleUpgradesApi(request, response, pathname) {
     sendJson(response, 200, {
       ok: true,
       ...dashboard,
+      relocationAccounts: relocationAccounts().map(item=>({account:item.account,store:accountStore(item.account)})),
       overseasWarehouses: OVERSEAS_WAREHOUSES,
       securityMode: "demo-role-header-not-authentication",
     });
@@ -749,7 +835,7 @@ async function handleUpgradesApi(request, response, pathname) {
     const fbaArchiveId = payload.fbaArchiveId == null ? null : requirePositiveInteger(payload.fbaArchiveId, "直发FBA归档编号");
     if ([allocationId,inquiryId,fbaArchiveId].filter(value=>value!=null).length !== 1) throw new BusinessError(400,"invalid_upgrade_source","请选择一条归档来源");
     await requireRelocationSourceVisibility({allocationId,inquiryId,fbaArchiveId},role);
-    const result = inventory.initiateRelocationUpgrade({role,allocationId,inquiryId,fbaArchiveId,sourceRevision:payload.sourceRevision,requestId:requireNonBlank(payload,"requestId","提交编号")});
+    const result = inventory.initiateRelocationUpgrade({role,allocationId,inquiryId,fbaArchiveId,account:payload.account,sourceRevision:payload.sourceRevision,requestId:requireNonBlank(payload,"requestId","提交编号")});
     sendJson(response, 200, result);
     return;
   }
@@ -786,30 +872,13 @@ async function handleUpgradesApi(request, response, pathname) {
       removalOrderNo: requireNonBlank(payload, "removalOrderNo", "移除订单号"),
       expectedRevision: Number(payload.expectedRevision),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
+      onSaved: record => lingxingHost.enqueue(role,'relocation-order-'+record.id+'-'+record.revision,{action:'logistics',workId:record.id},{action:'logistics',workId:record.id,orderNo:record.removalOrderNo,fnsku:record.fnsku},'订单保存自动同步').job,
     });
     sendJson(response, 200, result);
     return;
   }
 
-  const shippingMatch = pathname.match(/^\/api\/upgrades\/relocation-work-items\/(\d+)\/ship$/);
-  if (shippingMatch && request.method === "POST") {
-    const workId = Number(shippingMatch[1]);
-    const work = inventory.getRelocationWorkItem(workId);
-    if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
-    await requireRelocationSourceVisibility(work, role);
-    const payload = await parseJsonRequest(request);
-    if (payload.externalItems != null && !Array.isArray(payload.externalItems)) throw new BusinessError(400, "invalid_external_items", "请选择要用于本次移仓的领星包裹");
-    const result = inventory.shipRelocationUpgrade({
-      id: workId,
-      role,
-      fbaRemainingQuantity: requireNonNegativeInteger(payload.fbaRemainingQuantity, "FBA 剩余库存"),
-      externalItems: payload.externalItems,
-      expectedRevision: Number(payload.expectedRevision),
-      requestId: requireNonBlank(payload, "requestId", "提交编号"),
-    });
-    sendJson(response, 200, result);
-    return;
-  }
+  if (pathname.startsWith('/api/upgrades/relocation-work-items/') && pathname.endsWith('/ship')) throw new BusinessError(410,'manual_shipping_removed','移仓发货已改为领星匹配包裹自动登记，请使用同步领星物流');
 
   const relocationCompleteMatch = pathname.match(/^\/api\/upgrades\/relocations\/(\d+)\/complete$/);
   if (relocationCompleteMatch && request.method === "POST") {
@@ -821,9 +890,11 @@ async function handleUpgradesApi(request, response, pathname) {
     const result = inventory.completeRelocationUpgrade({
       id: relocationId,
       role,
-      completedQuantity: requirePositiveInteger(payload.completedQuantity, "升级完成数量"),
-      newVersion: requireNonBlank(payload, "newVersion", "升级完成版本号"),
-      targetWarehouse: requireNonBlank(payload, "targetWarehouse", "目标海外仓"),
+      completedQuantity: requireNonNegativeInteger(payload.completedQuantity, "累计升级完数量"),
+      inProgressQuantity: requireNonNegativeInteger(payload.inProgressQuantity, "升级中数量"),
+      reversals: payload.reversals ?? [],
+      newVersion: payload.newVersion,
+      targetWarehouse: payload.targetWarehouse,
       expectedRevision: Number(payload.expectedRevision),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     });
