@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { accountStore, relocationAccounts, processRelocationAddress, lingxingStore } from './relocation-address.mjs';
 
-export const INVENTORY_SCHEMA_VERSION = 34;
+export const INVENTORY_SCHEMA_VERSION = 35;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -49,6 +49,7 @@ export function validateTransferUpgradeRows(rows) {
 }
 export const ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "logistics", "business", "alan"]);
 const UPGRADE_ROLE_SET = new Set(["admin", ...ASSISTANT_ROLES, "operation-1", "operation-2", "purchasing", "logistics"]);
+export const WAYBILL_EXPORT_ROLES = Object.freeze(['admin','purchasing','logistics',...ASSISTANT_ROLES]);
 export const BUSINESS_ROLE = "business";
 export const TRANSIT_ROLES = Object.freeze(["admin", ...ASSISTANT_ROLES, "purchasing", "logistics"]);
 const TRANSIT_ROLE_SET = new Set(TRANSIT_ROLES);
@@ -1626,6 +1627,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateTransferUpgradeV32(db, createdAt);
   migrateRelocationWorkflowV33(db, createdAt);
   migrateTransferWorkflowV34(db, createdAt);
+  migrateWaybillExportsV35(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2913,6 +2915,25 @@ function migrateTransferWorkflowV34(db, at) {
   db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(34,?,?)').run(at,'转仓分阶段模板办理、独立公共入库批次及反向流水');
 }
 
+function migrateWaybillExportsV35(db, at) {
+  db.exec(`
+    CREATE TABLE relocation_waybill_export_files (
+      token_hash TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      tracking_numbers_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT
+    ) STRICT;
+    CREATE TABLE relocation_waybill_exports (
+      tracking_no TEXT PRIMARY KEY CHECK (length(trim(tracking_no)) > 0),
+      first_exported_at TEXT NOT NULL,
+      first_exported_by_role TEXT NOT NULL,
+      file_token_hash TEXT NOT NULL REFERENCES relocation_waybill_export_files(token_hash)
+    ) STRICT;
+  `);
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(35,?,?)').run(at,'移仓运单全局首次导出状态与固定文件确认集合');
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2922,9 +2943,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v33 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v34 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -3043,6 +3064,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 31) { migrateTransferUpgradeV32(db, appliedAt); version = 32; }
     if (version === 32) { migrateRelocationWorkflowV33(db, appliedAt); version = 33; }
     if (version === 33) { migrateTransferWorkflowV34(db, appliedAt); version = 34; }
+    if (version === 34) { migrateWaybillExportsV35(db, appliedAt); version = 35; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -4204,6 +4226,48 @@ export class InventoryDatabase {
   getUpgradeRelocation(id) {
     const row = this.db.prepare("SELECT * FROM upgrade_relocations WHERE id = ?").get(Number(id));
     return row ? { ...row, id: Number(row.id), allocation_document_id: row.allocation_document_id == null ? null : Number(row.allocation_document_id), inquiry_id: row.inquiry_id == null ? null : Number(row.inquiry_id) } : null;
+  }
+
+  relocationWaybills(relocationId) {
+    // 使用本单有效采纳量及关联商品行的最新承运商/运单号；不拆分聚合文本或套用整单数量。
+    const lines=this.db.prepare(`SELECT s.tracking_no,s.carrier,s.fnsku,SUM(i.quantity) AS quantity,e.first_exported_at
+      FROM upgrade_relocation_external_items i
+      JOIN upgrade_relocations r ON r.id=i.relocation_id AND r.status='active'
+      JOIN lingxing_removal_shipments s ON s.id=i.line_id
+      LEFT JOIN relocation_waybill_exports e ON e.tracking_no=s.tracking_no
+      WHERE i.relocation_id=? AND length(trim(s.tracking_no))>0
+      GROUP BY i.line_id HAVING SUM(i.quantity)>0 ORDER BY MIN(i.id)`).all(relocationId);
+    const groups=new Map();
+    for(const line of lines){
+      const key=JSON.stringify([line.tracking_no,line.fnsku]);
+      const group=groups.get(key)??{trackingNo:line.tracking_no,fnsku:line.fnsku,quantity:0,carriers:new Set(),firstExportedAt:line.first_exported_at??null};
+      group.quantity+=Number(line.quantity);if(line.carrier)group.carriers.add(line.carrier);groups.set(key,group);
+    }
+    return [...groups.values()].map(({carriers,...row})=>({...row,carrier:[...carriers].join(' / ')}));
+  }
+
+  prepareWaybillExport({role,trackingNumbers}) {
+    if(!WAYBILL_EXPORT_ROLES.includes(role))throw new BusinessError(403,'waybill_export_forbidden','当前角色无权导出移仓运单');
+    const numbers=[...new Set(trackingNumbers)];
+    if(!numbers.length)return null;
+    const token=crypto.randomBytes(32).toString('base64url');
+    this.transaction(()=>this.db.prepare('INSERT INTO relocation_waybill_export_files(token_hash,role,tracking_numbers_json,created_at) VALUES(?,?,?,?)').run(sha256(token),role,JSON.stringify(numbers),new Date().toISOString()));
+    return token;
+  }
+
+  confirmWaybillExport({role,exportToken,requestId}) {
+    if(!WAYBILL_EXPORT_ROLES.includes(role))throw new BusinessError(403,'waybill_export_forbidden','当前角色无权确认移仓运单导出');
+    return this.idempotent('relocation:waybill-export:confirm',requestId,{role,exportToken},()=>{
+      const key=sha256(String(exportToken??'')),file=this.db.prepare('SELECT * FROM relocation_waybill_export_files WHERE token_hash=?').get(key);
+      if(!file)throw new BusinessError(422,'waybill_export_missing','找不到本次导出文件，请重新导出');
+      if(file.role!==role)throw new BusinessError(403,'waybill_export_role','请切换回本次导出文件的操作角色确认');
+      const numbers=JSON.parse(file.tracking_numbers_json),at=new Date().toISOString();
+      const insert=this.db.prepare('INSERT INTO relocation_waybill_exports(tracking_no,first_exported_at,first_exported_by_role,file_token_hash) VALUES(?,?,?,?) ON CONFLICT(tracking_no) DO NOTHING');
+      let newlyExportedCount=0;
+      for(const number of numbers)newlyExportedCount+=Number(insert.run(number,at,role,key).changes);
+      this.db.prepare('UPDATE relocation_waybill_export_files SET confirmed_at=COALESCE(confirmed_at,?) WHERE token_hash=?').run(at,key);
+      return {ok:true,waybillCount:numbers.length,newlyExportedCount,confirmedAt:file.confirmed_at??at};
+    });
   }
 
   relocationExternalItems(relocationId) {

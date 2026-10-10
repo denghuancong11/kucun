@@ -14,6 +14,7 @@ import {
 } from "../api";
 import { Badge, displayTime, EmptyState, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { RelocationExternalHistory, RelocationExternalShipments } from "../components/RelocationExternalShipments";
+import { RelocationWaybills } from "../components/RelocationWaybills";
 import { RelocationUpdate } from "../components/RelocationUpdate";
 import { TransferUpgradeList } from "../components/TransferUpgrade";
 import { LingxingSync } from "../components/LingxingSync";
@@ -337,6 +338,7 @@ export function Requirement4View({ role }: { role: Role }) {
                 ["来源资格", selectedSource.sourceKind === "fba" ? "直发FBA：不受 90 天限制" : selectedSource.sourceKind === "inquiry" ? "询库来源：不受 90 天限制" : new Date(selectedSource.confirmedAt).getTime() >= Date.now() - 90 * 86400000 ? "近 90 天" : "超过 90 天"], ["店铺", selectedSource.store], ["团队", selectedSource.department]
               ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || "—"}</dd></div>)}</dl>
             </Panel>}
+            <RelocationWaybills role={role} model={relocationModel} version={relocationVersion} source={selectedKey??''}/>
             <RelocationWorkflow role={role} rows={relocationWorkItems.filter(row => candidateKey(row) === selectedKey)} operationDrafts={operationDrafts} setOperationDrafts={setOperationDrafts} busy={busy} onOperation={submitOperation} onRefresh={refreshAfterWrite} automaticSync={automaticSync} />
             <RelocationHistory role={role} warehouses={dashboard?.overseasWarehouses ?? []} jobs={relocationHistory.filter(row => candidateKey(row) === selectedKey)} drafts={relocationCompleteDrafts} setDrafts={setRelocationCompleteDrafts} busy={busy} pending={pendingRelocation} onComplete={finishRelocation} onRefresh={refreshAfterWrite} />
           </div>

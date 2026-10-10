@@ -1,7 +1,9 @@
 // Exact schema33 tables from released 4693d59. Isolated fixtures only.
 import fs from 'node:fs';
+import {restoreSchema34Fixture} from './schema34-fixture.mjs';
 const definitions=JSON.parse(fs.readFileSync(new URL('./schema33-transfer-tables.json',import.meta.url),'utf8'));
 export function restoreSchema33Fixture(db){
+ restoreSchema34Fixture(db);
  const deps=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE type IN ('view','trigger') OR (type='index' AND sql IS NOT NULL AND tbl_name IN ('stock_batches','upgrade_inventory_ledger','transfer_upgrade_rows','transit_preview_tokens'))").all();
  db.exec('PRAGMA foreign_keys=OFF; BEGIN');
  try{

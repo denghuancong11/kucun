@@ -466,3 +466,23 @@ export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',f
  if(!response.ok)throw new Error((await response.json()).error||'数据流导出失败，请重新尝试');
  const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=(kind==='relocation'?'移仓升级':'转仓升级')+'-数据流.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+
+export type RelocationWaybillFilters={model:string;version:string;source:string;status:'all'|'exported'|'unexported'};
+export type RelocationWaybill={workNo:string;model:string;fnsku:string;store:string;orderNo:string;carrier:string;trackingNo:string;quantity:number;firstExportedAt:string|null};
+export function fetchRelocationWaybills(role:Role,filters:RelocationWaybillFilters):Promise<{ok:true;rows:RelocationWaybill[];sync:SyncState}> {
+ return requestJson('/api/upgrades/relocation-waybills?'+new URLSearchParams(filters),role);
+}
+export async function downloadRelocationWaybills(role:Role,filters:RelocationWaybillFilters):Promise<{exportToken:string|null;count:number}> {
+ const response=await fetch('/api/upgrades/relocation-waybills/export?'+new URLSearchParams(filters),{method:'POST',cache:'no-store',signal:AbortSignal.timeout(30000),headers:{'x-role':role}});
+ if(!response.ok)throw new Error((await response.json()).error||'运单文件生成失败');
+ const countHeader=response.headers.get('x-waybill-count'),count=Number(countHeader),exportToken=response.headers.get('x-waybill-export-token');
+ if(countHeader===null || (count>0&&!exportToken))throw new Error('导出响应缺少确认信息，本次未确认导出状态，请重新尝试');
+ // blob 完整接收后才触发下载；此前任何失败都不能进入导出确认。
+ const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');
+ try{link.href=url;link.download='移仓升级-运单号导出.xlsx';document.body.appendChild(link);link.click();}
+ finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ return {exportToken,count};
+}
+export function confirmRelocationWaybills(role:Role,payload:{exportToken:string;requestId:string}):Promise<{ok:true;waybillCount:number;newlyExportedCount:number}> {
+ return requestJson('/api/upgrades/relocation-waybills/confirm',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+}

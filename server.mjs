@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
-import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
+import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, WAYBILL_EXPORT_ROLES, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { relocationAccounts, accountStore, processRelocationAddress } from './relocation-address.mjs';
 import {TRANSFER_STAGES,TRANSFER_EDITABLE,transferUpdateWorkbook,transferUpdateValues} from './transfer-workbook.mjs';
 import { LingxingHost } from './lingxing-host.mjs';
@@ -584,16 +584,46 @@ function relocationSavedRecord(work) {
       statusText:relocation.status==='active'?job.statusText:relocation.statusText}:{}),
     exportRevision:relocation?String(work.revision)+':'+relocation.revision:String(work.revision)};
 }
+async function relocationRecordsForRole(role,query) {
+  const permissions=await loadPermissions();
+  const dashboard=inventory.getUpgradeDashboard({visibleGroup:operationGroups[role]??null});
+  const works=new Map(dashboard.relocationWorkItems.map(w=>[w.id,w]));
+  for(const job of dashboard.upgrades.filter(j=>j.kind==='relocation'))for(const row of job.relocations)if(row.workId)works.set(row.workId,inventory.getRelocationWorkItem(row.workId));
+  return [...works.values()].filter(w=>w && ['summary','detail','expand'].every(key=>(permissions[w.category]?.[role]??openPermissions)[key])
+    && (!query.get('model')||w.model===query.get('model')) && (!query.get('version')||w.sourceVersion===query.get('version'))
+    && query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId)).map(relocationSavedRecord);
+}
+
+async function handleRelocationWaybills(request,response,pathname,role) {
+  const query=new URL(request.url,'http://localhost').searchParams;
+  if(pathname.endsWith('/confirm')&&request.method==='POST'){
+    const payload=await parseJsonRequest(request);
+    sendJson(response,200,inventory.confirmWaybillExport({role,exportToken:payload.exportToken,requestId:requireNonBlank(payload,'requestId','确认编号')}));return;
+  }
+  const downloading=pathname.endsWith('/export')&&request.method==='POST';
+  if(!downloading && !(pathname==='/api/upgrades/relocation-waybills'&&request.method==='GET'))throw new BusinessError(404,'route_not_found','找不到运单导出操作');
+  if(downloading&&!WAYBILL_EXPORT_ROLES.includes(role))throw new BusinessError(403,'waybill_export_forbidden','仅管理员、采购、物流和两团助理可导出移仓运单');
+  const status=query.get('status')??'all';
+  if(!['all','exported','unexported'].includes(status))throw new BusinessError(422,'waybill_export_status','请选择全部、已导出或未导出');
+  const works=await relocationRecordsForRole(role,query),rows=[];
+  for(const work of works){
+    if(work.relocationId==null)continue;
+    const waybills=inventory.relocationWaybills(work.relocationId).filter(row=>status==='all'||(status==='exported'?row.firstExportedAt!==null:row.firstExportedAt===null));
+    for(const [index,waybill]of waybills.entries())rows.push({...work,...waybill,shippedQuantity:waybill.quantity,
+      ...(index===0?{}:{initialQuantity:null,fbaRemainingQuantity:null,inProgressQuantity:null,completedQuantity:null})});
+  }
+  if(!downloading){sendJson(response,200,{ok:true,rows:rows.map(row=>({workNo:row.workNo,model:row.model,fnsku:row.fnsku,store:row.store,orderNo:row.removalOrderNo,carrier:row.carrier,trackingNo:row.trackingNo,quantity:row.shippedQuantity,firstExportedAt:row.firstExportedAt})),sync:inventory.syncState()});return;}
+  const buffer=relocationUpdateWorkbook(rows,'运单行仅填写对应承运商、运单号及本单有效已发货量；初始调拨、来源剩余、升级中、升级完为流程汇总，仅在本文件每张移仓单首行填写。仅供运单查看，不用于模板更新。');
+  // 先完成文件，再固化实际包含的运单集合；此时尚未写入任何已导出状态。
+  const numbers=[...new Set(rows.map(row=>row.trackingNo))],token=inventory.prepareWaybillExport({role,trackingNumbers:numbers});
+  response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-length':buffer.length,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-运单号导出.xlsx'),'x-waybill-count':String(numbers.length),...(token?{'x-waybill-export-token':token}:{})});
+  response.end(buffer);
+}
+
 async function handleRelocationTemplate(request,response,pathname,role) {
   if(pathname.endsWith('/export') && request.method==='GET') {
     if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出升级数据流');
-    const permissions=await loadPermissions(),query=new URL(request.url,'http://localhost').searchParams;
-    const dashboard=inventory.getUpgradeDashboard({visibleGroup:operationGroups[role]??null});
-    const works=new Map(dashboard.relocationWorkItems.map(w=>[w.id,w]));
-    for(const job of dashboard.upgrades.filter(j=>j.kind==='relocation'))for(const row of job.relocations)if(row.workId)works.set(row.workId,inventory.getRelocationWorkItem(row.workId));
-    const records=[...works.values()].filter(w=>w && ['summary','detail','expand'].every(key=>(permissions[w.category]?.[role]??openPermissions)[key])
-      && (!query.get('model')||w.model===query.get('model')) && (!query.get('version')||w.sourceVersion===query.get('version'))
-      && query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId)).map(relocationSavedRecord);
+    const records=await relocationRecordsForRole(role,new URL(request.url,'http://localhost').searchParams);
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-数据流.xlsx')});
     response.end(relocationUpdateWorkbook(records));return;
   }
@@ -642,8 +672,8 @@ async function handleRelocationTemplate(request,response,pathname,role) {
   throw new BusinessError(404,'route_not_found','找不到模板操作');
 }
 
-function relocationUpdateWorkbook(records) {
-  const rows = [["仅填写 RMA 和原始移仓地址；移仓单号及其他字段只读。"], RELOCATION_UPDATE_HEADERS, ...records.map(relocationUpdateValues)];
+function relocationUpdateWorkbook(records, note = "仅填写 RMA 和原始移仓地址；移仓单号及其他字段只读。") {
+  const rows = [[note], RELOCATION_UPDATE_HEADERS, ...records.map(relocationUpdateValues)];
   const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
   const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
     const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 1 ? ' s="1"' : r > 1 && [11,12].includes(c) ? ' s="2"' : '';
@@ -797,6 +827,7 @@ async function handleUpgradesApi(request, response, pathname) {
   const role = requireRole(request);
   const visibleGroup = operationGroups[role] ?? null;
   const scopeDirectByTeam = Boolean(operationGroups[role]);
+  if(pathname.startsWith('/api/upgrades/relocation-waybills')) return handleRelocationWaybills(request,response,pathname,role);
   if(pathname.startsWith('/api/upgrades/relocation-update/')) return handleRelocationTemplate(request,response,pathname,role);
 
   if (pathname === "/api/upgrades" && request.method === "GET") {
