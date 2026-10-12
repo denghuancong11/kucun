@@ -46,7 +46,7 @@ export function SearchBox({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="搜索型号关键字，例如 206A"
+          placeholder="搜索型号关键字"
           aria-label="按型号关键字搜索"
           role="combobox"
           aria-expanded={suggestions.length > 0}

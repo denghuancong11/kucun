@@ -240,7 +240,7 @@ try {
   assert.equal(saved.state,'queued');matrix.墨盒.business.actions=false;await fs.writeFile(permissionFile,JSON.stringify(matrix));
   const deniedResponse=fault.waitForResponse(r=>new URL(r.url()).pathname==='/api/lingxing/jobs'&&r.request().method()==='POST');
   await sync(fault).getByRole('button',{name:'重试确认',exact:true}).click();const denied=await deniedResponse;assert.equal(denied.status(),403);const deniedBody=await denied.json();
-  await label(sync(fault),'重试确认',true);assert.match(await sync(fault).getByRole('alert').innerText(),/原同步结果仍未核对/);
+  await label(sync(fault),'重试确认',true);assert.match(await sync(fault).getByRole('alert').innerText(),/原同步结果仍待确认/);
   assert.ok(Object.values((await stored(fault)).session).includes(original.requestId));assert.ok(Object.values((await stored(fault)).local).includes(original.requestId));
   assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(original.requestId).n,1);
   await fault.reload({waitUntil:'networkidle'});assert.equal(await fault.getByLabel('切换当前操作角色',{exact:true}).inputValue(),'admin');

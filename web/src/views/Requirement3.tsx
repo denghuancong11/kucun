@@ -95,9 +95,9 @@ export function Requirement3View({ role }: { role: Role }) {
       setNotice({ kind: "success", text: `已处理 ${result.processedPlanCount} 个计划，更新 ${result.updatedDetailCount} 条在途记录，${result.unmatchedPlanCount} 个计划未匹配。` });
       setUncertainStatus(false);
       try { await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, {throwOnError:true}), queryClient.invalidateQueries({ queryKey: ["audit"] }, {throwOnError:true})]); }
-      catch(error) {setNotice({kind:"warning",text:"物流更新已保存，但页面刷新失败："+(error instanceof Error?error.message:String(error))+" 无需重复提交。"});}
+      catch(error) {setNotice({kind:"warning",text:"物流更新已保存，但页面刷新失败："+(error instanceof Error?error.message:String(error))});}
     } catch (error) {
-      if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainStatus(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 请重试确认本次物流更新。":"") }); }
+      if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainStatus(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 本次物流更新结果待确认。":"") }); }
     } finally { if (isCurrentContext(generation)) setBusy(null); }
   };
 
@@ -123,7 +123,7 @@ export function Requirement3View({ role }: { role: Role }) {
       try {
         result = await importTransit(role, { ...requestPayload, requestId });
       } catch (error) {
-        if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainImport(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 请重试确认本次导入。":"") }); }
+        if (isCurrentContext(generation)) { const unknown=(error as ApiError).status===undefined||(error as ApiError).status!>=500;setUncertainImport(unknown);setNotice({ kind: "error", text: (error instanceof Error ? error.message : String(error))+(unknown?" 本次导入结果待确认。":"") }); }
         return;
       }
       if (!isCurrentContext(generation)) return;
@@ -171,7 +171,7 @@ export function Requirement3View({ role }: { role: Role }) {
             <span>未匹配计划编号 <strong>{statusPreview.unmatchedPlanCount}</strong> 个</span>
           </div>
           {statusPreview.duplicatePlanCount > 0 && <div className="callout callout-warn">
-            <div>有 {statusPreview.duplicatePlanCount} 个计划重复，采用文件中最后一条非空物流状态。</div>
+            <div>有 {statusPreview.duplicatePlanCount} 个计划重复。</div>
             <ul>{statusPreview.duplicatePlans.map((item) => <li key={item.plan}>计划编号 {item.plan}（文件行号 {item.sourceRows.join("、")}），最终采用第 {item.finalSourceRow ?? "—"} 行</li>)}</ul>
           </div>}
           {statusPreview.unmatchedPlanCount > 0 && <div className="callout callout-warn">
@@ -204,7 +204,7 @@ export function Requirement3View({ role }: { role: Role }) {
       {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>预览已读取，尚未导入。</p><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
         <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
       <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "正在导入…" : uncertainImport?"重试确认":"确认导入"}</button></div></section>}
-      {!preview && !statusPreview && !notice && <EmptyState title="选择表格开始导入" hint="XLSX / CSV" />}
+      {!preview && !statusPreview && !notice && <EmptyState title="尚未导入" />}
     </div>
   );
 }

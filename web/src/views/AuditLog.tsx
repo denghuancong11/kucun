@@ -173,7 +173,7 @@ export function AuditLogView({ role }: { role: Role }) {
             </table>
           </div>
           <div className="detail-field-note audit-count">
-            已显示 {records.length} 条，最多显示 200 条。
+            已显示 {records.length} 条。
             {/* 原「操作结果」列在同一分类下每行取值恒定，不承载信息，已并入分类标签本身 */}
           </div>
         </>

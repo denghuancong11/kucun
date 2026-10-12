@@ -4,7 +4,7 @@ import type { Role } from "../types";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", logistics: "物流", alan: "Alan", business: "商务" };
 const actionNames: Array<[RegExp, string]> = [
-  [/^\/api\/upgrades\/relocation-waybills\/confirm$/, "运单下载已触发，待确认导出状态"],
+  [/^\/api\/upgrades\/relocation-waybills\/confirm$/, "运单文件已下载，待确认导出状态"],
   [/^\/api\/upgrades\/relocation-update\/import(?:\?|$)/, "移仓RMA和地址批量更新"],
   [/^\/api\/transfer-upgrades\/update\/import(?:\?|$)/, "转仓升级办理"],
   [/^\/api\/transfer-upgrades\/import$/, "转仓升级导入"],
@@ -52,14 +52,14 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
   const confirm = async (record: PendingBusinessRequest) => {
     if (running.current) return;
     running.current=true;setBusy(record.requestId); setMessage("");
-    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+"：原提交结果已确认，请查看最新业务记录。"); }
+    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+"：原提交结果已确认。"); }
     catch (failure) { setMessage((failure as Error).message); }
     finally { running.current=false;setBusy(null); }
   };
   if (!records.length && !otherRoles.length && !message) return null;
   return <section className="pending-business" aria-label="待确认业务提交">
-    {otherRoles.length > 0 && <p>另有未确认提交，请切换到原操作角色：{otherRoles.map(original => roleNames[original]).join("、")}。</p>}
-    {records.length > 0 && <><strong>有提交尚未确认</strong><p>以下提交已保留原参数。请确认本次结果后，再办理新的同类操作。</p>
+    {otherRoles.length > 0 && <p>其他角色待确认提交：{otherRoles.map(original => roleNames[original]).join("、")}。</p>}
+    {records.length > 0 && <><strong>有提交尚未确认</strong>
       {records.map(record => <div className="pending-business-row" key={record.requestId}>
         <span>{describe(record)}</span>
         <button className="btn-primary" disabled={!!busy || !databaseId || databaseId !== record.databaseId} onClick={() => void confirm(record)}>{busy===record.requestId ? "正在确认…" : "确认本次提交"}</button>

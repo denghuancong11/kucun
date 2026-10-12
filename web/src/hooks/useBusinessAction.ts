@@ -17,13 +17,13 @@ export function useBusinessAction(onRefresh: () => Promise<unknown>, onSuccess: 
       await request.execute();
       pending.current = null; setUncertain(false);
       let message = request.message;
-      try { await onRefresh(); } catch (failure) { message += " 已保存，但页面刷新失败：" + (failure instanceof Error ? failure.message : String(failure)) + " 请刷新查看，无需重复提交。"; }
+      try { await onRefresh(); } catch (failure) { message += " 已保存，但页面刷新失败：" + (failure instanceof Error ? failure.message : String(failure)); }
       onSuccess(message);
     } catch (failure) {
       const e = failure as ApiError;
       const unknown = e.status === undefined || e.status >= 500;
       if (!unknown) pending.current = null;
-      setUncertain(unknown); setError(unknown ? `${e.message} 请点击“重试确认”查看本次提交结果。` : e.message);
+      setUncertain(unknown); setError(unknown ? `${e.message} 本次提交结果待确认。` : e.message);
     } finally { running.current = false; setBusy(false); }
   };
   return { perform, busy, uncertain, error, setError, disabled: busy || uncertain };

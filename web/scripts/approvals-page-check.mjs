@@ -459,7 +459,7 @@ try {
   await allocationSource.waitFor();
   await inquirySource.waitFor();
   await allocationSource.locator('.source-select').click();
-  const sourceCard=page.locator('.relocation-documents > .panel');
+  const sourceCard=page.locator('.relocation-documents > .panel').filter({has:page.locator('dl.relocation-fields')});
   check("升级页面带出调拨批准量90及原计划、日期和版本",(await allocationSource.innerText()).includes('90') && (await sourceCard.innerText()).includes('TEST-PLAN-TONER') && (await sourceCard.innerText()).includes('2026-02-10') && (await sourceCard.innerText()).includes('V11'));
   await inquirySource.locator('.source-select').click();
   check("询库来源带出回复量、ASIN、计划、日期和原版本",await inquirySource.count()===1 && (await inquirySource.innerText()).includes('60') && (await sourceCard.innerText()).includes('BUIINQ0001') && (await sourceCard.innerText()).includes('V20') && (await sourceCard.innerText()).includes('FBA-UI-INQUIRY'));

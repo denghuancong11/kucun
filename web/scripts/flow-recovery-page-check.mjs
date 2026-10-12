@@ -86,7 +86,7 @@ try{
   }else{
    await p.reload();release?.();assert.equal(await p.getByLabel('切换当前操作角色',{exact:true}).inputValue(),'admin');assert.equal(await p.getByRole('button',{name:'确认本次提交',exact:true}).count(),0);
   }
-  await p.getByText('另有未确认提交，请切换到原操作角色：运营·一团。',{exact:true}).waitFor();
+  await p.getByText('其他角色待确认提交：运营·一团。',{exact:true}).waitFor();
   assert.equal(submitted.length,1,'刷新和切换角色不得自动重放');
   await p.getByLabel('切换当前操作角色',{exact:true}).selectOption('operation-1');
   const resume=p.getByRole('button',{name:'确认本次提交',exact:true});await resume.waitFor();await p.waitForFunction(()=>!document.querySelector('.pending-business-row button')?.disabled);
@@ -137,7 +137,7 @@ try{
   });
   await f.getByRole('button',{name:'提交询库',exact:true}).click();await f.getByRole('button',{name:'重试确认',exact:true}).waitFor();assert.equal(countInquiry(operator),1);
   permissions['墨盒']['operation-1'].actions=false;fs.writeFileSync(permissionFile,JSON.stringify(permissions));
-  await f.getByRole('button',{name:'重试确认',exact:true}).click();await f.getByRole('alert').filter({hasText:'原提交结果仍未核对'}).waitFor();
+  await f.getByRole('button',{name:'重试确认',exact:true}).click();await f.getByRole('alert').filter({hasText:'原提交结果仍待确认'}).waitFor();
   assert.equal(submitted.length,2);assert.equal(countInquiry(operator),1);assert.equal(await f.locator('fieldset').evaluate(e=>e.disabled),true);assert.equal((await p.evaluate(k=>JSON.parse(sessionStorage.getItem(k)),savedKey)).length,1);
   permissions['墨盒']['operation-1'].actions=true;fs.writeFileSync(permissionFile,JSON.stringify(permissions));
   await f.getByRole('button',{name:'重试确认',exact:true}).click();await f.waitFor({state:'hidden'});assert.equal(submitted.length,3);assert.equal(countInquiry(operator),1);assert.deepEqual(submitted[0],submitted[1]);assert.deepEqual(submitted[1],submitted[2]);assert.equal(await p.evaluate(k=>sessionStorage.getItem(k),savedKey),null);

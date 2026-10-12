@@ -47,9 +47,9 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
   const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
   const editable = (["purchasing", "logistics"].includes(role) || role === "alan" && row.category === "墨盒") && row.status === "pending_purchasing";
   const formId = `inquiry-reply-${row.id}`;
-  const quantityError = quantity.trim() === "" ? (attempted ? "请填写供应商库存回复，有货填数量，无货填 0" : "")
+  const quantityError = quantity.trim() === "" ? (attempted ? "请填写供应商库存回复" : "")
     : !Number.isInteger(Number(quantity)) || Number(quantity) < 0 ? "供应商库存回复请填写 0 或正整数" : "";
-  const warehouseError = attempted && !warehouse ? "请选择发货仓库（CA 或 SC），回复 0 也须选择" : "";
+  const warehouseError = attempted && !warehouse ? "请选择发货仓库（CA 或 SC）" : "";
   const reply = (event: FormEvent) => {
     event.preventDefault(); setAttempted(true);
     if (!quantity.trim() || quantityError || !["CA", "SC"].includes(warehouse)) return;

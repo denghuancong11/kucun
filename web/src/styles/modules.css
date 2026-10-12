@@ -724,6 +724,7 @@
 .approval-review-form .approval-business-note { flex:1; max-width:460px; }
 .transit-page { padding:0; border:0; box-shadow:none; }
 .transit-toolbar { border-bottom:1px solid #edf0f5; padding-bottom:16px; margin-bottom:16px; }
+.upgrade-page .panel > .transit-toolbar:last-child { border-bottom:0; padding-bottom:0; margin-bottom:0; }
 .transit-page .empty-state { min-height:350px; }
 .transit-page h2 { font-size:14px; margin-bottom:10px; }
 .transit-preview-scroll { max-height:none; }

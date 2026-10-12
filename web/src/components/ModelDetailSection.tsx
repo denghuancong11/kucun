@@ -341,7 +341,7 @@ export function ModelDetailSection(props: CommonProps) {
       </div>
 
       {!perm.expand ? (
-        <div className="detail-empty">当前角色没有查看明细的权限，仅可查看该型号的库存汇总数字。</div>
+        <div className="detail-empty">当前角色没有查看明细的权限。</div>
       ) : tab === "stock" ? (
         <StockPane {...props} />
       ) : (

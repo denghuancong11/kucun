@@ -46,7 +46,7 @@ let currentDatabaseId: string | null = null;
 export function readPendingBusinessRequests(includeActive = false): PendingBusinessRequest[] {
   const raw = sessionStorage.getItem(pendingStorageKey);
   const records = raw ? JSON.parse(raw) as PendingBusinessRequest[] : [];
-  if (!Array.isArray(records)) throw new Error("待确认提交记录无法读取，请先核对浏览器保存的提交信息。");
+  if (!Array.isArray(records)) throw new Error("待确认提交记录无法读取。");
   return records.filter(record => includeActive || !activeRequests.has(record.requestId));
 }
 function savePendingBusinessRequests(records: PendingBusinessRequest[]) {
@@ -61,7 +61,7 @@ function pendingRequestError(message: string): ApiError {
 }
 export async function confirmPendingBusinessRequest(record: PendingBusinessRequest): Promise<unknown> {
   const sync = await fetchSync(record.role);
-  if (sync.databaseId !== record.databaseId) throw pendingRequestError("当前数据库与原提交不一致，请先核对运行系统；本次未重发。");
+  if (sync.databaseId !== record.databaseId) throw pendingRequestError("当前数据库与原提交不一致，本次未重发。");
   return requestJson(record.url, record.role, { method: "POST", headers: { "content-type": "application/json" }, body: record.body });
 }
 
@@ -75,26 +75,26 @@ async function requestJson<T>(url: string, role: Role, init?: RequestInit): Prom
       pending = { url, role, body: init.body, requestId: payload.requestId, databaseId: currentDatabaseId! };
       let records: PendingBusinessRequest[];
       try { records = readPendingBusinessRequests(true); }
-      catch { throw pendingRequestError("无法读取本次提交的确认信息，请核对浏览器存储后再提交；本次未发送。"); }
+      catch { throw pendingRequestError("无法读取本次提交的确认信息，本次未发送。"); }
       const original = records.find(record => record.requestId === pending!.requestId);
       if (original) {
         replaying = true;
         const sync = await fetchSync(role);
         if (original.databaseId !== sync.databaseId || original.role !== role || original.url !== url || original.body !== pending.body) {
-          throw new Error("当前数据库或操作内容与原提交不一致，请先核对；本次未重发。");
+          throw new Error("当前数据库或操作内容与原提交不一致，本次未重发。");
         }
         pending.databaseId = original.databaseId;
         records = readPendingBusinessRequests(true);
       }
       const previous = records.find(record => record.url === url && record.role === role);
       if (previous && (previous.requestId !== pending.requestId || previous.body !== pending.body)) {
-        throw pendingRequestError("此项操作还有未确认的提交，请先确认原提交结果，再填写新单。");
+        throw pendingRequestError("此项操作还有未确认的提交。");
       }
       activeRequests.add(pending.requestId);
       try { savePendingBusinessRequests(previous ? records : [...records, pending]); }
       catch {
         activeRequests.delete(pending.requestId);
-        throw pendingRequestError("无法保存本次提交的确认信息，请核对浏览器存储后再提交；本次未发送。");
+        throw pendingRequestError("无法保存本次提交的确认信息，本次未发送。");
       }
     }
   }
@@ -120,20 +120,20 @@ async function requestJson<T>(url: string, role: Role, init?: RequestInit): Prom
       ? "等待库存服务响应超时"
       : "与库存服务的连接中断";
     throw new Error(init?.method === "POST"
-      ? `${reason}，尚未确认是否保存；重试时保留本次填写内容。`
-      : `${reason}，请检查网络和部署电脑的库存服务后重新加载。`);
+      ? `${reason}，尚未确认是否保存。`
+      : `${reason}。`);
   }
   let result: any = null;
   try { result = raw ? JSON.parse(raw) : null; } catch { /* 非 JSON 响应由下方保留可诊断文本 */ }
   if (init?.method === "POST" && response.ok && result?.ok !== true) {
     settle(false);
-    throw new Error("库存服务回执无法确认是否保存；请保留本次填写内容并重试确认。");
+    throw new Error("库存服务回执无法确认是否保存。");
   }
   if (!response.ok || !result?.ok) {
     // 后端只有在幂等缓存未命中且事务已回滚时标记未应用；前置鉴权拒绝不能据此解除未知。
     if (replaying && response.status >= 400 && response.status < 500 && result?.requestNotApplied !== true) {
       settle(false);
-      throw new Error("当前操作被拒绝，原提交结果仍未核对；已保留原提交，请恢复办理条件后再确认。" + (result?.error ? " " + result.error : ""));
+      throw new Error("当前操作被拒绝，原提交结果仍待确认。" + (result?.error ? " " + result.error : ""));
     }
     settle(response.status >= 400 && response.status < 500);
     /* 服务端业务错误码（如 duplicate）随异常抛出，调用方据此走二次确认分支 */

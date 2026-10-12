@@ -297,7 +297,7 @@ export function Requirement1View({
           <div>
             <strong>权限信息加载失败</strong>
             <p>
-              暂时无法查看明细或提交调拨，请重新加载权限。
+              暂时无法查看明细或提交调拨。
               <FeedbackButton label="重新加载权限" pendingLabel="正在刷新…" doneLabel="刷新完成" className="link-btn" onAction={()=>refetchPerms({throwOnError:true})} onResult={setNotice}/>
             </p>
           </div>
@@ -364,11 +364,6 @@ export function Requirement1View({
       ) : (
         <EmptyState
           title={searching ? "未找到该型号" : "暂无匹配的库存记录"}
-          hint={
-            searching
-              ? "请调整型号关键字，或切换到其他商品类目。"
-              : "当前类目下没有库存数据；切换类目或清除筛选条件后重试。"
-          }
           action={
             searching ? (
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setQuery("")}>

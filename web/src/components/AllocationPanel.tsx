@@ -52,7 +52,7 @@ export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEn
         setQuantityRequestError(["invalid_quantity", "allocation_quantity_multiple", "insufficient_available"].includes(failure.code ?? ""));
         throw Object.assign(new Error(failure.error), {status:failure.status, code:failure.code});
       }
-    }, message:batch.model+" · "+batch.plan+"：已预锁定库存，等待商务审核。可在审批中心查看进度。" });
+    }, message:batch.model+" · "+batch.plan+"：已预锁定库存，等待商务审核。" });
   };
   return <div className="allocation-panel">
     <div className="approval-quantities"><span>在库 <strong>{formatNumber(totals.onHand)}</strong></span><span>预锁定 <strong>{formatNumber(totals.locked)}</strong></span><span>可用 <strong>{formatNumber(totals.available)}</strong></span></div>

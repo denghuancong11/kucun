@@ -156,7 +156,7 @@ export function Requirement4View({ role }: { role: Role }) {
 
   const notifySaved = async (text: string) => {
     try { await refreshAfterWrite();setNotice({kind:"success",text}); }
-    catch (error) { setNotice({kind:"warning",text:text+" 已保存，但页面刷新失败："+(error instanceof Error?error.message:String(error))+" 无需重复提交。"}); }
+    catch (error) { setNotice({kind:"warning",text:text+" 已保存，但页面刷新失败："+(error instanceof Error?error.message:String(error))}); }
   };
 
   const chooseCandidate = (candidate: RelocationSource) => {
@@ -195,7 +195,7 @@ export function Requirement4View({ role }: { role: Role }) {
       const result=await recordRelocationOperation(role, work.id, { ...payload, requestId });
       if(result.automaticSync)setAutomaticSync(current=>({...current,[work.id]:result.automaticSync!.requestId}));
       completionRequests.current.delete(key);
-      await notifySaved(`${work.workNo} 的订单号已保存；已自动发起领星同步，结果请查看同步按钮。`);
+      await notifySaved(`${work.workNo} 的订单号已保存；已自动发起领星同步。`);
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally { setBusy(null); }
@@ -254,7 +254,7 @@ export function Requirement4View({ role }: { role: Role }) {
       const status = (error as ApiError)?.status;
       const rejected = status !== undefined && status >= 400 && status < 500;
       if (rejected) setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
-      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 请点击“重试确认”查看这笔完成记录的结果。"}` });
+      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 本次完成记录结果待确认。"}` });
     } finally {
       completing.current = false;
       setBusy(null);
@@ -287,7 +287,7 @@ export function Requirement4View({ role }: { role: Role }) {
       const status = (error as ApiError)?.status;
       const rejected = status !== undefined && status >= 400 && status < 500;
       if (rejected) setPendingRelocation((current) => { const next = { ...current }; delete next[relocationId]; return next; });
-      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 请点击“重试确认”查看这笔完成记录的结果。"}` });
+      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 本次完成记录结果待确认。"}` });
     } finally {
       completing.current = false;
       setBusy(null);
@@ -301,7 +301,7 @@ export function Requirement4View({ role }: { role: Role }) {
 
   return (
     <div className="upgrade-page">
-      {query.isError && <div className="callout callout-danger" role="alert">升级库存刷新失败，保留当前填写内容，连接恢复后自动更新。{query.error.message}</div>}
+      {query.isError && <div className="callout callout-danger" role="alert">升级库存刷新失败。{query.error.message}</div>}
       <Panel>
         <Segmented
           role="tablist"
@@ -318,7 +318,7 @@ export function Requirement4View({ role }: { role: Role }) {
 
       {mode === "transfer" ? <TransferUpgradeList role={role} /> : mode === "relocation" ? (
         <div className="relocation-board">
-          <Panel title="升级来源" className="relocation-source-panel" actions={['admin','purchasing','logistics'].includes(role)?<FeedbackButton key={JSON.stringify([relocationModel,relocationVersion,selectedKey])} className="btn btn-ghost btn-sm" label="导出移仓数据流" pendingLabel="正在导出…" doneLabel="导出完成" onAction={()=>exportUpgradeFlow(role,'relocation',{model:relocationModel,version:relocationVersion,source:selectedKey??''})} successText="移仓数据流已完整接收并触发下载。"/>:undefined}>
+          <Panel title="升级来源" className="relocation-source-panel" actions={['admin','purchasing','logistics'].includes(role)?<FeedbackButton key={JSON.stringify([relocationModel,relocationVersion,selectedKey])} className="btn btn-ghost btn-sm" label="导出移仓数据流" pendingLabel="正在导出…" doneLabel="导出完成" onAction={()=>exportUpgradeFlow(role,'relocation',{model:relocationModel,version:relocationVersion,source:selectedKey??''})} successText="移仓数据流导出完成。"/>:undefined}>
             <div className="form-grid upgrade-filter">
               <label className="field"><span>型号</span><select value={relocationModel} onChange={event => { setRelocationModel(event.target.value); setRelocationVersion(""); setSelectedSourceKey(null); }}><option value="">全部型号</option>{relocationModels.map(value => <option key={value}>{value}</option>)}</select></label>
               <label className="field"><span>原版本号</span><select value={relocationVersion} onChange={event => { setRelocationVersion(event.target.value); setSelectedSourceKey(null); }}><option value="">全部版本</option>{relocationVersions.map(value => <option key={value}>{value}</option>)}</select></label>
@@ -335,7 +335,7 @@ export function Requirement4View({ role }: { role: Role }) {
               <dl className="relocation-fields">{[
                 ["来源 FNSKU", selectedSource.fnsku], ["原版本", selectedSource.sourceVersion], ["ASIN", selectedSource.asin || "—"], ["发货计划号", selectedSource.plan], ["发货时间", selectedSource.shipDate],
                 ["已用数量", selectedSource.fbaRemainingQuantity == null ? "—" : formatNumber(selectedSource.initialQuantity - selectedSource.fbaRemainingQuantity)],
-                ["来源资格", selectedSource.sourceKind === "fba" ? "直发FBA：不受 90 天限制" : selectedSource.sourceKind === "inquiry" ? "询库来源：不受 90 天限制" : new Date(selectedSource.confirmedAt).getTime() >= Date.now() - 90 * 86400000 ? "近 90 天" : "超过 90 天"], ["店铺", selectedSource.store], ["团队", selectedSource.department]
+                ["来源资格", selectedSource.sourceKind === "fba" ? "直发FBA" : selectedSource.sourceKind === "inquiry" ? "询库来源" : new Date(selectedSource.confirmedAt).getTime() >= Date.now() - 90 * 86400000 ? "近 90 天" : "超过 90 天"], ["店铺", selectedSource.store], ["团队", selectedSource.department]
               ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || "—"}</dd></div>)}</dl>
             </Panel>}
             <RelocationWaybills role={role} model={relocationModel} version={relocationVersion} source={selectedKey??''}/>
@@ -409,7 +409,6 @@ function RelocationWorkflow({role,rows,operationDrafts,setOperationDrafts,busy,o
     return <article className="relocation-document" key={work.id} data-relocation-work-id={work.id}>
       <header className="relocation-document-head"><strong>{work.workNo}</strong><span>{work.statusText}</span>{work.removalOrderNo&&<LingxingSync role={role} target={{action:'logistics',workId:work.id}} initialRequestId={automaticSync[work.id]} onSynced={onRefresh}/>}</header>
       <dl className="relocation-fields"><div><dt>FBA剩余库存</dt><dd>{formatNumber(work.fbaRemainingQuantity??0)}</dd></div><div><dt>账号</dt><dd>{work.store}</dd></div><div><dt>发起岗位</dt><dd>{ROLE_LABELS[work.initiatedByRole]}</dd></div><div><dt>RMA</dt><dd>{work.rma||'—'}</dd></div><div><dt>原始移仓地址</dt><dd style={{whiteSpace:'pre-wrap'}}>{work.originalRelocationAddress||'—'}</dd></div><div><dt>加工后移仓地址</dt><dd style={{whiteSpace:'pre-wrap'}}>{work.relocationAddress||'—'}</dd></div><div><dt>订单号</dt><dd>{work.removalOrderNo||'—'}</dd></div></dl>
-      {work.status==='awaiting_procurement'&&<p>待物流通过更新模板填写 RMA 和原始移仓地址。</p>}
       {work.status==='awaiting_operation'&&['operation-1','operation-2'].includes(role)&&<div className="upgrade-inline-complete"><input aria-label={work.workNo+' 移除订单号'} value={operation.orderNo} placeholder="订单号" onChange={e=>setOperationDrafts(current=>({...current,[work.id]:{...operation,orderNo:e.target.value}}))}/><button className="btn btn-primary" disabled={busy!==null||!operation.orderNo.trim()} onClick={()=>void onOperation(work)}>{busy===`relocation-operation-${work.id}`?"正在保存…":"保存订单号"}</button></div>}
       <RelocationExternalShipments workNo={work.workNo} rows={work.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
     </article>;
@@ -430,7 +429,7 @@ function RelocationHistory({role,warehouses,jobs,drafts,setDrafts,busy,pending,o
       <header className="relocation-document-head"><strong>{row.relocationNo}</strong><span>{job.statusText}</span>{row.status==='active'&&row.workId&&<LingxingSync role={role} target={{action:'logistics',workId:row.workId}} onSynced={onRefresh}/>}</header>
       <dl className="relocation-fields">{[['FBA剩余库存',job.fbaRemainingQuantity],['移仓-已发货数量',row.shippedQuantity],['升级中数量',row.inProgressQuantity],['升级完数量',row.completedQuantity],['尚未开始升级',row.shippedQuantity-row.inProgressQuantity-row.completedQuantity],['历史其他减少',row.soldQuantity],['RMA',row.rma],['原始移仓地址',row.originalRelocationAddress],['加工后移仓地址',row.relocationAddress],['订单号',row.removalOrderNo],['承运商',row.carrier],['运单号',row.trackingNo]].map(([label,value])=><div key={label}><dt>{label}</dt><dd style={{whiteSpace:'pre-wrap'}}>{value}</dd></div>)}</dl>
       {row.completions.length>0&&<p>入库记录：{row.completions.map(item=>item.version+' / '+item.warehouse+'：'+item.quantity).join('、')}</p>}<RelocationExternalHistory items={row.externalItems??[]}/><RelocationExternalShipments workNo={row.relocationNo} rows={row.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
-      {row.status==='active'&&['purchasing','logistics'].includes(role)&&<div className="upgrade-inline-complete"><label className="field"><span>升级中数量</span><input aria-label={row.relocationNo+' 升级中数量'} value={draft.progressing} disabled={!!recovery||busy!==null} onChange={e=>update({progressing:e.target.value})}/></label><label className="field"><span>升级完数量（累计）</span><input aria-label={row.relocationNo+' 升级完数量'} value={draft.quantity} disabled={!!recovery||busy!==null} onChange={e=>update({quantity:e.target.value})}/></label><label className="field"><span>升级完，版本号</span><input aria-label={row.relocationNo+' 升级完成版本号'} value={draft.version} disabled={!!recovery||busy!==null} onChange={e=>update({version:e.target.value})}/></label><label className="field"><span>本次新增入库实际仓库</span><select aria-label={row.relocationNo+' 目标海外仓'} value={draft.warehouse??''} disabled={!!recovery||busy!==null} onChange={e=>update({warehouse:e.target.value})}><option value="">请选择</option>{warehouses.map(w=><option key={w}>{w}</option>)}</select></label><p className="form-hint">升级中＋升级完≤已发货；减少累计量时，指定下表入库批次扣回。</p>
+      {row.status==='active'&&['purchasing','logistics'].includes(role)&&<div className="upgrade-inline-complete"><label className="field"><span>升级中数量</span><input aria-label={row.relocationNo+' 升级中数量'} value={draft.progressing} disabled={!!recovery||busy!==null} onChange={e=>update({progressing:e.target.value})}/></label><label className="field"><span>升级完数量（累计）</span><input aria-label={row.relocationNo+' 升级完数量'} value={draft.quantity} disabled={!!recovery||busy!==null} onChange={e=>update({quantity:e.target.value})}/></label><label className="field"><span>升级完，版本号</span><input aria-label={row.relocationNo+' 升级完成版本号'} value={draft.version} disabled={!!recovery||busy!==null} onChange={e=>update({version:e.target.value})}/></label><label className="field"><span>本次新增入库实际仓库</span><select aria-label={row.relocationNo+' 目标海外仓'} value={draft.warehouse??''} disabled={!!recovery||busy!==null} onChange={e=>update({warehouse:e.target.value})}><option value="">请选择</option>{warehouses.map(w=><option key={w}>{w}</option>)}</select></label>
         {issue&&<p className="dialog-error" role="alert">{issue}</p>}
         <button className="btn btn-primary" disabled={(!recovery&&!!issue)||busy!==null} onClick={()=>void onComplete(job,row.id,row.revision)}>{busy===`upgrade-relocation-complete-${row.id}`?'正在保存…':recovery?'重试确认':'保存升级数量'}</button></div>}
       <div className="table-wrap"><table className="data-table" aria-label={row.relocationNo+' 入库批次'}><thead><tr><th>入库批次</th><th>版本</th><th>实际仓库</th><th>有效入库量</th><th>当前占用</th><th>本次扣回</th></tr></thead><tbody>{row.receiptBatches.map(receipt=><tr key={receipt.ledgerId}><td>{receipt.batchKey}</td><td>{receipt.version}</td><td>{receipt.warehouse}</td><td>{receipt.quantity}</td><td>{receipt.issue||'无'}</td><td>{decrease>0&&['purchasing','logistics'].includes(role)&&<input aria-label={'扣回 '+receipt.batchKey} disabled={!!receipt.issue||!!recovery||busy!==null} value={draft.reversals?.[receipt.ledgerId]??''} onChange={e=>update({reversals:{...draft.reversals,[receipt.ledgerId]:e.target.value}})}/>}</td></tr>)}</tbody></table></div>
@@ -489,7 +488,7 @@ function DirectHistory({
                           <button className="btn btn-primary" type="button" disabled={(!recovery && !valid) || busy !== null} onClick={() => void onComplete(job)}>{busy === `upgrade-direct-complete-${job.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button>
                 {!recovery&&selectedLine&&!valid&&quantity<=selectedLine.inProgressQuantity&&<p className="field-error" role="alert">请填写大于0的整数完成量、升级完成版本，并选择目标海外仓。</p>}
                 {!recovery&&!selectedLine&&<p className="form-hint">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}
-                {!recovery&&selectedLine&&quantity>selectedLine.inProgressQuantity&&<p className="form-hint">所选批次还剩 {selectedLine.inProgressQuantity} 件，请按这批货的实际完成量填写。</p>}
+                {!recovery&&selectedLine&&quantity>selectedLine.inProgressQuantity&&<p className="form-hint">完成数量超出所选批次剩余 {selectedLine.inProgressQuantity} 件。</p>}
               </div>
             )}
             {job.status === "active" && !["purchasing", "logistics"].includes(role) && <div className="form-hint">等待采购登记完成数量和新版本。</div>}

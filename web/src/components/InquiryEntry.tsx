@@ -22,7 +22,7 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
     event.preventDefault();
     if (!storeValid) return;
     const payload={...draft,quantity:Number(draft.quantity),department:group??draft.department,model:model.model,requestId:createRequestId("inquiry")};
-    void perform({execute:()=>createInquiry(role,payload),message:model.model+"：询库已提交，进入审批中心等待商务审核。"});
+    void perform({execute:()=>createInquiry(role,payload),message:model.model+"：询库已提交，等待商务审核。"});
   };
   if (!canEntry) return null;
   return <div className="inquiry-entry">

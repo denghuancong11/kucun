@@ -18,7 +18,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
   // 本机保留请求编号，重新打开时向服务器查询该任务的真实结果。
   const [initial] = useState(() => {
     try { return {requestId:initialRequestId || sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey),error:''}; }
-    catch { return {requestId:null,error:'浏览器无法读取同步请求记录，暂未发起新同步。请恢复浏览器存储后重试。'}; }
+    catch { return {requestId:null,error:'浏览器无法读取同步请求记录，暂未发起新同步。'}; }
   });
   useEffect(()=>{if(initialRequestId){try{sessionStorage.setItem(storageKey,initialRequestId);}catch{/* 查询仍可使用服务器返回的编号 */}}},[initialRequestId,storageKey]);
   const [requestId,setRequestId] = useState(initial.requestId);
@@ -42,7 +42,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
   useEffect(() => {
     if (job?.state!=='succeeded' || refreshed.current===job.id) return;
     refreshed.current=job.id;
-    void onSynced().catch(()=>setRefreshError('同步数据已保存，但页面刷新失败，请重新加载页面，无需重复同步。'));
+    void onSynced().catch(()=>setRefreshError('同步数据已保存，但页面刷新失败。'));
   }, [job?.id,job?.state,onSynced]);
 
   async function sync() {
@@ -54,7 +54,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
       const savedId = sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey);
       if (!requestId && savedId && storageRecovery.current) {
         storageRecovery.current=false;
-        setRequestId(savedId);setSubmitError('已找回原同步编号，尚未取得结果，请重试确认。');
+        setRequestId(savedId);setSubmitError('已找回原同步请求，结果待确认。');
         return;
       }
       id = uncertain ? requestId! : createRequestId('lingxing');
@@ -69,22 +69,22 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
       const failure=cause as ApiError;
       if (!sent) {
         storageRecovery.current=true;
-        setSubmitError('浏览器无法读取或保存同步请求编号，本次未发送。请恢复浏览器存储后重试。');
+        setSubmitError('浏览器无法读取或保存同步请求编号，本次未发送。');
       } else if (failure.status && failure.status>=400 && failure.status<500 && !uncertain) {
         try {
           if (localStorage.getItem(storageKey)===id) localStorage.removeItem(storageKey);
           if (sessionStorage.getItem(storageKey)===id) sessionStorage.removeItem(storageKey);
           setRequestId(null);setSubmitError(failure.message);
         } catch {
-          setSubmitError(`${failure.message}；浏览器无法清除请求编号，请恢复浏览器存储后重试确认。`);
+          setSubmitError(`${failure.message}；浏览器无法清除请求编号，结果待确认。`);
         }
       } else if (failure.status && failure.status>=400 && failure.status<500) {
         // 重放的权限或范围拒绝不能证明原任务未保存，继续持有原编号。
-        setSubmitError(`${failure.message}；原同步结果仍未核对，请恢复办理条件后重试确认。`);
+        setSubmitError(`${failure.message}；原同步结果仍待确认。`);
       } else {
-        setSubmitError(failure.status ? '库存服务暂时未返回同步结果，请重试确认。'
-          : failure.message.includes('超时') ? '等待库存服务响应超时，尚未取得结果，请重试确认。'
-          : '与库存服务连接中断，尚未取得结果，请重试确认。');
+        setSubmitError(failure.status ? '库存服务暂时未返回同步结果。'
+          : failure.message.includes('超时') ? '等待库存服务响应超时，尚未取得结果。'
+          : '与库存服务连接中断，尚未取得结果。');
       }
     } finally {sending.current=false;setSubmitting(false);}
   }
@@ -93,7 +93,7 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
     : job?.state==='failed' || (!requestId && submitError) ? '同步失败'
     : uncertain ? '重试确认' : target.action==='metrics' ? '同步领星指标' : '同步领星物流';
   const error = submitting ? '' : job?.state==='failed' ? job.message
-    : uncertain ? submitError || '尚未取得同步结果，请重试确认。'
+    : uncertain ? submitError || '尚未取得同步结果。'
     : active && jobs.isError ? '暂时无法读取同步进度，尚未取得结果。'
     : !job ? submitError : refreshError;
   return <div className="lingxing-sync">
