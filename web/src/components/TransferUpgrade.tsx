@@ -86,7 +86,9 @@ function TransferUpdate({role}:{role:Role}) {
  const client=useQueryClient(),action=useBusinessAction(async()=>{await Promise.all(['upgrades','inventory','audit'].map(key=>client.invalidateQueries({queryKey:[key]}, {throwOnError:true})));},message=>{setPreview(null);setNotice(message);});
  async function upload(file?:File){if(!file)return;setReading(true);setPreview(null);setReversalDrafts({});setNotice('');action.setError(null);try{setPreview(await previewTransferUpdate(role,stage,file));}catch(e){action.setError((e as Error).message);}finally{setReading(false);}}
  return <Panel title="物流模板办理">
- <p>按RMA、实际清点数量、升级进度分步办理。下载当前记录，填写对应字段后预览确认；RMA与清点量可再次修正。</p>
+ <p>按RMA、实际清点数量、升级进度分步办理。使用转仓数据流导出文件或更新模板，填写当前阶段字段后预览确认；RMA与清点量可再次修正。</p>
+ <p>按原模板前9项业务资料自动匹配。无匹配或匹配不唯一时整批停止；内容相同的独立记录仍分别保留，无法通过原模板分别更新。</p>
+ <p>Excel 不含单号和记录版本，无法仅凭文件判断导出后是否发生过更新。请核对预览中的系统当前值与文件待更新值；提交时会检查预览后是否被其他操作更新。</p>
  <div className="transit-toolbar"><select aria-label="转仓办理阶段" value={stage} disabled={reading||action.disabled} onChange={e=>{setStage(e.target.value as TransferStage);setPreview(null);setReversalDrafts({});setNotice('');action.setError(null);}}>{Object.entries(transferStageLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select>
  <FeedbackButton key={stage} label={"下载"+transferStageLabels[stage]+"更新模板"} pendingLabel="正在下载…" doneLabel="下载完成" disabled={reading||action.disabled} onAction={()=>downloadTransferUpdate(role,stage)} successText={transferStageLabels[stage]+"更新模板已完整接收并触发下载。"}/>
  <label className="btn btn-ghost" htmlFor="transfer-update-file" aria-disabled={reading||action.disabled}>{reading?"正在预览…":"导入"+transferStageLabels[stage]+"更新"}</label><input hidden id="transfer-update-file" type="file" accept=".xlsx" disabled={reading||action.disabled} onChange={e=>{void upload(e.target.files?.[0]);e.target.value='';}}/></div>

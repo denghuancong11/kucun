@@ -1,28 +1,45 @@
 import zlib from 'node:zlib';
-// 转仓导出与更新使用同一业务列；扣回批次在确认页面指定。
+import template from './upgrade-workbook-template.json' with {type:'json'};
+
+// 原模板的样式与表头；不保存示例、单号或记录版本。
+export const RELOCATION_UPDATE_HEADERS=['型号','来源','发货计划号','发货时间','版本号','已贴FNSKU','初始调拨数量','FBA剩余库存','调拨店铺','状况','RMA','移仓地址','订单号','承运商','运单号','移仓-已发货数量','升级中数量','升级完数量','升级完，版本号'];
 export const TRANSFER_STAGES={rma:'RMA',count:'实际清点数量',progress:'升级进度'};
 export const TRANSFER_EDITABLE={rma:['rma'],count:['countedQuantity'],progress:['inProgressQuantity','completedQuantity','completedVersion']};
 const xml=v=>String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll('\r','&#13;');
 const col=i=>String.fromCharCode(65+i);
-export function transferUpdateValues(record,fields){return [record.documentNo,...fields.map(([key])=>['returnQuantity','countedQuantity','inProgressQuantity','completedQuantity'].includes(key)&&record.data[key]!==''?Number(record.data[key]):record.data[key]),String(record.revision)];}
-export function transferUpdateWorkbook(records,stage,fields,crc32){
- const headers=['转仓单号',...fields.map(([,label])=>label),'记录版本'];
- const editable=(stage ? TRANSFER_EDITABLE[stage] : Object.values(TRANSFER_EDITABLE).flat()).map(key=>1+fields.findIndex(([k])=>k===key));
- const sheets=[{name:'转仓升级',headers,editable,note:'按转仓单号定位；单号、记录版本及非本次办理阶段字段只读。未修改行不办理。数量单位：销售套数。减少累计完成量时，在导入确认页指定原入库批次；新增入库至Aster海外仓，套/箱补齐前不能调拨。',rows:records.map(r=>transferUpdateValues(r,fields))}];
- const sheetXml=sheet=>{
-   const row=(values,n)=>'<row r="'+n+'" ht="32" customHeight="1">'+values.map((v,i)=>{
-     const style=n===2?1:n>=4&&sheet.editable.includes(i)?2:0,ref=col(i)+n;
-     return v==null||v===''?'<c r="'+ref+'" s="'+style+'"/>':typeof v==='number'?'<c r="'+ref+'" s="'+style+'"><v>'+v+'</v></c>':'<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t xml:space="preserve">'+xml(v)+'</t></is></c>';
-   }).join('')+'</row>';
-   return '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" state="frozen"/></sheetView></sheetViews><cols>'+sheet.headers.map((_,i)=>'<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+(sheet.name==='扣回明细'&&i===1?35:24)+'" customWidth="1"/>').join('')+'</cols><sheetData>'+row([sheet.note],1)+row(sheet.headers,2)+sheet.rows.map((r,i)=>row(r,i+4)).join('')+'</sheetData><sheetProtection sheet="1" selectLockedCells="0" selectUnlockedCells="0" deleteRows="0"/><mergeCells>'+sheet.headers.map((_,i)=>'<mergeCell ref="'+col(i)+'2:'+col(i)+'3"/>').join('')+'<mergeCell ref="A1:'+col(sheet.headers.length-1)+'1"/></mergeCells></worksheet>';
- };
- const entries=[
- ['[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((_,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('')+'</Types>'],
- ['_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
- ['xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+sheets.map((x,i)=>'<sheet name="'+x.name+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join('')+'</sheets></workbook>'],
- ['xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((_,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join('')+'<Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
- ['xl/styles.xml','<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7F1FF"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf fontId="0" fillId="2" borderId="0" xfId="0" applyProtection="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/><protection locked="0"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
- ...sheets.map((x,i)=>['xl/worksheets/sheet'+(i+1)+'.xml',sheetXml(x)])];
+
+export function transferUpdateValues(record,fields){
+  return fields.map(([key])=>['returnQuantity','countedQuantity','inProgressQuantity','completedQuantity'].includes(key)&&record.data[key]!==''?Number(record.data[key]):record.data[key]);
+}
+export function transferUpdateWorkbook(records,fields,crc32){
+  return upgradeWorkbook('转仓升级',records.map(r=>transferUpdateValues(r,fields)),crc32);
+}
+
+export function upgradeWorkbook(sheetName,rows,crc32,waybillExport=false){
+  const layout=template.sheets[sheetName];
+  const sheetRows=rows.map((values,index)=>{
+    const n=layout.startRow+index;
+    return '<row r="'+n+'"'+layout.rowAttributes+'>'+layout.cellStyles.map((style,i)=>{
+      const value=values[i],ref=col(i)+n;
+      return value==null||value===''?'<c r="'+ref+'" s="'+style+'"/>':typeof value==='number'
+        ?'<c r="'+ref+'" s="'+style+'" t="n"><v>'+value+'</v></c>'
+        :'<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t xml:space="preserve">'+xml(value)+'</t></is></c>';
+    }).join('')+'</row>';
+  }).join('');
+  const sheet=layout.prefix.replace(/<dimension ref="[^"]*"\/>/,'<dimension ref="A1:'+col(layout.cellStyles.length-1)+(layout.startRow+rows.length-1)+'"/>')
+    +'<sheetData>'+layout.header+sheetRows+'</sheetData>'+layout.suffix;
+  const entries=[
+    ['[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'],
+    ['_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="'+sheetName+'" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ['xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>'],
+    ['xl/styles.xml',template.styles],['xl/theme/theme1.xml',template.theme],['xl/worksheets/sheet1.xml',sheet],
+  ];
+  if(waybillExport){
+    entries[0][1]=entries[0][1].replace('</Types>','<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/></Types>');
+    entries[1][1]=entries[1][1].replace('</Relationships>','<Relationship Id="purpose" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/></Relationships>');
+    entries.push(['docProps/custom.xml','<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="AsterWorkbookPurpose"><vt:lpwstr>relocation-waybills-view-only</vt:lpwstr></property></Properties>']);
+  }
   const locals = [], directory = []; let offset = 0;
   for (const [file, text] of entries) {
     const name = Buffer.from(file), source = Buffer.from(text), compressed = zlib.deflateRawSync(source), crc = crc32(source);

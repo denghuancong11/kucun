@@ -4886,7 +4886,7 @@ export class InventoryDatabase {
     const logistics={carrier:[...new Set(adopted.map(item=>item.snapshot.carrier))].join('、'),trackingNo:[...new Set(adopted.map(item=>item.snapshot.trackingNo))].join('、')};
       const externalSyncStatus = "synced";
       const sourceBefore = this.relocationSourceQuantity(work.allocation_document_id, work.inquiry_id, work.inquiry_shipment_id, work.fba_archive_id);
-      if (shipped > sourceBefore) throw new BusinessError(422, "relocation_quantity_mismatch", "新增包裹数量超过来源剩余可移仓量（"+sourceBefore+"）");
+      if (shipped > sourceBefore) throw new BusinessError(422, "relocation_quantity_mismatch", "新增包裹数量超过FBA剩余库存（"+sourceBefore+"）");
       const fbaRemaining = sourceBefore - shipped, sold = 0;
       const at = new Date().toISOString();
       if(work.relocation_id) {
@@ -5725,7 +5725,7 @@ export class InventoryDatabase {
     const fail=(field,message,status=422)=>{throw new BusinessError(status,'transfer_update_invalid','工作表“转仓升级”第 '+item.sourceRow+' 行，转仓单号 '+(input.documentNo||'未填写')+'，“'+field+'”：'+message);};
     if(!row)fail('转仓单号','找不到原记录，不能通过更新新增转仓单');
     if(input.stage!==stage || !['rma','count','progress'].includes(stage))fail('办理阶段','请使用对应阶段模板');
-    if(Number(input.revision)!==row.revision)fail('记录版本','已被其他操作更新，请重新下载模板',409);
+    if(Number(input.revision)!==row.revision)fail('系统记录版本','预览后已被其他操作更新，请重新预览核对',409);
     const before=JSON.parse(row.data_json),after={...before};
     const integer=(key,label)=>{const raw=String(input[key]??'').trim(),n=Number(raw);if(!raw||!Number.isSafeInteger(n)||n<0)fail(label,'须填写非负整数（销售套数）');return n;};
     if(stage==='rma') {

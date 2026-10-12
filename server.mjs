@@ -8,7 +8,7 @@ import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
 import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, WAYBILL_EXPORT_ROLES, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { relocationAccounts, accountStore, processRelocationAddress } from './relocation-address.mjs';
-import {TRANSFER_STAGES,TRANSFER_EDITABLE,transferUpdateWorkbook,transferUpdateValues} from './transfer-workbook.mjs';
+import {RELOCATION_UPDATE_HEADERS,TRANSFER_STAGES,TRANSFER_EDITABLE,transferUpdateWorkbook,transferUpdateValues,upgradeWorkbook} from './transfer-workbook.mjs';
 import { LingxingHost } from './lingxing-host.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -572,17 +572,15 @@ function inquiryExportWorkbook(records) {
   return Buffer.concat([...locals, central, end]);
 }
 
-const RELOCATION_UPDATE_HEADERS=['移仓单号','型号','来源','发货计划号','发货时间','版本号','已贴FNSKU','初始调拨数量','来源剩余可移仓量','调拨店铺','状况','RMA','移仓地址','订单号','承运商','运单号','移仓-已发货数量','升级中数量','升级完数量','升级完，版本号','记录版本'];
 function relocationUpdateValues(w) {
-  return [w.workNo,w.model,{allocation:'调拨',inquiry:'询库',fba:'直发FBA'}[w.sourceKind],w.plan,w.shipDate,w.sourceVersion,w.fnsku,w.initialQuantity,w.fbaRemainingQuantity,w.store,w.statusText,w.rma??'',w.originalRelocationAddress??'',w.removalOrderNo??'',w.carrier??'',w.trackingNo??'',w.shippedQuantity,w.inProgressQuantity,w.completedQuantity,w.newVersion??'',w.exportRevision];
+  return [w.model,{allocation:'调拨',inquiry:'询库',fba:'直发FBA'}[w.sourceKind],w.plan,w.shipDate,w.sourceVersion,w.fnsku,w.initialQuantity,w.fbaRemainingQuantity,w.store,w.statusText,w.rma??'',w.originalRelocationAddress??'',w.removalOrderNo??'',w.carrier??'',w.trackingNo??'',w.shippedQuantity,w.inProgressQuantity,w.completedQuantity,w.newVersion??''];
 }
 function relocationSavedRecord(work) {
   const job=work.upgradeId==null?null:inventory.getUpgrade(work.upgradeId);
   const relocation=job?.relocations.find(row=>row.id===work.relocationId);
   return {...work,inProgressQuantity:relocation?.inProgressQuantity??null,completedQuantity:relocation?.completedQuantity??null,newVersion:relocation?.newVersion??null,
     ...(relocation?{shippedQuantity:relocation.shippedQuantity,carrier:relocation.carrier,trackingNo:relocation.trackingNo,
-      statusText:relocation.status==='active'?job.statusText:relocation.statusText}:{}),
-    exportRevision:relocation?String(work.revision)+':'+relocation.revision:String(work.revision)};
+      statusText:relocation.status==='active'?job.statusText:relocation.statusText}:{})};
 }
 async function relocationRecordsForRole(role,query) {
   const permissions=await loadPermissions();
@@ -613,7 +611,7 @@ async function handleRelocationWaybills(request,response,pathname,role) {
       ...(index===0?{}:{initialQuantity:null,fbaRemainingQuantity:null,inProgressQuantity:null,completedQuantity:null})});
   }
   if(!downloading){sendJson(response,200,{ok:true,rows:rows.map(row=>({workNo:row.workNo,model:row.model,fnsku:row.fnsku,store:row.store,orderNo:row.removalOrderNo,carrier:row.carrier,trackingNo:row.trackingNo,quantity:row.shippedQuantity,firstExportedAt:row.firstExportedAt})),sync:inventory.syncState()});return;}
-  const buffer=relocationUpdateWorkbook(rows,'运单行仅填写对应承运商、运单号及本单有效已发货量；初始调拨、来源剩余、升级中、升级完为流程汇总，仅在本文件每张移仓单首行填写。仅供运单查看，不用于模板更新。');
+  const buffer=relocationUpdateWorkbook(rows,true);
   // 先完成文件，再固化实际包含的运单集合；此时尚未写入任何已导出状态。
   const numbers=[...new Set(rows.map(row=>row.trackingNo))],token=inventory.prepareWaybillExport({role,trackingNumbers:numbers});
   response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-length':buffer.length,'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-运单号导出.xlsx'),'x-waybill-count':String(numbers.length),...(token?{'x-waybill-export-token':token}:{})});
@@ -638,26 +636,40 @@ async function handleRelocationTemplate(request,response,pathname,role) {
     const body=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'upload.xlsx');
     if(path.extname(fileName).toLowerCase()!=='.xlsx') throw new BusinessError(422,'xlsx_required','请上传移仓升级更新模板 XLSX');
     const table=readTableRows(body,fileName,{sheetName:'移仓升级',headerGroups:RELOCATION_UPDATE_HEADERS.map(label=>[label])});
-    if(RELOCATION_UPDATE_HEADERS.some((label,i)=>String(table.rows[1]?.[i]??'').trim()!==label)) throw new BusinessError(422,'relocation_headers','工作表“移仓升级”第2行表头不匹配，请下载带移仓单号的更新模板');
+    validateUpgradeTemplate(table,RELOCATION_UPDATE_HEADERS,3);
+    const records=[];
+    for(const {id} of inventory.db.prepare('SELECT id FROM upgrade_relocation_work_items ORDER BY id').all()){
+      const work=relocationSavedRecord(inventory.getRelocationWorkItem(id));
+      const permission=await categoryPermissions(role,work.category);
+      if(!['summary','detail','expand','actions'].every(key=>permission[key]))continue;
+      try {await requireRelocationSourceVisibility(work,role);}
+      catch(error){if(error instanceof BusinessError&&error.status===403)continue;throw error;}
+      records.push(work);
+    }
+    // 订单号在运营保存后固定；空订单号也精确参与匹配，不用进度或物流汇总猜测原单。
+    const identityColumns=[0,1,2,3,4,5,6,8,12];
+    const candidates=groupUpgradeRecords(records,relocationUpdateValues,identityColumns);
     const errors=[],rows=[],seen=new Set();let unchangedCount=0;
     for(let index=2;index<table.rows.length;index++) {
       const values=table.rows[index],sourceRow=index+1;
       if(!values.some(value=>String(value??'').trim()))continue;
-      const workNo=String(values[0]??'').trim();
+      let workNo='';
       try {
-        if(seen.has(workNo)) throw new Error('同一移仓单号重复，请每单仅保留一行');seen.add(workNo);
-        const raw=inventory.db.prepare('SELECT id FROM upgrade_relocation_work_items WHERE work_no=?').get(workNo);
-        if(!raw)throw new Error('移仓单号不存在，不能新增移仓单');
-        const work=relocationSavedRecord(inventory.getRelocationWorkItem(raw.id));await requireRelocationSourceVisibility(work,role);
+        const matched=candidates.get(upgradeBusinessKey(values,identityColumns,table.date1904))??[];
+        if(!matched.length)throw new Error('未找到业务资料一致且有权访问的原记录；请核对型号、来源、发货计划号、发货时间、版本号、已贴FNSKU、初始调拨数量、调拨店铺和订单号');
+        if(matched.length!==1)throw new Error('业务资料匹配到 '+matched.length+' 条移仓记录，无法唯一定位；原模板不能分别更新这些记录');
+        const work=matched[0];workNo=work.workNo;
+        if(seen.has(work.id))throw new Error('文件中多行对应同一移仓记录，请每单仅保留一行；运单拆行文件仅供查看');seen.add(work.id);
+        if(values.slice(RELOCATION_UPDATE_HEADERS.length).some(value=>String(value??'').trim()))throw new Error('原模板19列之外存在内容，请移除新增字段');
         const expected=relocationUpdateValues(work);
-        for(let col=0;col<expected.length;col++) if(![11,12].includes(col) && String(values[col]??'')!==String(expected[col]??'')) throw new Error('只读字段“'+RELOCATION_UPDATE_HEADERS[col]+'”已修改或过期，请重新下载模板');
-        const rma=String(values[11]??'').trim(),address=String(values[12]??'').trim();
+        for(let col=0;col<expected.length;col++) if(![10,11].includes(col) && upgradeCellValue(values[col],col,table.date1904)!==upgradeCellValue(expected[col],col)) throw new Error('只读字段“'+RELOCATION_UPDATE_HEADERS[col]+'”与系统当前值不一致，请重新导出核对');
+        const rma=String(values[10]??'').trim(),address=String(values[11]??'').trim();
         if(rma===(work.rma??'') && address===(work.originalRelocationAddress??'')){unchangedCount++;continue;}
         if(work.status!=='awaiting_procurement')throw new Error('已进入后续环节或已取消，不能用旧模板覆盖');
         if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('RMA 不能为空或模板说明');
         const processed=processRelocationAddress(work.store,address);
         rows.push({sourceRow,data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address,before:{rma:work.rma??'',relocationAddress:work.originalRelocationAddress??'',status:work.statusText},afterStatus:'待运营填写订单号'});
-      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行，移仓单号 '+(workNo||'未填写')+'：'+error.message}); }
+      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行'+(workNo?'，移仓单号 '+workNo:'')+'：'+error.message+'；本批未更新'}); }
     }
 
     const fileSha256=hashBuffer(body),templateSha256=hashTemplate(RELOCATION_UPDATE_HEADERS);
@@ -666,44 +678,20 @@ async function handleRelocationTemplate(request,response,pathname,role) {
   }
   if(pathname.endsWith('/import') && request.method==='POST') {
     const payload=await parseJsonRequest(request);
-    for(const row of payload.rows??[]) await requireRelocationSourceVisibility(inventory.getRelocationWorkItem(Number(row.data.id)),role);
+    for(const row of payload.rows??[]){
+      const work=inventory.getRelocationWorkItem(Number(row.data.id));
+      if(!work)throw new BusinessError(404,'relocation_work_not_found','原移仓记录已不存在，请重新预览');
+      await requireRelocationSourceVisibility(work,role);
+      const permission=await categoryPermissions(role,work.category);
+      if(!['summary','detail','expand','actions'].every(key=>permission[key]))throw new BusinessError(403,'action_forbidden','当前角色已无权访问或更新该移仓记录，请重新预览');
+    }
     sendJson(response,200,inventory.importRelocationUpdates({...payload,role}));return;
   }
   throw new BusinessError(404,'route_not_found','找不到模板操作');
 }
 
-function relocationUpdateWorkbook(records, note = "仅填写 RMA 和原始移仓地址；移仓单号及其他字段只读。") {
-  const rows = [[note], RELOCATION_UPDATE_HEADERS, ...records.map(relocationUpdateValues)];
-  const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
-  const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
-    const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 1 ? ' s="1"' : r > 1 && [11,12].includes(c) ? ' s="2"' : '';
-    return value == null || value === "" ? '<c r="' + ref + '"' + style + '/>' : typeof value === "number"
-      ? '<c r="' + ref + '"><v>' + value + '</v></c>'
-      : '<c r="' + ref + '" t="inlineStr"' + style + '><is><t xml:space="preserve">' + xml(value) + '</t></is></c>';
-  }).join('') + '</row>').join('');
-  const widths = RELOCATION_UPDATE_HEADERS.map((_,i)=>i===12?55:22);
-  const entries = [
-    ["[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
-    ["_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
-    ["xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="移仓升级" sheetId="1" r:id="rId1"/></sheets></workbook>'],
-    ["xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
-    ["xl/styles.xml", '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="0" fillId="0" borderId="0" xfId="0" applyProtection="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/><protection locked="0"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
-    ["xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:U' + rows.length + '"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="2" topLeftCell="A3" state="frozen"/></sheetView></sheetViews><cols>' + widths.map((width, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + width + '" customWidth="1"/>').join('') + '</cols><sheetData>' + sheetRows + '</sheetData><sheetProtection sheet="1" objects="1" scenarios="1" selectLockedCells="0" selectUnlockedCells="0"/></worksheet>'],
-  ];
-  const locals = [], directory = []; let offset = 0;
-  for (const [file, text] of entries) {
-    const name = Buffer.from(file), source = Buffer.from(text), compressed = zlib.deflateRawSync(source), crc = crc32(source);
-    const local = Buffer.alloc(30 + name.length);
-    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8); local.writeUInt16LE(0x21, 12);
-    local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(source.length, 22); local.writeUInt16LE(name.length, 26); name.copy(local, 30);
-    const central = Buffer.alloc(46 + name.length);
-    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10); central.writeUInt16LE(0x21, 14);
-    central.writeUInt32LE(crc, 16); central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(source.length, 24); central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42); name.copy(central, 46);
-    locals.push(local, compressed); directory.push(central); offset += local.length + compressed.length;
-  }
-  const central = Buffer.concat(directory), end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, central, end]);
+function relocationUpdateWorkbook(records,waybillExport=false) {
+  return upgradeWorkbook('移仓升级',records.map(relocationUpdateValues),crc32,waybillExport);
 }
 
 async function handleApprovalsApi(request, response, pathname) {
@@ -1284,7 +1272,13 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
       const parsed = parseCsv(buffer);
       return { rows: parsed.rows, sheetName: "", sheetCandidates: [], encoding: parsed.encoding, date1904: false };
     }
-    const metadata = readZipEntries(buffer, ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"]);
+    const metadata = readZipEntries(buffer, ["xl/workbook.xml", "xl/_rels/workbook.xml.rels", "docProps/custom.xml"]);
+    const custom=metadata.get('docProps/custom.xml')?.toString('utf8')??'';
+    for(const property of custom.matchAll(/<(?:\w+:)?property\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?property>/g)){
+      if(attr(property[1],'name')==='AsterWorkbookPurpose'&&/<(?:\w+:)?lpwstr\b[^>]*>relocation-waybills-view-only<\/(?:\w+:)?lpwstr>/.test(property[2])){
+        throw new BusinessError(422,'waybill_view_only','这是运单导出文件，仅供查看，不能用于导入更新；请使用数据流导出文件或更新模板');
+      }
+    }
     const sheets = readWorkbookSheets(metadata).filter((sheet) => sheet.state === "visible");
     const workbookProperties = metadata.get("xl/workbook.xml").toString("utf8").match(/<(?:\w+:)?workbookPr\b([^>]*)>/)?.[1] || "";
     const date1904 = ["1", "true"].includes(attr(workbookProperties, "date1904"));
@@ -1297,8 +1291,9 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
     const candidates = (selected.length ? selected : sheets).map((sheet) => {
       const sheetEntry = readZipEntries(buffer, [sheet.path]).get(sheet.path);
       if (!sheetEntry) throw new BusinessError(400, "invalid_xlsx_workbook", `工作表“${sheet.name}”的数据文件缺失，请用 Excel 重新保存后上传`);
-      const rows = parseSheet(sheetEntry.toString("utf8"), shared);
-      return { ...sheet, rows, score: Math.max(0, ...rows.map((row) => headerScore(row, headerGroups))) };
+      const sheetXml=sheetEntry.toString("utf8"),rows = parseSheet(sheetXml, shared);
+      const merges=[...sheetXml.matchAll(/<(?:\w+:)?mergeCell\b([^>]*)\/?\s*>/g)].map(match=>attr(match[1],'ref'));
+      return { ...sheet, rows, merges, score: Math.max(0, ...rows.map((row) => headerScore(row, headerGroups))) };
     });
     let chosen = candidates[0];
     if (!selected.length && candidates.length > 1) {
@@ -1307,27 +1302,55 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
       if (best.length > 1) throw new BusinessError(422, "sheet_selection_required", "文件中有多个数据工作表，请将需要导入的工作表单独保存后上传", { sheetCandidates: candidates.map((candidate) => ({ name: candidate.name, score: candidate.score })) });
       if (best.length === 1) chosen = best[0];
     }
-    return { rows: chosen.rows, sheetName: chosen.name, sheetCandidates: sheets.map((sheet) => sheet.name), encoding: "xlsx", date1904 };
+    return { rows: chosen.rows, merges:chosen.merges, sheetName: chosen.name, sheetCandidates: sheets.map((sheet) => sheet.name), encoding: "xlsx", date1904 };
   } catch (error) {
     if (error instanceof BusinessError) throw error;
     throw new BusinessError(400, "invalid_table_file", error instanceof Error ? error.message : "文件解析失败，请确认是有效的 XLSX/CSV");
   }
 }
 
+function validateUpgradeTemplate(table,headers,startRow){
+  const nonempty=value=>String(value??'').trim()!=='';
+  const expectedMerges=startRow===4?headers.map((_,i)=>String.fromCharCode(65+i)+'2:'+String.fromCharCode(65+i)+'3'):[];
+  if(table.rows[0]?.some(nonempty)||headers.some((label,i)=>String(table.rows[1]?.[i]??'').trim()!==label)
+    ||table.rows[1]?.slice(headers.length).some(nonempty)||startRow===4&&table.rows[2]?.some(nonempty)
+    ||JSON.stringify([...table.merges].sort())!==JSON.stringify(expectedMerges.sort())){
+    throw new BusinessError(422,'upgrade_template_layout','工作表“'+table.sheetName+'”须保持原模板：第1行为空，第2'+(startRow===4?'—3行纵向合并':'行')+'表头，共'+headers.length+'列，第'+startRow+'行起为数据；请使用数据流导出文件或更新模板');
+  }
+}
+function upgradeCellValue(value,column,date1904=false){
+  const raw=String(value??'');
+  if(column===3)return normalizeTransitDate(raw,undefined,date1904)||raw;
+  if(column===6&&raw.trim()!==''&&Number.isSafeInteger(Number(raw)))return String(Number(raw));
+  return raw;
+}
+function upgradeBusinessKey(values,columns,date1904=false){
+  return JSON.stringify(columns.map(column=>upgradeCellValue(values[column],column,date1904)));
+}
+function groupUpgradeRecords(records,valuesFor,columns){
+  const groups=new Map();
+  for(const record of records){
+    const key=upgradeBusinessKey(valuesFor(record),columns);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(record);
+  }
+  return groups;
+}
+
 async function handleTransferUpdate(request,response,pathname,role,stage) {
   if(pathname.endsWith('/export')&&request.method==='GET'){
     if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出升级数据流');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-数据流.xlsx')});
-    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades(),null,TRANSFER_UPGRADE_FIELDS,crc32));return;
+    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades(),TRANSFER_UPGRADE_FIELDS,crc32));return;
   }
   if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
   if(!Object.hasOwn(TRANSFER_STAGES,stage))throw new BusinessError(422,'transfer_stage','请选择RMA、实际清点数量或升级进度');
-  const fields=TRANSFER_UPGRADE_FIELDS,headers=['转仓单号',...fields.map(([,label])=>label),'记录版本'];
+  const fields=TRANSFER_UPGRADE_FIELDS,headers=fields.map(([,label])=>label);
   const records=inventory.getTransferUpgrades();
   if(pathname.endsWith('/template')&&request.method==='GET') {
     const selected=records.filter(r=>stage==='rma'||stage==='count'&&r.data.rma||stage==='progress'&&r.data.countedQuantity!=='');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-'+TRANSFER_STAGES[stage]+'更新模板.xlsx')});
-    response.end(transferUpdateWorkbook(selected,stage,fields,crc32));return;
+    response.end(transferUpdateWorkbook(selected,fields,crc32));return;
   }
   if(pathname.endsWith('/import')&&request.method==='POST'){
     sendJson(response,200,inventory.updateTransferUpgrades({...await parseJsonRequest(request),role,stage}));return;
@@ -1336,20 +1359,25 @@ async function handleTransferUpdate(request,response,pathname,role,stage) {
   const body=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'upload.xlsx');
   if(path.extname(fileName).toLowerCase()!=='.xlsx')throw new BusinessError(422,'xlsx_required','请上传转仓升级更新模板XLSX');
   const table=readTableRows(body,fileName,{sheetName:'转仓升级',headerGroups:headers.map(x=>[x])});
-  if(headers.some((x,i)=>String(table.rows[1]?.[i]??'')!==x)||table.rows[2]?.some(x=>String(x??'').trim()))throw new BusinessError(422,'transfer_update_headers','工作表“转仓升级”第2—3行表头不符，请下载带转仓单号的更新模板');
+  validateUpgradeTemplate(table,headers,4);
+  const identityColumns=[0,1,2,3,4,5,6,7,8],candidates=groupUpgradeRecords(records,r=>transferUpdateValues(r,fields),identityColumns);
   const errors=[],rows=[],seen=new Set();let unchangedCount=0;
   for(let i=3;i<table.rows.length;i++){
     const values=table.rows[i],sourceRow=i+1;if(!values.some(x=>String(x??'').trim()))continue;
-    const no=String(values[0]??'');
+    let no='';
     try {
-      if(seen.has(no))throw new Error('“转仓单号”：重复，每单仅保留一行');seen.add(no);
-      const record=records.find(r=>r.documentNo===no);if(!record)throw new Error('“转仓单号”：不存在，不能新增记录');
-      const editable=TRANSFER_EDITABLE[stage].map(key=>1+fields.findIndex(([k])=>k===key)),expected=transferUpdateValues(record,fields);
-      for(let c=0;c<headers.length;c++)if(!editable.includes(c)&&String(values[c]??'')!==String(expected[c]??''))throw new Error('“'+headers[c]+'”：只读字段已修改或过期，请重新下载');
+      const matched=candidates.get(upgradeBusinessKey(values,identityColumns,table.date1904))??[];
+      if(!matched.length)throw new Error('未找到业务资料一致且有权访问的原记录；请核对原模板前9项资料');
+      if(matched.length!==1)throw new Error('业务资料匹配到 '+matched.length+' 条独立转仓记录，无法唯一定位；内容相同的记录仍分别保留，原模板不能分别更新');
+      const record=matched[0];no=record.documentNo;
+      if(seen.has(no))throw new Error('文件中多行对应同一转仓记录，请每单仅保留一行');seen.add(no);
+      if(values.slice(headers.length).some(value=>String(value??'').trim()))throw new Error('原模板15列之外存在内容，请移除新增字段');
+      const editable=TRANSFER_EDITABLE[stage].map(key=>fields.findIndex(([k])=>k===key)),expected=transferUpdateValues(record,fields);
+      for(let c=0;c<headers.length;c++)if(!editable.includes(c)&&upgradeCellValue(values[c],c,table.date1904)!==upgradeCellValue(expected[c],c))throw new Error('“'+headers[c]+'”：只读字段与系统当前值不一致，请重新导出核对');
       if(editable.every(c=>String(values[c]??'')===String(expected[c]??''))){unchangedCount++;continue;}
-      const data={documentNo:no,revision:record.revision,stage,...Object.fromEntries(TRANSFER_EDITABLE[stage].map(k=>[k,String(values[1+fields.findIndex(([key])=>key===k)]??'')])),reversals:[]};
+      const data={documentNo:no,revision:record.revision,stage,...Object.fromEntries(TRANSFER_EDITABLE[stage].map(k=>[k,String(values[fields.findIndex(([key])=>key===k)]??'')])),reversals:[]};
       const item={sourceRow,data},validated=inventory.validateTransferUpdate(item,stage,{preview:true});rows.push({...item,before:validated.before,after:validated.after,quantityDelta:validated.delta,receiptBatches:record.receiptBatches});
-    }catch(error){errors.push({sourceRow,message:error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行，转仓单号 '+no+'，'+error.message});}
+    }catch(error){errors.push({sourceRow,message:(error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行'+(no?'，转仓单号 '+no:'')+'：'+error.message)+'；本批未更新'});}
   }
   const fileSha256=hashBuffer(body),templateSha256=hashTemplate([stage,...headers]),proof=errors.length||!rows.length?null:inventory.createTransitPreviewToken({kind:'transfer_update',role,fileName,fileHash:fileSha256,templateHash:templateSha256,payload:{rows}});
   sendJson(response,200,{ok:true,fileName,stage,fileSha256,templateSha256,rows,errors,unchangedCount,previewToken:proof?.token});
