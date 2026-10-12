@@ -13,7 +13,7 @@ import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/te
 const root=path.resolve(import.meta.dirname,'../..'),out=path.join(root,'.test-output/inquiry-clear'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-inquiry-clear-'));
 await fs.mkdir(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 let db=new InventoryDatabase(state),child,browser,page,other,failure;
-const port=await freePort(),base=`http://127.0.0.1:${port}`,checks=[],errors=[],downloads=[],rid=()=>crypto.randomUUID(),route='/api/approvals/inquiries/clear',button='询库数据流-手动清空';
+const port=await freePort(),base=`http://127.0.0.1:${port}`,checks=[],errors=[],downloads=[],rid=()=>crypto.randomUUID(),route='/api/approvals/inquiries/clear',button='清空询库列表';
 const check=name=>{checks.push(name);console.log('PASS '+name);},common=r=>({expectedRevision:r.revision,requestId:rid()});
 const snapshot=(connection=db.db)=>Object.fromEntries(connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,connection.prepare(`SELECT * FROM "${name}"`).all().map(r=>({...r})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]));
 const business=()=>{const s=snapshot();delete s.system_meta;delete s.idempotency_requests;for(const r of s.inquiry_documents)delete r.approval_hidden;return s;};

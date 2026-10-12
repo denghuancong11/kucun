@@ -54,7 +54,7 @@ export function TransferUpgradeImport({ role, children }: { role: Role; children
 export function TransferUpgradeList({ role }: { role: Role }) {
   const query = useQuery({ queryKey: ["upgrades", "transfer", role], queryFn: () => fetchTransferUpgrades(role) });
   const rows = query.data?.records ?? [];
-  return <>{role === "logistics" && <TransferUpdate role={role} />}<Panel title="转仓升级记录" actions={<>{['admin','purchasing','logistics'].includes(role)&&<FeedbackButton label="导出转仓数据流" pendingLabel="正在导出…" doneLabel="导出完成" className="btn btn-ghost btn-sm" onAction={()=>exportUpgradeFlow(role,'transfer')} successText="转仓数据流导出完成。"/>}<FeedbackButton label="刷新" pendingLabel="正在刷新…" doneLabel="刷新完成" className="btn btn-ghost btn-sm" onAction={()=>query.refetch({throwOnError:true})}/></>}>
+  return <>{role === "logistics" && <TransferUpdate role={role} />}<Panel title="转仓升级记录" actions={<>{['admin','purchasing','logistics'].includes(role)&&<FeedbackButton label="导出转仓升级" pendingLabel="正在导出…" doneLabel="导出完成" className="btn btn-ghost btn-sm" onAction={()=>exportUpgradeFlow(role,'transfer')} successText="转仓升级导出完成。"/>}<FeedbackButton label="刷新" pendingLabel="正在刷新…" doneLabel="刷新完成" className="btn btn-ghost btn-sm" onAction={()=>query.refetch({throwOnError:true})}/></>}>
     {query.isError && <div className="callout callout-danger" role="alert">转仓升级读取失败：{query.error.message}</div>}
     {query.isLoading ? <p>加载中…</p> : rows.length === 0 ? <EmptyState title="暂无转仓升级记录" /> : <div className="table-wrap scroll-x">
       <table className="data-table transfer-upgrade-table" aria-label="转仓升级记录"><thead><tr><th>转仓单号</th>{TRANSFER_UPGRADE_FIELDS.map(([key, label]) => <th key={key}>{label}</th>)}</tr></thead>

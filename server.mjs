@@ -620,9 +620,9 @@ async function handleRelocationWaybills(request,response,pathname,role) {
 
 async function handleRelocationTemplate(request,response,pathname,role) {
   if(pathname.endsWith('/export') && request.method==='GET') {
-    if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出升级数据流');
+    if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出移仓升级');
     const records=await relocationRecordsForRole(role,new URL(request.url,'http://localhost').searchParams);
-    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-数据流.xlsx')});
+    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级.xlsx')});
     response.end(relocationUpdateWorkbook(records));return;
   }
   if(role!=='logistics') throw new BusinessError(403,'upgrade_logistics_required','仅物流可下载及导入RMA、移仓地址更新模板');
@@ -697,7 +697,7 @@ function relocationUpdateWorkbook(records,waybillExport=false) {
 async function handleApprovalsApi(request, response, pathname) {
   const role = requireRole(request);
   if (pathname === "/api/approvals/inquiries/clear" && request.method === "POST") {
-    if (!["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员、采购和物流可手动清空询库显示");
+    if (!["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_clear_forbidden", "仅管理员、采购和物流可清空询库列表");
     const payload = await parseJsonRequest(request);
     sendJson(response, 200, inventory.clearInquiryDisplay({ role, requestId: payload.requestId }));
     return true;
@@ -1276,7 +1276,7 @@ function readTableRows(buffer, fileName, { sheetName = "", headerGroups = TRANSI
     const custom=metadata.get('docProps/custom.xml')?.toString('utf8')??'';
     for(const property of custom.matchAll(/<(?:\w+:)?property\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?property>/g)){
       if(attr(property[1],'name')==='AsterWorkbookPurpose'&&/<(?:\w+:)?lpwstr\b[^>]*>relocation-waybills-view-only<\/(?:\w+:)?lpwstr>/.test(property[2])){
-        throw new BusinessError(422,'waybill_view_only','这是运单导出文件，仅供查看，不能用于导入更新；请使用数据流导出文件或更新模板');
+        throw new BusinessError(422,'waybill_view_only','这是运单导出文件，仅供查看，不能用于导入更新；请使用移仓升级、转仓升级导出文件或更新模板');
       }
     }
     const sheets = readWorkbookSheets(metadata).filter((sheet) => sheet.state === "visible");
@@ -1315,7 +1315,7 @@ function validateUpgradeTemplate(table,headers,startRow){
   if(table.rows[0]?.some(nonempty)||headers.some((label,i)=>String(table.rows[1]?.[i]??'').trim()!==label)
     ||table.rows[1]?.slice(headers.length).some(nonempty)||startRow===4&&table.rows[2]?.some(nonempty)
     ||JSON.stringify([...table.merges].sort())!==JSON.stringify(expectedMerges.sort())){
-    throw new BusinessError(422,'upgrade_template_layout','工作表“'+table.sheetName+'”须保持原模板：第1行为空，第2'+(startRow===4?'—3行纵向合并':'行')+'表头，共'+headers.length+'列，第'+startRow+'行起为数据；请使用数据流导出文件或更新模板');
+    throw new BusinessError(422,'upgrade_template_layout','工作表“'+table.sheetName+'”须保持原模板：第1行为空，第2'+(startRow===4?'—3行纵向合并':'行')+'表头，共'+headers.length+'列，第'+startRow+'行起为数据；请使用'+table.sheetName+'导出文件或更新模板');
   }
 }
 function upgradeCellValue(value,column,date1904=false){
@@ -1339,8 +1339,8 @@ function groupUpgradeRecords(records,valuesFor,columns){
 
 async function handleTransferUpdate(request,response,pathname,role,stage) {
   if(pathname.endsWith('/export')&&request.method==='GET'){
-    if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出升级数据流');
-    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-数据流.xlsx')});
+    if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出转仓升级');
+    response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级.xlsx')});
     response.end(transferUpdateWorkbook(inventory.getTransferUpgrades(),TRANSFER_UPGRADE_FIELDS,crc32));return;
   }
   if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');

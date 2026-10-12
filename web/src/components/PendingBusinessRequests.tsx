@@ -8,7 +8,7 @@ const actionNames: Array<[RegExp, string]> = [
   [/^\/api\/upgrades\/relocation-update\/import(?:\?|$)/, "移仓RMA和地址批量更新"],
   [/^\/api\/transfer-upgrades\/update\/import(?:\?|$)/, "转仓升级办理"],
   [/^\/api\/transfer-upgrades\/import$/, "转仓升级导入"],
-  [/^\/api\/approvals\/inquiries\/clear$/, "询库数据流-手动清空"],
+  [/^\/api\/approvals\/inquiries\/clear$/, "清空询库列表"],
   [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
   [/^\/api\/allocations$/, "调拨录入"], [/\/allocations\/\d+\/review$/, "调拨审核"], [/\/allocations\/\d+\/confirm$/, "调拨完成"],
   [/^\/api\/upgrades\/direct$/, "在库升级发起"], [/\/upgrades\/direct\/\d+\/complete$/, "在库升级入库"], [/\/upgrades\/relocations\/\d+\/complete$/, "移仓升级入库"],

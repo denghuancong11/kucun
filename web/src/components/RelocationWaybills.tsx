@@ -4,7 +4,7 @@ import { confirmRelocationWaybills, downloadRelocationWaybills, fetchRelocationW
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import type { Role } from "../types";
 import { createRequestId } from "../utils/ids";
-import { EmptyState, FeedbackButton, Panel } from "./ui";
+import { EmptyState, Panel } from "./ui";
 
 export function RelocationWaybills({role,model,version,source}:{role:Role;model:string;version:string;source:string}) {
   const exportScope=useRef('');
@@ -30,7 +30,7 @@ export function RelocationWaybills({role,model,version,source}:{role:Role;model:
   };
   const canExport=['admin','purchasing','logistics','assistant-1','assistant-2'].includes(role);
   return <Panel title="移仓运单" actions={canExport?<button className="btn btn-ghost btn-sm" aria-label="运单号导出" disabled={downloading||!!pending||action.disabled} onClick={()=>void download()}>{pending?'下载已触发，待确认':downloading?'正在导出…':doneScope===scopeKey?'导出完成':'运单号导出'}</button>:undefined}>
-    <div className="transit-toolbar"><label className="field"><span>导出状态</span><select aria-label="运单导出状态" value={status} disabled={downloading} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部</option><option value="exported">已导出</option><option value="unexported">未导出</option></select></label><FeedbackButton key={scopeKey} label="刷新运单" pendingLabel="正在刷新…" doneLabel="刷新完成" className="btn btn-ghost btn-sm" onAction={()=>query.refetch({throwOnError:true})}/></div>
+    <div className="transit-toolbar"><label className="field"><span>导出状态</span><select aria-label="运单导出状态" value={status} disabled={downloading} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部</option><option value="exported">已导出</option><option value="unexported">未导出</option></select></label></div>
     {notice&&doneScope===scopeKey&&<p role="status">{notice}</p>}{downloadError&&exportScope.current===scopeKey&&<p className="dialog-error" role="alert">{downloadError}</p>}
     {pending&&<div className="callout"><p role="alert">文件已下载，导出状态尚未确认。{action.error}</p><button className="btn btn-primary" disabled={action.busy} onClick={()=>void confirm(pending)}>{action.busy?'正在确认…':'重试本次导出确认'}</button></div>}
     {query.isError&&<p className="dialog-error" role="alert">运单读取失败：{query.error.message}</p>}

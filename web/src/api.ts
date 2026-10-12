@@ -461,10 +461,11 @@ export async function downloadTransferUpdate(role:Role,stage:TransferStage){
 }
 
 export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',filters?:{model:string;version:string;source:string}) {
+ const exportName=kind==='relocation'?'移仓升级':'转仓升级';
  const query=filters?'?'+new URLSearchParams(filters).toString():'';
  const response=await fetch((kind==='relocation'?'/api/upgrades/relocation-update/export':'/api/transfer-upgrades/update/export')+query,{cache:'no-store',headers:{'x-role':role}});
- if(!response.ok)throw new Error((await response.json()).error||'数据流导出失败，请重新尝试');
- const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=(kind==='relocation'?'移仓升级':'转仓升级')+'-数据流.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ if(!response.ok)throw new Error((await response.json()).error||exportName+'导出失败');
+ const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=exportName+'.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 export type RelocationWaybillFilters={model:string;version:string;source:string;status:'all'|'exported'|'unexported'};
