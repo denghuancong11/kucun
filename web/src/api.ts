@@ -440,8 +440,10 @@ export function previewRelocationUpdate(role:Role,file:File):Promise<RelocationU
 export function importRelocationUpdate(role:Role,payload:unknown):Promise<unknown> {
   return requestJson('/api/upgrades/relocation-update/import',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
 }
-export async function downloadRelocationTemplate(role:Role) {
-  const response=await fetch('/api/upgrades/relocation-update/template',{cache:'no-store',headers:{'x-role':role}});
+export type RelocationFilters={model:string;version:string;source:string;workflowStatus:string};
+export type TransferFilters={model:string;version:string;status:string};
+export async function downloadRelocationTemplate(role:Role,filters?:RelocationFilters) {
+  const response=await fetch('/api/upgrades/relocation-update/template'+(filters?'?'+new URLSearchParams(filters):''),{cache:'no-store',headers:{'x-role':role}});
   if(!response.ok)throw new Error((await response.json()).error || '更新模板读取失败');
   const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download='移仓升级-更新模板.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -451,12 +453,12 @@ export const transferStageLabels:Record<TransferStage,string>={rma:'RMA',count:'
 export type TransferUpdatePreview = {unchangedCount:number;fileName:string;stage:TransferStage;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{documentNo:string;revision:number;stage:TransferStage;reversals:{batchKey:string;quantity:number}[]};before:import('./types').TransferUpgradeData;after:import('./types').TransferUpgradeData;quantityDelta:number;receiptBatches:import('./types').TransferUpgradeRecord['receiptBatches']}[]};
 export function previewTransferUpdate(role:Role,stage:TransferStage,file:File):Promise<TransferUpdatePreview>{return requestJson('/api/transfer-upgrades/update/preview?stage='+stage,role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});}
 export function importTransferUpdate(role:Role,stage:TransferStage,payload:unknown):Promise<unknown>{return requestJson('/api/transfer-upgrades/update/import?stage='+stage,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});}
-export async function downloadTransferUpdate(role:Role,stage:TransferStage){
- const r=await fetch('/api/transfer-upgrades/update/template?stage='+stage,{cache:'no-store',headers:{'x-role':role}});if(!r.ok)throw new Error((await r.json()).error||'模板读取失败');
+export async function downloadTransferUpdate(role:Role,stage:TransferStage,filters?:TransferFilters){
+ const r=await fetch('/api/transfer-upgrades/update/template?'+new URLSearchParams({stage,...filters}),{cache:'no-store',headers:{'x-role':role}});if(!r.ok)throw new Error((await r.json()).error||'模板读取失败');
  const url=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=url;a.download='转仓升级-'+transferStageLabels[stage]+'更新模板.xlsx';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',filters?:{model:string;version:string;source:string}) {
+export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',filters?:RelocationFilters|TransferFilters) {
  const exportName=kind==='relocation'?'移仓升级':'转仓升级';
  const query=filters?'?'+new URLSearchParams(filters).toString():'';
  const response=await fetch((kind==='relocation'?'/api/upgrades/relocation-update/export':'/api/transfer-upgrades/update/export')+query,{cache:'no-store',headers:{'x-role':role}});
@@ -464,7 +466,7 @@ export async function exportUpgradeFlow(role:Role,kind:'relocation'|'transfer',f
  const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=exportName+'.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-export type RelocationWaybillFilters={model:string;version:string;source:string;status:'all'|'exported'|'unexported'};
+export type RelocationWaybillFilters=RelocationFilters & {status:'all'|'exported'|'unexported'};
 export type RelocationWaybill={workNo:string;model:string;fnsku:string;store:string;orderNo:string;carrier:string;trackingNo:string;quantity:number;firstExportedAt:string|null};
 export function fetchRelocationWaybills(role:Role,filters:RelocationWaybillFilters):Promise<{ok:true;rows:RelocationWaybill[];sync:SyncState}> {
  return requestJson('/api/upgrades/relocation-waybills?'+new URLSearchParams(filters),role);

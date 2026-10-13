@@ -4458,6 +4458,10 @@ export class InventoryDatabase {
       shippingAt: row.shipping_at ?? null,
       cancelledByRole: row.cancelled_by_role ?? null,
       cancelledAt: row.cancelled_at ?? null,
+      history: this.db.prepare(`SELECT id,event_type,role,occurred_at,reason,payload_json FROM document_events
+        WHERE event_type LIKE 'upgrade_relocation_%' AND (json_extract(payload_json,'$.workId')=?
+          OR json_extract(payload_json,'$.relocationId')=?) ORDER BY id`).all(id,row.relocation_id)
+        .map(event=>({id:Number(event.id),type:event.event_type,role:event.role,at:event.occurred_at,reason:event.reason,payload:JSON.parse(event.payload_json)})),
       revision: Number(row.revision),
       updatedAt: row.updated_at,
     };
@@ -4467,13 +4471,13 @@ export class InventoryDatabase {
     return this.relocationWorkRecord(id);
   }
 
-  getRelocationWorkItems({ visibleGroup = null } = {}) {
+  getRelocationWorkItems({ visibleGroup = null, includeHistory = false } = {}) {
     const group = String(visibleGroup ?? "").trim();
     return this.db.prepare(`
       SELECT id FROM upgrade_relocation_work_items
-      WHERE status IN ('awaiting_procurement', 'awaiting_operation', 'awaiting_shipping')
+      WHERE ? OR status IN ('awaiting_procurement', 'awaiting_operation', 'awaiting_shipping')
       ORDER BY updated_at, id
-    `).all().map((row) => this.relocationWorkRecord(row.id)).filter((row) => (
+    `).all(Number(includeHistory)).map((row) => this.relocationWorkRecord(row.id)).filter((row) => (
       row && !(group && row.department !== group)
     ));
   }
@@ -4607,7 +4611,7 @@ export class InventoryDatabase {
     return {
       directSources: this.getDirectUpgradeSources({ visibleGroup, scopeDirectByTeam }),
       relocationCandidates: this.getRelocationCandidates({ visibleGroup }),
-      relocationWorkItems: this.getRelocationWorkItems({ visibleGroup }),
+      relocationWorkItems: this.getRelocationWorkItems({ visibleGroup, includeHistory: true }),
       upgrades: this.getUpgrades({ visibleGroup, scopeDirectByTeam }),
       sync: this.syncState(),
     };
@@ -4846,7 +4850,7 @@ export class InventoryDatabase {
         rma: fields.rma, originalAddress: fields.relocationAddress, processedAddress: processed.address, addressMapping: processed,
         onHandDelta: 0, lockedDelta: 0, requestId,
       });
-      return { ok: true, workItem: record };
+      return { ok: true, workItem: this.relocationWorkRecord(workId) };
 
   }
 
@@ -4891,7 +4895,7 @@ export class InventoryDatabase {
         department: record.department, team: record.department, quantity: Number(row.source_quantity_before),
         onHandDelta: 0, lockedDelta: 0, requestId,
       });
-      return { ok: true, workItem: record, ...(onSaved ? {automaticSync:onSaved(record)} : {}) };
+      return { ok: true, workItem: this.relocationWorkRecord(workId), ...(onSaved ? {automaticSync:onSaved(record)} : {}) };
     });
   }
 

@@ -1,20 +1,20 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { confirmRelocationWaybills, downloadRelocationWaybills, fetchRelocationWaybills, type RelocationWaybillFilters } from "../api";
+import { confirmRelocationWaybills, downloadRelocationWaybills, fetchRelocationWaybills, type RelocationWaybillFilters, type RelocationFilters } from "../api";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import type { Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { EmptyState, Panel } from "./ui";
 
-export function RelocationWaybills({role,model,version,source}:{role:Role;model:string;version:string;source:string}) {
+export function RelocationWaybills({role,filters:scope}:{role:Role;filters:RelocationFilters}) {
   const exportScope=useRef('');
   const [doneScope,setDoneScope]=useState('');
   const [status,setStatus]=useState<RelocationWaybillFilters['status']>('all');
   const [downloading,setDownloading]=useState(false),running=useRef(false);
   const [notice,setNotice]=useState(''),[downloadError,setDownloadError]=useState('');
   const [pending,setPending]=useState<{exportToken:string;requestId:string;count:number}|null>(null);
-  const scopeKey=JSON.stringify([model,version,source,status]);
-  const filters={model,version,source,status},client=useQueryClient();
+  const scopeKey=JSON.stringify([scope,status]);
+  const filters={...scope,status},client=useQueryClient();
   const query=useQuery({queryKey:['upgrades','waybills',role,filters],queryFn:()=>fetchRelocationWaybills(role,filters)});
   const action=useBusinessAction(()=>client.invalidateQueries({queryKey:['upgrades']}, {throwOnError:true}),message=>{setPending(null);setDoneScope(exportScope.current);setNotice(message);});
   const confirm=(confirmation:NonNullable<typeof pending>)=>action.perform({execute:()=>confirmRelocationWaybills(role,{exportToken:confirmation.exportToken,requestId:confirmation.requestId}),message:'导出完成：已确认本次 '+confirmation.count+' 个运单已导出。'});

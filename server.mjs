@@ -589,7 +589,8 @@ async function relocationRecordsForRole(role,query) {
   for(const job of dashboard.upgrades.filter(j=>j.kind==='relocation'))for(const row of job.relocations)if(row.workId)works.set(row.workId,inventory.getRelocationWorkItem(row.workId));
   return [...works.values()].filter(w=>w && ['summary','detail','expand'].every(key=>(permissions[w.category]?.[role]??openPermissions)[key])
     && (!query.get('model')||w.model===query.get('model')) && (!query.get('version')||w.sourceVersion===query.get('version'))
-    && query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId)).map(relocationSavedRecord);
+    && (!query.get('source')||query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId))
+    && (!query.get('workflowStatus')||w.status===query.get('workflowStatus'))).map(relocationSavedRecord);
 }
 
 async function handleRelocationWaybills(request,response,pathname,role) {
@@ -628,7 +629,7 @@ async function handleRelocationTemplate(request,response,pathname,role) {
   if(role!=='logistics') throw new BusinessError(403,'upgrade_logistics_required','仅物流可下载及导入RMA、移仓地址更新模板');
   if(pathname.endsWith('/template') && request.method==='GET') {
     const permissions=await loadPermissions();
-    const records=inventory.getRelocationWorkItems().filter(row=>row.status==='awaiting_procurement' && ['summary','detail','expand','actions'].every(key=>(permissions[row.category]?.[role]??openPermissions)[key])).map(relocationSavedRecord);
+    const records=(await relocationRecordsForRole(role,new URL(request.url,'http://localhost').searchParams)).filter(row=>row.status==='awaiting_procurement' && ['summary','detail','expand','actions'].every(key=>(permissions[row.category]?.[role]??openPermissions)[key]));
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-更新模板.xlsx')});
     response.end(relocationUpdateWorkbook(records));return;
   }
@@ -1338,17 +1339,19 @@ function groupUpgradeRecords(records,valuesFor,columns){
 }
 
 async function handleTransferUpdate(request,response,pathname,role,stage) {
+  const query=new URL(request.url,'http://localhost').searchParams;
+  const matches=r=>['model','version','status'].every(key=>!query.get(key)||r.data[key]===query.get(key));
   if(pathname.endsWith('/export')&&request.method==='GET'){
     if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出转仓升级');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级.xlsx')});
-    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades(),TRANSFER_UPGRADE_FIELDS,crc32));return;
+    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades().filter(matches),TRANSFER_UPGRADE_FIELDS,crc32));return;
   }
   if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
   if(!Object.hasOwn(TRANSFER_STAGES,stage))throw new BusinessError(422,'transfer_stage','请选择RMA、实际清点数量或升级进度');
   const fields=TRANSFER_UPGRADE_FIELDS,headers=fields.map(([,label])=>label);
   const records=inventory.getTransferUpgrades();
   if(pathname.endsWith('/template')&&request.method==='GET') {
-    const selected=records.filter(r=>stage==='rma'||stage==='count'&&r.data.rma||stage==='progress'&&r.data.countedQuantity!=='');
+    const selected=records.filter(matches).filter(r=>stage==='rma'||stage==='count'&&r.data.rma||stage==='progress'&&r.data.countedQuantity!=='');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-'+TRANSFER_STAGES[stage]+'更新模板.xlsx')});
     response.end(transferUpdateWorkbook(selected,fields,crc32));return;
   }

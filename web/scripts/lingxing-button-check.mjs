@@ -123,24 +123,24 @@ try {
  const delivered=await submit(a,sync(a),'重试确认');assert.equal(delivered.requestId,unsent);await a.unroute('**/api/lingxing/jobs');await execute('claim');await finishMetric(delivered.id);await label(sync(a),'同步完成',true);check('请求未送达时不自动新增任务，手动确认沿用原编号');
  await a.locator('.approval-expand[aria-expanded="false"]').click();await a.screenshot({path:path.join(output,'metrics-complete.png'),fullPage:true});
  await role(a,'operation-1');await nav(a,'升级库存');
- const row=i=>a.locator(db.getRelocationWorkItem(works[i].id).relocationId?'[data-relocation-id="'+db.getRelocationWorkItem(works[i].id).relocationId+'"]':'[data-relocation-work-id="'+works[i].id+'"]'),log=i=>row(i).locator('.lingxing-sync');
- const choose=async i=>{await a.locator('[data-source-document-no="'+works[i].documentNo+'"] .source-select').click();};
+ const row=i=>a.locator('[data-relocation-work-id="'+works[i].id+'"]'),log=i=>row(i).locator('.lingxing-sync');
+ const choose=async i=>{await a.locator('[data-source-document-no="'+works[i].documentNo+'"] button').filter({hasText:'查看任务'}).click();};
  const logLabel=async(i,text,enabled)=>{await choose(i);return label(log(i),text,enabled);};
  const logSubmit=async(i,text)=>{await choose(i);return submit(a,log(i),text);};
  for(const [who,syncAllowed,shipAllowed]of [['admin',true,false],['assistant-1',true,false],['assistant-2',false,false],['purchasing',true,false],['operation-1',true,true],['operation-2',false,false],['business',false,false]]) {
   await role(a,who);await nav(a,'升级库存');
-  const source=a.locator('[data-source-document-no="'+works[0].documentNo+'"] .source-select');
+  const source=a.locator('[data-source-document-no="'+works[0].documentNo+'"] button').filter({hasText:'查看任务'});
   if(await source.count())await source.click();
   assert.equal(await row(0).locator('.lingxing-sync button').count(),syncAllowed?1:0,who+'同步权限');
   assert.equal(await row(0).getByRole('button',{name:'登记移仓发货',exact:true}).count(),0,who+'无人工发货入口（原发货权限'+shipAllowed+'）');
-  if(syncAllowed){const rect=await row(0).evaluate(e=>({card:e.getBoundingClientRect().right,button:e.querySelector('.relocation-document-head .lingxing-sync button').getBoundingClientRect().right}));assert.ok(rect.card-rect.button<30);}
+  if(syncAllowed){assert.equal(await row(0).locator('td').last().locator('.lingxing-sync button').count(),1);}
  }
- check('六岗位同步与发货权限独立，同步按钮位于当前移仓单资料右上角');
+ check('六岗位同步与发货权限独立，同步按钮位于当前任务操作列');
  await role(a,'operation-1');await nav(a,'升级库存');
  const l1=await logSubmit(0,'同步领星物流'),l2=await logSubmit(1,'同步领星物流');await logLabel(0,'正在同步…',false);await logLabel(1,'正在同步…',false);check('两个移仓物流入口分别排队且不能重复提交');
  assert.equal((await execute('claim')).job.id,l1.id);await logLabel(0,'正在同步…',false);
  const finishLog=id=>execute('finish',{id,capture:{capturedAt:new Date().toISOString(),shipments:[{externalId:'BUTTON-PKG',storeId:'TEST',storeName:'A-US 美国',orderNo:works[0].removalOrderNo,fnsku:common.fnsku,carrier:'UPS',trackingNo:'TRACK-BUTTON',quantity:5,shipDate:'2026-09-10T00:00:00.000Z'}]}});
- await finishLog(l1.id);await logLabel(0,'同步完成',true);await row(0).getByText('TRACK-BUTTON',{exact:true}).first().waitFor();await logLabel(1,'正在同步…',false);check('物流保存成功即自动记入发货5，其他单的同步状态不变');
+ await finishLog(l1.id);await logLabel(0,'同步完成',true);await row(0).getByRole('button',{name:/展开移仓详情/}).click();await a.locator('[data-relocation-detail="'+works[0].id+'"]').getByText('TRACK-BUTTON',{exact:true}).first().waitFor();await logLabel(1,'正在同步…',false);check('物流保存成功即自动记入发货5，其他单的同步状态不变');
  await execute('claim');await execute('finish',{id:l2.id,error:'移除单 BUTTON-ORDER-1 中未找到 FNSKU XBUTTON001，请核对移除单号和升级来源。'});await logLabel(1,'同步失败',true);await logLabel(0,'同步完成',true);
  assert.equal((await api(`/api/lingxing/jobs?action=logistics&workId=${works[1].id}&requestId=${l1.requestId}`,'operation-1')).jobs.length,0);check('物流失败只影响对应流程，查询不能串用另一流程');
  const lAgain=await logSubmit(0,'同步完成');await logLabel(0,'正在同步…',false);assert.notEqual(lAgain.id,l1.id);await execute('claim');await finishLog(lAgain.id);await logLabel(0,'同步完成',true);check('物流完成可再次同步，创建独立任务');
@@ -162,27 +162,27 @@ try {
  assert.equal(relocation.shipped_quantity,5);assert.equal(relocation.fba_remaining_quantity,15);assert.deepEqual(db.getCatalog().models,stockBefore.models);check('包裹自动发货5后来源剩余15，本地在库不变');
  // 当前来源保留第一笔历史发货，再建立同来源第二笔待发货移仓。
  const created=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocation-work-items');
- await a.getByRole('button',{name:'发起移仓升级',exact:true}).click();const secondResult=await(await created).json();assert.equal(secondResult.ok,true);let secondWork=secondResult.workItem;
+ await a.locator('[data-source-document-no="'+works[0].documentNo+'"]').getByRole('button',{name:'发起移仓升级',exact:true}).click();await a.getByRole('dialog').getByRole('button',{name:'确认发起移仓升级',exact:true}).click();const secondResult=await(await created).json();assert.equal(secondResult.ok,true);let secondWork=secondResult.workItem;
  secondWork=db.recordRelocationProcurement({id:secondWork.id,role:"logistics",rma:'第二笔RMA',relocationAddress:relocationAddressFixture,expectedRevision:secondWork.revision,requestId:rid()}).workItem;
  secondWork=db.recordRelocationOperation({id:secondWork.id,role:'operation-1',removalOrderNo:'BUTTON-SECOND-SAME-SOURCE',expectedRevision:secondWork.revision,requestId:rid()}).workItem;
  await role(a,'admin');await nav(a,'升级库存');await choose(0);
- const historic=a.locator('[data-relocation-id="'+relocation.id+'"]'),secondCard=a.locator('[data-relocation-work-id="'+secondWork.id+'"]');
- await historic.waitFor();await secondCard.waitFor();assert.equal(await a.locator('.relocation-document').count(),2);
- assert.equal(await historic.locator('.relocation-document-head .lingxing-sync button').count(),1);
- assert.equal(await secondCard.locator('.relocation-document-head .lingxing-sync button').count(),1);
+ const historic=row(0),secondCard=a.locator('[data-relocation-work-id="'+secondWork.id+'"]');
+ await historic.waitFor();await secondCard.waitFor();assert.equal(await a.locator('[data-relocation-work-id]:visible').count(),2);
+ assert.equal(await historic.locator('.lingxing-sync button').count(),1);
+ assert.equal(await secondCard.locator('.lingxing-sync button').count(),1);
  const beforeHistorySync={stock:db.getCatalog().models,shipped:db.getUpgradeRelocation(relocation.id).shipped_quantity,completed:db.getUpgradeRelocation(relocation.id).completed_quantity};
  const historyJob=await submit(a,historic.locator('.lingxing-sync'),'同步领星物流');assert.equal(historyJob.target.workId,works[0].id);
  await execute('claim');await finishLog(historyJob.id);await label(historic.locator('.lingxing-sync'),'同步完成',true);
- await historic.locator('.package-quantities').filter({hasText:'已用 5'}).waitFor();
+ await historic.getByRole('button',{name:/展开移仓详情/}).click();await a.locator('[data-relocation-detail="'+works[0].id+'"] .package-quantities').filter({hasText:'已用 5'}).waitFor();
  assert.equal(db.relocationExternalShipments(works[0].removalOrderNo,common.fnsku)[0].usedQuantity,5);
  assert.deepEqual(db.getCatalog().models,beforeHistorySync.stock);assert.equal(db.getUpgradeRelocation(relocation.id).shipped_quantity,beforeHistorySync.shipped);assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,beforeHistorySync.completed);
  assert.equal(await secondCard.getByText('TRACK-BUTTON',{exact:true}).count(),0);
  check('同来源两笔移仓各自展示；历史管理员同步绑定原单，已用5不清零、不发货、不入库、不串包裹');
  await a.screenshot({path:path.join(output,'same-source-two-relocations-history-sync.png'),fullPage:true});
  await role(a,'purchasing');await nav(a,'升级库存');
- await choose(0);assert.equal(await a.locator('[data-relocation-id="'+relocation.id+'"] .lingxing-sync').count(),1);const history=a.locator('[data-relocation-id="'+relocation.id+'"]');
+ await choose(0);assert.equal(await row(0).locator('.lingxing-sync').count(),1);await row(0).getByRole('button',{name:'更新升级数量',exact:true}).click();const history=a.getByRole('dialog');
  await history.getByLabel('升级完数量',{exact:true}).fill('5');await history.getByLabel('升级完成版本号',{exact:true}).fill('V21');await history.getByLabel('目标海外仓',{exact:true}).selectOption('SyntheticWarehouseA');
- const completion=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocations/'+relocation.id+'/complete');await history.getByRole('button',{name:'保存升级数量',exact:true}).click();assert.equal((await completion).status(),200);await history.getByText('入库记录：V21 / SyntheticWarehouseA：5',{exact:true}).waitFor();await history.getByRole('button',{name:'完成入库',exact:true}).waitFor({state:'detached'});
+ const completion=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocations/'+relocation.id+'/complete');await history.getByRole('button',{name:'保存升级数量',exact:true}).click();assert.equal((await completion).status(),200);await history.waitFor({state:'hidden'});await row(0).getByRole('button',{name:/展开移仓详情/}).click();await a.locator('[data-relocation-detail="'+works[0].id+'"]').getByRole('table',{name:'移仓入库批次'}).locator('tbody tr').filter({hasText:'V21'}).filter({hasText:'SyntheticWarehouseA'}).waitFor();
  assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,5);assert.equal(db.getCatalog().models.find(m=>m.model==='SYNTH-TONER-001').inStock,stockBefore.models.find(m=>m.model==='SYNTH-TONER-001').inStock+5);check('采购登记5件回库后在库仅增加5件，已用包裹仍为5件');
  // 存储与未知回执专项：实际React、HTTP、任务表；执行端仍是隔离协议样例。
  const recoveryStock=()=>{const catalog=db.getCatalog();return {models:catalog.models.map(({revision,updatedAt,...row})=>row),stockDetails:catalog.stockDetails,inTransitDetails:catalog.inTransitDetails};};

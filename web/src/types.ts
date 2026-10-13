@@ -512,6 +512,7 @@ export interface RelocationExternalItem {
 }
 
 export interface RelocationWorkItem {
+  history: DocumentEvent[];
   originalRelocationAddress: string | null;
   inquiryRecall: InquiryRecallInfo | null;
   id: number;

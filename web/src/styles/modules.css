@@ -830,3 +830,50 @@
 .approval-procurement-cell input, .approval-procurement-cell select { width: 100%; min-width: 0; }
 .inquiry-procurement-form { display: grid; gap: 8px; }
 .transfer-upgrade-table { min-width: 1800px; } .transfer-upgrade-table td { white-space: pre-wrap; } .transfer-upgrade-table small { display: block; }
+.upgrade-board { min-width: 0; }
+.upgrade-board > .panel + .panel { margin-top: 18px; }
+.upgrade-board .upgrade-filters { display: grid; grid-template-columns: minmax(190px, 1.3fr) minmax(140px, .8fr) minmax(210px, 1fr); gap: 14px; margin-bottom: 16px; max-width: 940px; }
+.upgrade-board .upgrade-source-filter { grid-column: 1 / -1; }
+.upgrade-board .upgrade-source-filter select { max-width: 100%; }
+.upgrade-board .upgrade-source-table { min-width: 1050px; }
+.upgrade-board .upgrade-task-table { min-width: 1150px; }
+.upgrade-board .data-table td { overflow-wrap: anywhere; }
+.upgrade-board .upgrade-task-table > thead > tr > th:first-child { width: 36px; }
+.upgrade-board tr[hidden] { display: none; }
+.upgrade-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 100px; }
+.upgrade-row-actions .lingxing-sync { margin: 0; }
+.upgrade-detail-row > td { padding: 0 !important; }
+.upgrade-task-details { padding: 18px; background: var(--surface-2); white-space: normal; }
+.upgrade-task-details h4, .upgrade-reversals h4 { margin: 18px 0 10px; }
+.upgrade-fields { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 15px 24px; margin: 0 0 18px; }
+.upgrade-fields > div { min-width: 0; }
+.upgrade-fields dt { color: var(--text-2); font-size: 12px; margin-bottom: 5px; }
+.upgrade-fields dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.upgrade-history { padding-left: 20px; margin-bottom: 0; }
+.upgrade-history li { margin: 8px 0; }
+.upgrade-history li > div { margin-top: 4px; }
+.upgrade-template-tools { margin: 16px 0; padding: 14px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.upgrade-template-tools .transit-toolbar { align-items: end; margin: 0; }
+.upgrade-template-tools .field { min-width: 180px; }
+.upgrade-dialog { width: 940px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; }
+.upgrade-dialog[open] { display: flex; flex-direction: column; }
+.upgrade-dialog-wide { width: 1280px; }
+.upgrade-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.upgrade-dialog > header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border); flex: none; }
+.upgrade-dialog > header h3 { margin: 0; font-size: 15px; }
+.upgrade-dialog-body { padding: 20px; overflow: auto; min-height: 0; }
+.upgrade-dialog > .dialog-actions { flex: none; margin: 0; padding: 14px 20px; border-top: 1px solid var(--border); }
+.upgrade-dialog .data-table { min-width: 950px; }
+.upgrade-dialog .data-table td { white-space: normal; overflow-wrap: anywhere; min-width: 85px; }
+.upgrade-dialog .transfer-upgrade-table { min-width: 1680px; }
+.upgrade-dialog .field-error, .upgrade-dialog .dialog-error { margin-bottom: 0; }
+.upgrade-object { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 20px; }
+.upgrade-object > span { overflow-wrap: anywhere; }
+.upgrade-quantities { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 14px; background: var(--surface-2); border: 1px solid var(--border); margin-bottom: 18px; }
+.upgrade-form-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; padding: 0; margin: 0; border: 0; }
+.upgrade-reversals .field { margin-bottom: 14px; }
+.upgrade-reversals input { max-width: 180px; }
+@media(max-width:1000px) {
+  .upgrade-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .upgrade-board .upgrade-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}

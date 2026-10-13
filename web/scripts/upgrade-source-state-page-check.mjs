@@ -45,9 +45,9 @@ const sourceRecord = (kind, id) => db.getRelocationCandidates().find(row => row.
   { fba: 'fbaArchiveId', inquiry: 'inquiryId', allocation: 'allocationId' }[kind]] === id);
 const sourceRow = (kind, id) => page.locator(`tr[data-source-document-no="${sourceRecord(kind, id).documentNo}"]`);
 const account = () => page.getByLabel('本次移仓账号', { exact: true });
-const initiateButton = () => page.getByRole('button', { name: '发起移仓升级', exact: true });
-const filters = () => page.locator('.relocation-source-panel select');
-const selectedNo = () => page.locator('.relocation-source-panel tr.row-expanded').getAttribute('data-source-document-no');
+const initiateButton = () => page.getByRole('dialog').getByRole('button', { name: '确认发起移仓升级', exact: true });
+const sourceButton = (kind,id) => sourceRow(kind,id).getByRole('button',{name:'发起移仓升级',exact:true});
+const close = () => page.getByRole('button',{name:'关闭弹窗',exact:true}).click();
 async function waitFor(checking) {
   let error;
   for (let n = 0; n < 100; n++) {
@@ -60,7 +60,7 @@ async function shot(name) {
   const file = path.join(out, name + '.png');
   await page.screenshot({ path: file, fullPage: true, animations: 'disabled' }); screenshots.push(file);
 }
-async function selectSource(kind, id) { await sourceRow(kind, id).getByRole('button').click(); }
+async function selectSource(kind, id) { await sourceButton(kind, id).click(); }
 async function expectAccountReset() {
   await waitFor(async () => { assert.equal(await account().count(), 1); assert.equal(await account().inputValue(), ''); assert.equal(await initiateButton().isEnabled(), false); });
 }
@@ -101,57 +101,48 @@ try {
   await page.goto(base); await page.locator('.sidebar .nav-item', { hasText: '升级库存' }).click();
   await sourceRow('fba', fbaA).waitFor();
 
-  await selectSource('fba', fbaA); await account().selectOption('AUS');
-  await selectSource('fba', fbaA); assert.equal(await account().inputValue(), 'AUS');
-  check('重复点击同一来源保留账号');
-  await selectSource('fba', fbaB); await expectAccountReset();
-  check('点击另一来源时账号清空，重新选择前不可发起');
-  await selectSource('fba', fbaA); await expectAccountReset();
-  await selectSource('fba', fbaB); await expectAccountReset();
-  check('A→B→A切换不会恢复旧来源的账号');
-  await account().selectOption('AUS'); await filters().nth(0).selectOption('SYNTH-TONER-002');
-  assert.equal(await selectedNo(), sourceRecord('fba', fbaB).documentNo); assert.equal(await account().inputValue(), 'AUS');
-  check('筛选后实际仍为同一来源时保留账号');
-  await filters().nth(0).selectOption('SYNTH-TONER-001');
-  await expectAccountReset();
-  assert.equal(await selectedNo(), sourceRecord('fba', fbaD).documentNo);
-  check('型号筛选改变实际来源时账号清空');
-  await account().selectOption('AUS'); await filters().nth(1).selectOption('VFBA-C'); await expectAccountReset();
-  assert.equal(await selectedNo(), sourceRecord('fba', fbaC).documentNo);
-  check('版本筛选改变实际来源时账号清空');
-
+  assert.equal(await page.getByLabel('移仓筛选来源').inputValue(),'');
+  await selectSource('fba', fbaA); await account().selectOption('AUS'); await close();
+  await selectSource('fba', fbaA); assert.equal(await account().inputValue(), 'AUS'); await close();
+  check('同来源重开弹窗保留账号，任务默认全部来源');
+  await selectSource('fba', fbaB); await expectAccountReset(); await close();
+  await selectSource('fba', fbaA); await expectAccountReset(); await close();
+  check('A→B→A重新选择前不可发起，不恢复其他来源的账号');
+  await page.getByLabel('来源型号').selectOption('SYNTH-TONER-001');
+  await selectSource('fba', fbaD); await expectAccountReset(); await account().selectOption('AUS'); await close();
+  await page.getByLabel('来源原版本').selectOption('VFBA-C');
+  await selectSource('fba', fbaC); await expectAccountReset();
+  check('型号、版本筛选后选择其他来源，账号清空');
   await account().selectOption('AUS'); const otherInquiry = inquiry();
   await refreshComplete(db.syncState().dataVersion); assert.equal(await account().inputValue(), 'AUS');
-  assert.equal(await selectedNo(), sourceRecord('fba', fbaC).documentNo);
-  check('同来源数据刷新保留已选账号');
-  await filters().nth(1).selectOption(''); await expectAccountReset();
-  assert.equal(await selectedNo(), sourceRecord('fba', fbaD).documentNo); await account().selectOption('AUS');
   const fbaE = fba('SYNTH-TONER-001', 'VFBA-E');
-  await refreshComplete(db.syncState().dataVersion);
-  await waitFor(async () => assert.equal(await selectedNo(), sourceRecord('fba', fbaE).documentNo));
-  await expectAccountReset();
-  check('自动刷新使默认实际来源改变时账号清空'); await shot('account-source-reset');
+  await refreshComplete(db.syncState().dataVersion); assert.equal(await account().inputValue(), 'AUS');
+  assert((await page.getByRole('dialog').innerText()).includes('VFBA-C'));
+  check('刷新或新增来源不会自动切源，同源账号保留'); await close();
+  await page.getByLabel('来源原版本').selectOption('');
+  await selectSource('fba', fbaE); await expectAccountReset(); await shot('account-source-reset'); await close();
 
   pendingWork = db.initiateRelocationUpgrade({ role: 'admin', inquiryId: firstInquiry.id, requestId: rid() }).workItem;
   await refreshComplete(db.syncState().dataVersion);
-  await filters().nth(0).selectOption('');
-  await selectSource('inquiry', firstInquiry.id); assert.equal(await initiateButton().count(), 0);
-  await selectSource('fba', fbaA); await account().selectOption('AUS'); assert.equal(await initiateButton().isEnabled(), true);
+  await page.getByLabel('来源型号').selectOption('');
+  assert.equal(await sourceButton('inquiry', firstInquiry.id).count(), 0);
+  await selectSource('fba', fbaA); await account().selectOption('AUS'); assert.equal(await initiateButton().isEnabled(), true); await close();
   check('相同整数ID的询库来源与FBA来源互不碰撞', { inquiryId: firstInquiry.id, fbaArchiveId: fbaA });
   const secondInquiry = archive(otherInquiry); await sourceRow('inquiry', secondInquiry.id).waitFor();
   await selectSource('inquiry', secondInquiry.id); assert.equal(await initiateButton().isEnabled(), true);
   const response = page.waitForResponse(r => r.url() === base + '/api/upgrades/relocation-work-items' && r.request().method() === 'POST');
   await initiateButton().click(); assert.equal((await response).status(), 200);
-  await waitFor(async () => assert.equal(await initiateButton().count(), 0));
+  await waitFor(async () => assert.equal(await sourceButton('inquiry',secondInquiry.id).count(), 0));
+  await page.getByRole('dialog').waitFor({state:'hidden'});
   assert(db.getRelocationWorkItems().some(work => work.inquiryId === secondInquiry.id));
   check('同型号另一个独立来源可以实际发起，提交后入口更新');
 
   async function assertPending(status, label) {
     pendingWork = db.getRelocationWorkItem(pendingWork.id); assert.equal(pendingWork.status, status);
-    await refreshComplete(db.syncState().dataVersion); await selectSource('inquiry', firstInquiry.id);
+    await refreshComplete(db.syncState().dataVersion);
     await waitFor(async () => {
-      assert.equal(await initiateButton().count(), 0);
-      assert((await page.locator('.relocation-document-head').allTextContents()).some(text => text.includes(label)));
+      assert.equal(await sourceButton('inquiry', firstInquiry.id).count(), 0);
+      assert((await page.locator('[data-relocation-work-id="'+pendingWork.id+'"]').innerText()).includes(label));
     });
     const before = db.db.prepare('SELECT COUNT(*) AS n FROM upgrade_relocation_work_items').get().n;
     const rejected = await fetch(base + '/api/upgrades/relocation-work-items', { method: 'POST', headers: {
@@ -179,12 +170,13 @@ try {
   assert.equal(pendingWork.status, 'shipped'); assert.equal(pendingWork.statusText, '移仓和升级中');
   assert(db.inquiryDownstream(firstInquiry.id).some(blocker => blocker.status === '移仓和升级中'));
   assert.equal(pendingWork.fbaRemainingQuantity, 80); await refreshComplete(db.syncState().dataVersion);
-  await waitFor(async () => { assert.equal(await initiateButton().isEnabled(), true);
-    assert((await page.locator('.relocation-document-head').allTextContents()).some(text => text.includes('移仓和升级中'))); });
+  await waitFor(async () => { assert.equal(await sourceButton('inquiry',firstInquiry.id).isEnabled(), true);
+    assert((await page.locator('[data-relocation-work-id="'+pendingWork.id+'"]').innerText()).includes('移仓和升级中')); });
   await shot('shipped-can-reinitiate');
   const nextResponse = page.waitForResponse(r => r.url() === base + '/api/upgrades/relocation-work-items' && r.request().method() === 'POST');
-  await initiateButton().click(); assert.equal((await nextResponse).status(), 200);
-  await waitFor(async () => assert.equal(await initiateButton().count(), 0));
+  await selectSource('inquiry',firstInquiry.id); await initiateButton().click(); assert.equal((await nextResponse).status(), 200);
+  await waitFor(async () => assert.equal(await sourceButton('inquiry',firstInquiry.id).count(), 0));
+  await page.getByRole('dialog').waitFor({state:'hidden'});
   assert.equal(db.db.prepare('SELECT COUNT(*) AS n FROM upgrade_relocation_work_items WHERE inquiry_id=?').get(firstInquiry.id).n, 2);
   check('采纳20件后余80允许再次发起，仍按同来源独立建流程', { shipped: 20, remaining: 80 });
 

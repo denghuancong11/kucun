@@ -458,13 +458,15 @@ try {
   const inquirySource = inquirySources;
   await allocationSource.waitFor();
   await inquirySource.waitFor();
-  await allocationSource.locator('.source-select').click();
-  const sourceCard=page.locator('.relocation-documents > .panel').filter({has:page.locator('dl.relocation-fields')});
+  await allocationSource.getByRole('button').first().click();
+  const sourceCard=page.getByRole('dialog');
   check("升级页面带出调拨批准量90及原计划、日期和版本",(await allocationSource.innerText()).includes('90') && (await sourceCard.innerText()).includes('TEST-PLAN-TONER') && (await sourceCard.innerText()).includes('2026-02-10') && (await sourceCard.innerText()).includes('V11'));
-  await inquirySource.locator('.source-select').click();
+  await page.getByRole('button',{name:'关闭弹窗',exact:true}).click();await inquirySource.getByRole('button').first().click();
   check("询库来源带出回复量、ASIN、计划、日期和原版本",await inquirySource.count()===1 && (await inquirySource.innerText()).includes('60') && (await sourceCard.innerText()).includes('BUIINQ0001') && (await sourceCard.innerText()).includes('V20') && (await sourceCard.innerText()).includes('FBA-UI-INQUIRY'));
   await page.screenshot({path:path.join(output,'approval-upgrade-sources.png'),fullPage:true});
-  result = await write(page, "/api/upgrades/relocation-work-items", () => page.getByRole("button", { name: "发起移仓升级", exact: true }).click());
+  await page.getByRole("button",{name:"关闭弹窗",exact:true}).click();await inquirySource.getByRole("button",{name:"发起移仓升级",exact:true}).click();
+  result = await write(page, "/api/upgrades/relocation-work-items", () => page.getByRole("dialog").getByRole("button", { name: "确认发起移仓升级", exact: true }).click());
+  await page.getByRole("dialog").waitFor({state:"hidden"});
   check("升级页直接发起归档询库来源", result.workItem.inquiryId===inquiry.id && result.workItem.inquiryShipmentId==null && result.workItem.sourceQuantityBefore===60 && result.workItem.shipDate==="2026-09-01");
   // A second inquiry verifies the user-approved zero-stock exit through the real page.
   let zero=(await api("POST","/api/inquiries","operation-1",{model:"SYNTH-TONER-001",quantity:10,department:"一团",store:"AUS",operator:"无货测试",fnsku:"XUIZERO001",asin:"BUIZERO001",requestId:requestId("zero")})).record;
