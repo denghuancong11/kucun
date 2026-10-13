@@ -832,6 +832,10 @@
 .inquiry-procurement-form { display: grid; gap: 8px; }
 .transfer-upgrade-table { min-width: 1800px; } .transfer-upgrade-table td { white-space: pre-wrap; } .transfer-upgrade-table small { display: block; }
 .upgrade-board { min-width: 0; }
+.transfer-upgrade > .panel > .panel-head > .panel-head-actions { flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; align-items: flex-start; min-width: 0; }
+.transfer-import-action { min-width: 0; max-width: 100%; }
+.transfer-import-action > .transit-toolbar { margin: 0; padding: 0; border: 0; }
+.transfer-import-action > p { margin: 6px 0 0; max-width: 460px; overflow-wrap: anywhere; }
 .upgrade-board > .panel + .panel { margin-top: 18px; }
 .upgrade-board .upgrade-filters { display: grid; grid-template-columns: minmax(190px, 1.3fr) minmax(140px, .8fr) minmax(210px, 1fr); gap: 14px; margin-bottom: 16px; max-width: 940px; }
 .upgrade-board .upgrade-source-filter { grid-column: 1 / -1; }
