@@ -105,17 +105,17 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     setReviewing(decision);
     setQuantityRequestError(false);
     void perform({ execute: async () => {
-      try { return await (item.kind === "allocation" ? reviewAllocation(role, row.id, payload) : reviewInquiry(role, row.id, payload)); }
+      try { return await (item.kind === "allocation" ? reviewAllocation(role, row.id, payload, [row.model,row.store,row.department,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")) : reviewInquiry(role, row.id, payload, [row.model,row.store,row.department,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))); }
       catch (failure) {
         if (item.kind === "allocation") setQuantityRequestError(["invalid_quantity", "allocation_quantity_multiple", "insufficient_available"].includes((failure as ApiError).code ?? ""));
         throw failure;
       }
-    }, message: decision === "approve" ? `${row.documentNo} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.documentNo} 已拒绝。` });
+    }, message: decision === "approve" ? `${row.model} · ${row.store} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.model} · ${row.store} 已拒绝。` });
   };
   const metrics = row.lingxing;
   const metricColumns = approvalDocumentColumns(role).filter(column => column.key);
   const progress = progressLabel(item);
-  return <tbody className="approval-record" data-document-no={row.documentNo} data-document-key={`${item.kind}-${row.id}`} aria-label={`${item.kind === "allocation" ? "调拨" : "询库"} ${row.documentNo}`}>
+  return <tbody className="approval-record" data-document-no={row.documentNo} data-document-key={`${item.kind}-${row.id}`} aria-label={`${item.kind === "allocation" ? "调拨" : "询库"} ${row.model} · ${row.store}`}>
     <tr className="approval-data-row">
       <td className="approval-requested approval-number" data-field="申请数量" title={previewTitle}>{formatNumber(displayedRequested)}</td>
       <td className="approval-number" data-field="商务审核数量" title={previewTitle}>{displayedApproved === null ? "—" : formatNumber(displayedApproved)}</td>
@@ -134,15 +134,15 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       <td className="approval-metric-cell" data-field="调货前倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageBefore, metrics)}</span></td><td className="approval-metric-cell" data-field="调货后倍数"><span className="approval-coverage-value">{metricCoverage(row.coverageAfter, metrics)}</span></td>
     </tr>
     <tr className="approval-action-row"><td colSpan={DOCUMENT_COLUMNS.length + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
-      {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.documentNo}`} onSubmit={event => event.preventDefault()}>
+      {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.model} · ${row.store}`} onSubmit={event => event.preventDefault()}>
         <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" aria-label="审核数量" aria-invalid={Boolean(quantityError)} value={quantity} disabled={busy || uncertain} onChange={event => { setQuantity(event.target.value); if (quantityRequestError) { setError(null); setQuantityRequestError(false); } }} /></label>
-        {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.documentNo}`}>{item.record.packPerBox || "—"}</output></label>}
-        <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.documentNo}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
+        {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.model} · ${row.store}`}>{item.record.packPerBox || "—"}</output></label>}
+        <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.model} · ${row.store}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
         <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
         <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>{busy&&reviewing==="approve"?"正在批准…":"批准"}</button>
         <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>{busy&&reviewing==="reject"?"正在拒绝…":"拒绝"}</button>
       </form>}
-      {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId), message: `${row.documentNo} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
+      {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
       {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
       {role === "business" && needsReview && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {error && <p className="dialog-error" role="alert">{error}</p>}
@@ -185,7 +185,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
   const toggle = (key: string) => setExpanded(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   return <div className="approval-page"><Panel>
     <div className="approval-toolbar"><div className="filter-bar">
-      <label className="search-input approval-search"><Icon name="search" size={15} /><input aria-label="搜索运营姓名、型号或 ASIN" placeholder="型号 / 单号 / 运营 / ASIN" value={search} onChange={event => setSearch(event.target.value)} /></label>
+      <label className="search-input approval-search"><Icon name="search" size={15} /><input aria-label="搜索运营姓名、型号或 ASIN" placeholder="型号 / 运营 / ASIN" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <select aria-label="按需求类型筛选" value={type} onChange={event => setType(event.target.value as TypeFilter)}><option value="all">全部类型</option><option value="allocation">调拨</option><option value="inquiry">询库</option></select>
       <Segmented<"all" | Category> ariaLabel="按类目筛选" value={category} onChange={setCategory} items={[{ value: "all", label: "全部类目" }, { value: "硒鼓", label: "硒鼓" }, { value: "墨盒", label: "墨盒" }]} />
       <select aria-label="筛选审批进度" value={progress} onChange={event => setProgress(event.target.value as ProgressFilter)}><option value="all">全部进度</option><option value="active">处理中</option></select>

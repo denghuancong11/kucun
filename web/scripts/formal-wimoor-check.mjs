@@ -37,7 +37,7 @@ try{
  for(const width of [1280,1366,1920]){await page.setViewportSize({width,height:1000});const size=await page.evaluate(()=>({width:innerWidth,document:document.documentElement.scrollWidth,tableScroll:[...document.querySelectorAll('.approval-table-scroll')].filter(e=>e.getClientRects().length).every(e=>getComputedStyle(e).overflowX==='auto'&&(e.clientWidth>=2890||e.scrollWidth>e.clientWidth)),overflow:[...document.querySelectorAll('.approval-row-actions input,.approval-metric-cell')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>e.tagName+'.'+e.className),scale:visualViewport.scale,dpr:devicePixelRatio}));results.widths.push(size);assert.equal(size.document,width);assert.equal(size.tableScroll,true);assert.deepEqual(size.overflow,[]);assert.equal(size.scale,1);await shot('06-approval-details-'+width);}
  check('型号汇总展开后直接显示组内32张单据；1280/1366/1920、100% 缩放仅组内表格横向滚动，整页无横向溢出');
  await page.setViewportSize({width:1600,height:1000});
- await nav('升级库存');await role('admin');await page.locator('.source-select').first().waitFor();await page.locator('.source-select').filter({hasText:'ALLOC-'}).first().click();await shot('07-relocation');
+ await nav('升级库存');await role('admin');await page.locator('.source-select').first().waitFor();await page.locator('[data-source-document-no^="ALLOC-"] .source-select').first().click();await shot('07-relocation');
  assert.doesNotMatch(await page.locator('main').innerText(),/当前阶段|当前步骤|移仓分步登记|来源详情|已归档/);
  check('移仓使用真实来源及逐笔单据卡，无阶段展示和来源详情入口');
  await role('purchasing');await page.getByRole('tab',{name:'在库升级',exact:true}).click();await page.locator('.upgrade-job').first().waitFor();await shot('08-direct-upgrade');

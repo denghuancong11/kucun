@@ -60,7 +60,7 @@ try{
  // Existing cancelled/withdrawn records are fixtures because their former mutation endpoints were removed.
  for(const status of ['awaiting_procurement','awaiting_shipping','shipped','cancelled','withdrawn']){
   const r=await completed(),work=(await api('/api/upgrades/relocation-work-items','purchasing',{inquiryId:r.id,sourceRevision:r.revision,requestId:rid()})).workItem;db.db.prepare('UPDATE upgrade_relocation_work_items SET status=? WHERE id=?').run(status,work.id);
-  for(const role of ['business','purchasing']){const rejected=await reject(`/api/inquiries/${r.id}/recall`,role,common(r),409,'inquiry_has_downstream');assert(rejected.details.blockers.some(b=>b.number===work.workNo));assert.match(rejected.error,new RegExp(work.workNo));}
+  for(const role of ['business','purchasing']){const rejected=await reject(`/api/inquiries/${r.id}/recall`,role,common(r),409,'inquiry_has_downstream');assert(rejected.details.blockers.some(b=>b.number===work.workNo));assert.match(rejected.error,new RegExp(work.model));assert(!rejected.error.includes(work.workNo));}
   assert(db.getRelocationWorkItem(work.id).inquiryRecall.blockers.length>0);
  }
  const shipped=await completed();db.db.prepare('INSERT INTO inquiry_shipments(inquiry_id,quantity,ship_date,created_by_role,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(shipped.id,60,'2026-10-09','assistant-1',new Date().toISOString(),new Date().toISOString());const shipmentError=await reject(`/api/inquiries/${shipped.id}/recall`,'business',common(shipped),409,'inquiry_has_downstream');assert(shipmentError.details.blockers.some(b=>b.type==='询库发货'));

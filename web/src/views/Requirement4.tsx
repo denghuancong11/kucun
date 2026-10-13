@@ -174,9 +174,9 @@ export function Requirement4View({ role }: { role: Role }) {
     setBusy("relocation-initiate");
     setNotice(null);
     try {
-      await initiateRelocationUpgrade(role, { ...payload, requestId });
+      await initiateRelocationUpgrade(role, { ...payload, requestId }, [selectedCandidate.model,selectedCandidate.sourceVersion,selectedCandidate.store||fbaAccount,selectedCandidate.plan,selectedCandidate.fnsku,displayTime(selectedCandidate.confirmedAt)].filter(Boolean).join(" / "));
       relocationRequest.current = null;
-      await notifySaved(selectedCandidate.documentNo+"：移仓升级已发起。");
+      await notifySaved([selectedCandidate.model,selectedCandidate.store||fbaAccount].filter(Boolean).join(" · ")+"：移仓升级已发起。");
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -192,10 +192,10 @@ export function Requirement4View({ role }: { role: Role }) {
     const requestId = completionRequestId(key, { role, ...payload });
     setBusy(key); setNotice(null);
     try {
-      const result=await recordRelocationOperation(role, work.id, { ...payload, requestId });
+      const result=await recordRelocationOperation(role, work.id, { ...payload, requestId }, [work.model,work.sourceVersion,work.store,work.plan,displayTime(work.initiatedAt, true)].filter(Boolean).join(" / "));
       if(result.automaticSync)setAutomaticSync(current=>({...current,[work.id]:result.automaticSync!.requestId}));
       completionRequests.current.delete(key);
-      await notifySaved(`${work.workNo} 的订单号已保存；已自动发起领星同步。`);
+      await notifySaved(`${work.model} · ${work.store} 的订单号已保存；已自动发起领星同步。`);
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally { setBusy(null); }
@@ -246,10 +246,10 @@ export function Requirement4View({ role }: { role: Role }) {
     setBusy(key);
     setNotice(null);
     try {
-      await completeDirectUpgrade(role, job.id, request);
+      await completeDirectUpgrade(role, job.id, request, [job.model,job.sourceVersion,displayTime(job.initiatedAt, true)].join(" / "));
       setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
       setDirectCompleteDrafts((current) => ({ ...current, [job.id]: { quantity: "", version: request.newVersion } }));
-      await notifySaved(`${job.upgradeNo}：已将 ${formatNumber(request.completedQuantity)} 件从 ${job.sourceVersion} 转入 ${request.newVersion}；型号在库总量不变。`);
+      await notifySaved(`${job.model}：已将 ${formatNumber(request.completedQuantity)} 件从 ${job.sourceVersion} 转入 ${request.newVersion}；型号在库总量不变。`);
     } catch (error) {
       const status = (error as ApiError)?.status;
       const rejected = status !== undefined && status >= 400 && status < 500;
@@ -279,10 +279,10 @@ export function Requirement4View({ role }: { role: Role }) {
     setBusy(key);
     setNotice(null);
     try {
-      await completeRelocationUpgrade(role, relocationId, request);
+      await completeRelocationUpgrade(role, relocationId, request, [job.model,job.store,job.plan,row.removalOrderNo,displayTime(row.createdAt, true)].filter(Boolean).join(" / "));
       setPendingRelocation((current) => { const next = { ...current }; delete next[relocationId]; return next; });
       setRelocationCompleteDrafts((current) => ({ ...current, [relocationId]: { quantity: String(request.completedQuantity), progressing:String(request.inProgressQuantity), version: request.newVersion } }));
-      await notifySaved(`${row.relocationNo}：已保存累计升级完 ${formatNumber(request.completedQuantity)} 件及升级中 ${request.inProgressQuantity} 件。`);
+      await notifySaved(`${job.model} · ${job.store}：已保存累计升级完 ${formatNumber(request.completedQuantity)} 件及升级中 ${request.inProgressQuantity} 件。`);
     } catch (error) {
       const status = (error as ApiError)?.status;
       const rejected = status !== undefined && status >= 400 && status < 500;
@@ -323,13 +323,13 @@ export function Requirement4View({ role }: { role: Role }) {
               <label className="field"><span>型号</span><select value={relocationModel} onChange={event => { setRelocationModel(event.target.value); setRelocationVersion(""); setSelectedSourceKey(null); }}><option value="">全部型号</option>{relocationModels.map(value => <option key={value}>{value}</option>)}</select></label>
               <label className="field"><span>原版本号</span><select value={relocationVersion} onChange={event => { setRelocationVersion(event.target.value); setSelectedSourceKey(null); }}><option value="">全部版本</option>{relocationVersions.map(value => <option key={value}>{value}</option>)}</select></label>
             </div>
-            <div className="upgrade-candidate-table"><table className="data-table"><thead><tr><th>来源单号</th><th>型号 / 版本</th><th>来源数量</th><th>FBA剩余库存</th></tr></thead><tbody>{visibleCandidates.map(row => <tr key={candidateKey(row)} className={selectedKey === candidateKey(row) ? "row-expanded" : undefined}>
-              <td><button className="link-btn source-select" type="button" onClick={() => chooseCandidate(row)}>{row.documentNo}</button><div className="muted">{row.sourceKind === "fba" ? "直发FBA" : row.sourceKind === "inquiry" ? "询库" : "调拨"}</div></td><td><strong>{row.model}</strong><div>{row.sourceVersion}</div></td><td>{formatNumber(row.initialQuantity)}</td><td>{row.fbaRemainingQuantity === null ? "—" : formatNumber(row.fbaRemainingQuantity)}</td>
+            <div className="upgrade-candidate-table"><table className="data-table"><thead><tr><th>型号 / 版本</th><th>店铺 / 团队 / 发货资料</th><th>来源数量</th><th>FBA剩余库存</th></tr></thead><tbody>{visibleCandidates.map(row => <tr key={candidateKey(row)} data-source-document-no={row.documentNo} className={selectedKey === candidateKey(row) ? "row-expanded" : undefined}>
+              <td><button className="link-btn source-select" type="button" onClick={() => chooseCandidate(row)}>{row.model} · {row.sourceVersion}</button><div className="muted">{row.sourceKind === "fba" ? "直发FBA" : row.sourceKind === "inquiry" ? "询库" : "调拨"}</div></td><td><strong>{row.store}</strong><div>{row.department}</div><div>{row.plan} · {row.shipDate}</div><div>{row.fnsku}</div><div>{displayTime(row.confirmedAt, true)}</div></td><td>{formatNumber(row.initialQuantity)}</td><td>{row.fbaRemainingQuantity === null ? "—" : formatNumber(row.fbaRemainingQuantity)}</td>
             </tr>)}</tbody></table></div>{!visibleCandidates.length && <EmptyState title="暂无对应来源" />}
           </Panel>
           <div className="relocation-documents">
             {role==="logistics"&&<RelocationUpdate role={role} onRefresh={refreshAfterWrite}/> }
-            {selectedSource && <Panel title={selectedSource.documentNo + " · " + selectedSource.model} actions={selectedCandidate && role !== "business" && role !== "alan" ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null || (selectedCandidate?.sourceKind === "fba" && !fbaAccount)} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
+            {selectedSource && <Panel title={[selectedSource.model,selectedSource.sourceVersion,selectedSource.store].filter(Boolean).join(" · ")} actions={selectedCandidate && role !== "business" && role !== "alan" ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null || (selectedCandidate?.sourceKind === "fba" && !fbaAccount)} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
               {selectedCandidate?.sourceKind==='fba' && <label className="field"><span>本次移仓账号</span><select aria-label="本次移仓账号" value={fbaAccount} onChange={e=>setFbaAccount(e.target.value)}><option value="">请选择账号</option>{dashboard?.relocationAccounts.map(item=><option key={item.store} value={item.store}>{item.account} / {item.store}</option>)}</select></label>}
               <InquiryRecall key={`${selectedKey}-${role}`} source={selectedSource} role={role} onRefresh={refreshAfterWrite} onNotice={setNotice} />
               <dl className="relocation-fields">{[
@@ -391,11 +391,11 @@ function InquiryRecall({ source, role, onRefresh, onNotice }: { source: Relocati
   const target = ["purchasing", "logistics"].includes(role) ? "待Alan或采购回复" : "待商务审核";
   const recall = () => {
     const payload = { expectedRevision: source.inquiryRecall!.revision, requestId: createRequestId("inquiry-recall") };
-    void action.perform({ execute: () => recallInquiry(role, source.inquiryId!, payload), message: source.documentNo + " 询库已回撤至" + target + "。" });
+    void action.perform({ execute: () => recallInquiry(role, source.inquiryId!, payload, [source.model,source.store,source.plan,source.fnsku,displayTime(source.confirmedAt)].filter(Boolean).join(" / ")), message: source.model + " · " + source.store + " 询库已回撤至" + target + "。" });
   };
   return <div className="inquiry-recall">
     <button type="button" className="btn btn-ghost btn-sm" disabled={action.disabled || source.inquiryRecall.blockers.length > 0} onClick={recall}>{action.busy?"正在回撤…":"回撤至"+target}</button>
-    {source.inquiryRecall.blockers.length > 0 && <p className="field-error" role="alert">不能回撤，已产生下游关联：{source.inquiryRecall.blockers.map(item => item.type + " " + item.number + "（" + item.status + "）").join("；")}</p>}
+    {source.inquiryRecall.blockers.length > 0 && <p className="field-error" role="alert">不能回撤，已产生下游关联：{source.inquiryRecall.blockers.map(item => item.type + " " + item.description + "（" + item.status + "）").join("；")}</p>}
     {action.error && <p className="field-error" role="alert">{action.error}</p>}
     {action.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
   </div>;
@@ -407,10 +407,10 @@ function RelocationWorkflow({role,rows,operationDrafts,setOperationDrafts,busy,o
   return <div>{rows.map(work=>{
     const operation=operationDrafts[work.id]?.sourceKey===workSourceKey(work)?operationDrafts[work.id]:{orderNo:'',sourceKey:workSourceKey(work)};
     return <article className="relocation-document" key={work.id} data-relocation-work-id={work.id}>
-      <header className="relocation-document-head"><strong>{work.workNo}</strong><span>{work.statusText}</span>{work.removalOrderNo&&<LingxingSync role={role} target={{action:'logistics',workId:work.id}} initialRequestId={automaticSync[work.id]} onSynced={onRefresh}/>}</header>
+      <header className="relocation-document-head"><strong>{work.model} · {work.sourceVersion} · {displayTime(work.initiatedAt, true)}</strong><span>{work.statusText}</span>{work.removalOrderNo&&<LingxingSync role={role} target={{action:'logistics',workId:work.id}} initialRequestId={automaticSync[work.id]} onSynced={onRefresh}/>}</header>
       <dl className="relocation-fields"><div><dt>FBA剩余库存</dt><dd>{formatNumber(work.fbaRemainingQuantity??0)}</dd></div><div><dt>账号</dt><dd>{work.store}</dd></div><div><dt>发起岗位</dt><dd>{ROLE_LABELS[work.initiatedByRole]}</dd></div><div><dt>RMA</dt><dd>{work.rma||'—'}</dd></div><div><dt>原始移仓地址</dt><dd style={{whiteSpace:'pre-wrap'}}>{work.originalRelocationAddress||'—'}</dd></div><div><dt>加工后移仓地址</dt><dd style={{whiteSpace:'pre-wrap'}}>{work.relocationAddress||'—'}</dd></div><div><dt>订单号</dt><dd>{work.removalOrderNo||'—'}</dd></div></dl>
-      {work.status==='awaiting_operation'&&['operation-1','operation-2'].includes(role)&&<div className="upgrade-inline-complete"><input aria-label={work.workNo+' 移除订单号'} value={operation.orderNo} placeholder="订单号" onChange={e=>setOperationDrafts(current=>({...current,[work.id]:{...operation,orderNo:e.target.value}}))}/><button className="btn btn-primary" disabled={busy!==null||!operation.orderNo.trim()} onClick={()=>void onOperation(work)}>{busy===`relocation-operation-${work.id}`?"正在保存…":"保存订单号"}</button></div>}
-      <RelocationExternalShipments workNo={work.workNo} rows={work.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
+      {work.status==='awaiting_operation'&&['operation-1','operation-2'].includes(role)&&<div className="upgrade-inline-complete"><input aria-label="移除订单号" value={operation.orderNo} placeholder="订单号" onChange={e=>setOperationDrafts(current=>({...current,[work.id]:{...operation,orderNo:e.target.value}}))}/><button className="btn btn-primary" disabled={busy!==null||!operation.orderNo.trim()} onClick={()=>void onOperation(work)}>{busy===`relocation-operation-${work.id}`?"正在保存…":"保存订单号"}</button></div>}
+      <RelocationExternalShipments rows={work.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
     </article>;
   })}</div>;
 }
@@ -426,13 +426,13 @@ function RelocationHistory({role,warehouses,jobs,drafts,setDrafts,busy,pending,o
     const issue=draft.quantity.trim()===''||draft.progressing?.trim()===''||!Number.isInteger(quantity)||quantity<0||!Number.isInteger(progressing)||progressing<0?'升级中数量和累计升级完数量须为非负整数。':quantity+progressing>row.shippedQuantity?'升级中数量＋升级完数量不能超过已发货 '+row.shippedQuantity+'。':decrease<0&&(!draft.version.trim()||!draft.warehouse)?'新增入库须填写升级完版本号并选择实际仓库。':decrease>0&&(returns.some(([id,v])=>!Number.isInteger(Number(v))||Number(v)<=0||!!row.receiptBatches.find(r=>r.ledgerId===Number(id))?.issue)||returns.reduce((sum,[,v])=>sum+Number(v),0)!==decrease)?'请选择未被占用的本单入库批次，扣回合计须为 '+decrease+'。':'';
     const update=(patch:Partial<CompleteDraft>)=>setDrafts(current=>({...current,[row.id]:{...draft,...patch}}));
     return <article className="relocation-document" key={row.id} data-relocation-id={row.id}>
-      <header className="relocation-document-head"><strong>{row.relocationNo}</strong><span>{job.statusText}</span>{row.status==='active'&&row.workId&&<LingxingSync role={role} target={{action:'logistics',workId:row.workId}} onSynced={onRefresh}/>}</header>
+      <header className="relocation-document-head"><strong>{job.model} · {job.sourceVersion} · {displayTime(row.createdAt, true)}</strong><span>{job.statusText}</span>{row.status==='active'&&row.workId&&<LingxingSync role={role} target={{action:'logistics',workId:row.workId}} onSynced={onRefresh}/>}</header>
       <dl className="relocation-fields">{[['FBA剩余库存',job.fbaRemainingQuantity],['移仓-已发货数量',row.shippedQuantity],['升级中数量',row.inProgressQuantity],['升级完数量',row.completedQuantity],['尚未开始升级',row.shippedQuantity-row.inProgressQuantity-row.completedQuantity],['历史其他减少',row.soldQuantity],['RMA',row.rma],['原始移仓地址',row.originalRelocationAddress],['加工后移仓地址',row.relocationAddress],['订单号',row.removalOrderNo],['承运商',row.carrier],['运单号',row.trackingNo]].map(([label,value])=><div key={label}><dt>{label}</dt><dd style={{whiteSpace:'pre-wrap'}}>{value}</dd></div>)}</dl>
-      {row.completions.length>0&&<p>入库记录：{row.completions.map(item=>item.version+' / '+item.warehouse+'：'+item.quantity).join('、')}</p>}<RelocationExternalHistory items={row.externalItems??[]}/><RelocationExternalShipments workNo={row.relocationNo} rows={row.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
-      {row.status==='active'&&['purchasing','logistics'].includes(role)&&<div className="upgrade-inline-complete"><label className="field"><span>升级中数量</span><input aria-label={row.relocationNo+' 升级中数量'} value={draft.progressing} disabled={!!recovery||busy!==null} onChange={e=>update({progressing:e.target.value})}/></label><label className="field"><span>升级完数量（累计）</span><input aria-label={row.relocationNo+' 升级完数量'} value={draft.quantity} disabled={!!recovery||busy!==null} onChange={e=>update({quantity:e.target.value})}/></label><label className="field"><span>升级完，版本号</span><input aria-label={row.relocationNo+' 升级完成版本号'} value={draft.version} disabled={!!recovery||busy!==null} onChange={e=>update({version:e.target.value})}/></label><label className="field"><span>本次新增入库实际仓库</span><select aria-label={row.relocationNo+' 目标海外仓'} value={draft.warehouse??''} disabled={!!recovery||busy!==null} onChange={e=>update({warehouse:e.target.value})}><option value="">请选择</option>{warehouses.map(w=><option key={w}>{w}</option>)}</select></label>
+      {row.completions.length>0&&<p>入库记录：{row.completions.map(item=>item.version+' / '+item.warehouse+'：'+item.quantity).join('、')}</p>}<RelocationExternalHistory items={row.externalItems??[]}/><RelocationExternalShipments rows={row.externalShipments??[]} selected={{}} disabled readOnly onChange={()=>{}}/>
+      {row.status==='active'&&['purchasing','logistics'].includes(role)&&<div className="upgrade-inline-complete"><label className="field"><span>升级中数量</span><input aria-label="升级中数量" value={draft.progressing} disabled={!!recovery||busy!==null} onChange={e=>update({progressing:e.target.value})}/></label><label className="field"><span>升级完数量（累计）</span><input aria-label="升级完数量" value={draft.quantity} disabled={!!recovery||busy!==null} onChange={e=>update({quantity:e.target.value})}/></label><label className="field"><span>升级完，版本号</span><input aria-label="升级完成版本号" value={draft.version} disabled={!!recovery||busy!==null} onChange={e=>update({version:e.target.value})}/></label><label className="field"><span>本次新增入库实际仓库</span><select aria-label="目标海外仓" value={draft.warehouse??''} disabled={!!recovery||busy!==null} onChange={e=>update({warehouse:e.target.value})}><option value="">请选择</option>{warehouses.map(w=><option key={w}>{w}</option>)}</select></label>
         {issue&&<p className="dialog-error" role="alert">{issue}</p>}
         <button className="btn btn-primary" disabled={(!recovery&&!!issue)||busy!==null} onClick={()=>void onComplete(job,row.id,row.revision)}>{busy===`upgrade-relocation-complete-${row.id}`?'正在保存…':recovery?'重试确认':'保存升级数量'}</button></div>}
-      <div className="table-wrap"><table className="data-table" aria-label={row.relocationNo+' 入库批次'}><thead><tr><th>入库批次</th><th>版本</th><th>实际仓库</th><th>有效入库量</th><th>当前占用</th><th>本次扣回</th></tr></thead><tbody>{row.receiptBatches.map(receipt=><tr key={receipt.ledgerId}><td>{receipt.batchKey}</td><td>{receipt.version}</td><td>{receipt.warehouse}</td><td>{receipt.quantity}</td><td>{receipt.issue||'无'}</td><td>{decrease>0&&['purchasing','logistics'].includes(role)&&<input aria-label={'扣回 '+receipt.batchKey} disabled={!!receipt.issue||!!recovery||busy!==null} value={draft.reversals?.[receipt.ledgerId]??''} onChange={e=>update({reversals:{...draft.reversals,[receipt.ledgerId]:e.target.value}})}/>}</td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table className="data-table" aria-label="入库批次"><thead><tr><th>入库时间</th><th>版本</th><th>实际仓库</th><th>有效入库量</th><th>当前占用</th><th>本次扣回</th></tr></thead><tbody>{row.receiptBatches.map(receipt=><tr key={receipt.ledgerId}><td>{displayTime(receipt.at, true)}</td><td>{receipt.version}</td><td>{receipt.warehouse}</td><td>{receipt.quantity}</td><td>{receipt.issue||'无'}</td><td>{decrease>0&&['purchasing','logistics'].includes(role)&&<input data-receipt-id={receipt.ledgerId} aria-label={'扣回 '+receipt.version+' '+receipt.warehouse+' '+displayTime(receipt.at, true)} disabled={!!receipt.issue||!!recovery||busy!==null} value={draft.reversals?.[receipt.ledgerId]??''} onChange={e=>update({reversals:{...draft.reversals,[receipt.ledgerId]:e.target.value}})}/>}</td></tr>)}</tbody></table></div>
     </article>;
   }))}</div>;
 }
@@ -467,9 +467,9 @@ function DirectHistory({
         const selectedLine = job.lines.find(line => line.id === draft.sourceLineId && line.inProgressQuantity > 0);
         const valid = Boolean(selectedLine) && Number.isInteger(quantity) && quantity > 0 && quantity <= selectedLine!.inProgressQuantity && Boolean(draft.version.trim()) && Boolean(draft.warehouse);
         return (
-          <article className="upgrade-job" key={job.id}>
+          <article className="upgrade-job" key={job.id} data-upgrade-id={job.id}>
             <div className="upgrade-job-head">
-              <div><strong className="mono">{job.upgradeNo}</strong><span>{job.model} · {job.sourceVersion}</span></div>
+              <div><strong>{job.model} · {job.sourceVersion}</strong><span>{displayTime(job.initiatedAt, true)}</span></div>
               <Badge label={job.statusText} tone={job.status === "completed" ? "green" : "blue"} />
             </div>
             <div className="upgrade-kpis compact">
@@ -481,10 +481,10 @@ function DirectHistory({
             </div>
             {(job.status === "active" || recovery) && ["purchasing", "logistics"].includes(role) && (
               <div className="upgrade-inline-complete direct">
-                <select aria-label={`${job.upgradeNo} 完成来源批次`} value={selectedLine?.id ?? (recovery?.sourceLineId ?? "")} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, sourceLineId: Number(event.target.value)}}))}>{!selectedLine&&!recovery&&<option value="">请重新选择实际来源批次</option>}{job.lines.filter(line => line.inProgressQuantity > 0 || line.id === recovery?.sourceLineId).map(line => <option key={line.id} value={line.id}>{line.sourceTeam ? line.sourceTeam + " / " : ""}{line.warehouse || "历史仓库未确定"} / {line.plan} / {line.shipDate} / {line.fnsku}（{line.inProgressQuantity}）</option>)}</select>
-                <input aria-label={`${job.upgradeNo} 升级完成数量`} inputMode="numeric" placeholder="所选批次的完成数量" value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, quantity: event.target.value } }))} />
-                <input aria-label={`${job.upgradeNo} 升级完成版本号`} placeholder="升级完成版本号" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, version: event.target.value } }))} />
-                <select aria-label={`${job.upgradeNo} 目标海外仓`} value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option>{warehouses.map(warehouse => <option key={warehouse} value={warehouse}>{warehouse}</option>)}</select>
+                <select aria-label="完成来源批次" value={selectedLine?.id ?? (recovery?.sourceLineId ?? "")} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, sourceLineId: Number(event.target.value)}}))}>{!selectedLine&&!recovery&&<option value="">请重新选择实际来源批次</option>}{job.lines.filter(line => line.inProgressQuantity > 0 || line.id === recovery?.sourceLineId).map(line => <option key={line.id} value={line.id}>{line.sourceTeam ? line.sourceTeam + " / " : ""}{line.warehouse || "历史仓库未确定"} / {line.plan} / {line.shipDate} / {line.fnsku}{line.receivedAt ? " / 入库 " + displayTime(line.receivedAt, true) : ""}（{line.inProgressQuantity}）</option>)}</select>
+                <input aria-label="升级完成数量" inputMode="numeric" placeholder="所选批次的完成数量" value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, quantity: event.target.value } }))} />
+                <input aria-label="升级完成版本号" placeholder="升级完成版本号" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, version: event.target.value } }))} />
+                <select aria-label="目标海外仓" value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option>{warehouses.map(warehouse => <option key={warehouse} value={warehouse}>{warehouse}</option>)}</select>
                           <button className="btn btn-primary" type="button" disabled={(!recovery && !valid) || busy !== null} onClick={() => void onComplete(job)}>{busy === `upgrade-direct-complete-${job.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button>
                 {!recovery&&selectedLine&&!valid&&quantity<=selectedLine.inProgressQuantity&&<p className="field-error" role="alert">请填写大于0的整数完成量、升级完成版本，并选择目标海外仓。</p>}
                 {!recovery&&!selectedLine&&<p className="form-hint">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}

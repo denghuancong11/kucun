@@ -124,12 +124,12 @@ try {
  await a.locator('.approval-expand[aria-expanded="false"]').click();await a.screenshot({path:path.join(output,'metrics-complete.png'),fullPage:true});
  await role(a,'operation-1');await nav(a,'升级库存');
  const row=i=>a.locator(db.getRelocationWorkItem(works[i].id).relocationId?'[data-relocation-id="'+db.getRelocationWorkItem(works[i].id).relocationId+'"]':'[data-relocation-work-id="'+works[i].id+'"]'),log=i=>row(i).locator('.lingxing-sync');
- const choose=async i=>{await a.locator('.source-select').filter({hasText:works[i].documentNo}).click();};
+ const choose=async i=>{await a.locator('[data-source-document-no="'+works[i].documentNo+'"] .source-select').click();};
  const logLabel=async(i,text,enabled)=>{await choose(i);return label(log(i),text,enabled);};
  const logSubmit=async(i,text)=>{await choose(i);return submit(a,log(i),text);};
  for(const [who,syncAllowed,shipAllowed]of [['admin',true,false],['assistant-1',true,false],['assistant-2',false,false],['purchasing',true,false],['operation-1',true,true],['operation-2',false,false],['business',false,false]]) {
   await role(a,who);await nav(a,'升级库存');
-  const source=a.locator('.source-select').filter({hasText:works[0].documentNo});
+  const source=a.locator('[data-source-document-no="'+works[0].documentNo+'"] .source-select');
   if(await source.count())await source.click();
   assert.equal(await row(0).locator('.lingxing-sync button').count(),syncAllowed?1:0,who+'同步权限');
   assert.equal(await row(0).getByRole('button',{name:'登记移仓发货',exact:true}).count(),0,who+'无人工发货入口（原发货权限'+shipAllowed+'）');
@@ -181,7 +181,7 @@ try {
  await a.screenshot({path:path.join(output,'same-source-two-relocations-history-sync.png'),fullPage:true});
  await role(a,'purchasing');await nav(a,'升级库存');
  await choose(0);assert.equal(await a.locator('[data-relocation-id="'+relocation.id+'"] .lingxing-sync').count(),1);const history=a.locator('[data-relocation-id="'+relocation.id+'"]');
- await history.getByLabel(relocation.relocation_no+' 升级完数量',{exact:true}).fill('5');await history.getByLabel(relocation.relocation_no+' 升级完成版本号',{exact:true}).fill('V21');await history.getByLabel(relocation.relocation_no+' 目标海外仓',{exact:true}).selectOption('SyntheticWarehouseA');
+ await history.getByLabel('升级完数量',{exact:true}).fill('5');await history.getByLabel('升级完成版本号',{exact:true}).fill('V21');await history.getByLabel('目标海外仓',{exact:true}).selectOption('SyntheticWarehouseA');
  const completion=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocations/'+relocation.id+'/complete');await history.getByRole('button',{name:'保存升级数量',exact:true}).click();assert.equal((await completion).status(),200);await history.getByText('入库记录：V21 / SyntheticWarehouseA：5',{exact:true}).waitFor();await history.getByRole('button',{name:'完成入库',exact:true}).waitFor({state:'detached'});
  assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,5);assert.equal(db.getCatalog().models.find(m=>m.model==='SYNTH-TONER-001').inStock,stockBefore.models.find(m=>m.model==='SYNTH-TONER-001').inStock+5);check('采购登记5件回库后在库仅增加5件，已用包裹仍为5件');
  // 存储与未知回执专项：实际React、HTTP、任务表；执行端仍是隔离协议样例。

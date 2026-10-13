@@ -165,9 +165,9 @@ export function AuditLogView({ role }: { role: Role }) {
         <>
           <div className="table-wrap scroll-x">
             <table className="data-table audit-table">
-              <thead><tr><th>操作时间</th><th>业务动作</th><th>型号 / 类目</th><th>业务单号</th><th>数量</th><th>在库 / 预锁定变化</th><th>可用变化</th><th>运营 / 团队</th><th>操作人</th><th>详情</th></tr></thead>
+              <thead><tr><th>操作时间</th><th>业务动作</th><th>型号 / 类目</th><th>数量</th><th>在库 / 预锁定变化</th><th>可用变化</th><th>运营 / 团队</th><th>操作人</th><th>详情</th></tr></thead>
               <tbody>{records.map((record, index) => <tr key={record.eventId ?? index} data-audit-row-action={actionOf(record) ?? action}>
-                <td className="date-cell">{displayTime(record.at)}</td><td>{actionMeta(actionOf(record) ?? action).label}</td><td><strong>{recordModel(record) || "—"}</strong><div className="muted">{record.category || "—"}</div></td><td>{record.businessNo || record.documentNo || "—"}</td><td>{record.quantity == null ? "—" : formatNumber(record.quantity)}</td>
+                <td className="date-cell">{displayTime(record.at)}</td><td>{actionMeta(actionOf(record) ?? action).label}</td><td><strong>{recordModel(record) || "—"}</strong><div className="muted">{record.category || "—"}</div></td><td>{record.quantity == null ? "—" : formatNumber(record.quantity)}</td>
                 <td><QuantityChange record={record} /></td><td>{record.effectKnown === true && record.availableDelta != null ? <SignedDelta value={record.availableDelta} /> : "—"}</td><td>{record.operator || "—"}<div className="muted">{record.department || record.team || "—"}</div></td><td>{roleLabels[record.role] || record.role || "—"}</td><td><button className="link-btn" type="button" onClick={() => setDetail(record)}>查看</button></td>
               </tr>)}</tbody>
             </table>
@@ -179,7 +179,7 @@ export function AuditLogView({ role }: { role: Role }) {
         </>
       )}
       {detail && <div className="dialog-mask"><div className="dialog audit-detail-dialog" role="dialog" aria-modal="true" aria-label="流水详情"><h3>流水详情</h3><dl className="relocation-fields">
-        {[["业务单号",detail.businessNo || detail.documentNo],["时间",displayTime(detail.at)],["业务动作",actionMeta(actionOf(detail) ?? action).label],["型号",recordModel(detail)],["类目",detail.category],["数量",detail.quantity == null ? "—" : formatNumber(detail.quantity)],["运营",detail.operator],["团队",detail.department || detail.team],["操作岗位",roleLabels[detail.role] || detail.role],["店铺",detail.store],["来源批次",detail.batch],["操作结果",detail.result],["原因",detail.reason]].map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value || "—"}</dd></div>)}
+        {[["时间",displayTime(detail.at)],["业务动作",actionMeta(actionOf(detail) ?? action).label],["型号",recordModel(detail)],["类目",detail.category],["数量",detail.quantity == null ? "—" : formatNumber(detail.quantity)],["运营",detail.operator],["团队",detail.department || detail.team],["操作岗位",roleLabels[detail.role] || detail.role],["店铺",detail.store],...(detail.batchInfo ? [["发货计划号",detail.batchInfo.plan],["发货时间",detail.batchInfo.date],["版本",detail.batchInfo.version],["FNSKU",detail.batchInfo.fnsku],["仓库",detail.batchInfo.warehouse]] : []),["操作结果",detail.result],["原因",detail.reason]].map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value || "—"}</dd></div>)}
         <div><dt>库存变化</dt><dd><QuantityChange record={detail} /></dd></div><div><dt>在途变化</dt><dd>{detail.inTransitDelta == null ? "—" : <SignedDelta value={detail.inTransitDelta} />}</dd></div>
       </dl><div className="dialog-actions"><button className="btn btn-ghost" type="button" onClick={() => setDetail(null)}>关闭</button></div></div></div>}
     </Panel>

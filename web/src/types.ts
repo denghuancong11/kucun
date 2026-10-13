@@ -39,6 +39,7 @@ export interface ModelSummary {
 }
 
 export interface StockDetail {
+  receivedAt?: string | null;
   shippingMethod?: string;
   warehouse: string;
   isPublic?: boolean;
@@ -401,7 +402,7 @@ export interface DirectUpgradeSource {
 
 export interface InquiryRecallInfo {
   revision: number;
-  blockers: { type: string; number: string; status: string }[];
+  blockers: { type: string; number: string; description: string; status: string }[];
 }
 
 export interface RelocationCandidate {
@@ -434,6 +435,7 @@ export interface RelocationCandidate {
 }
 
 export interface DirectUpgradeLine {
+  receivedAt: string | null;
   warehouse: string;
   sourceTeam?: string | null;
   id: number;
@@ -452,7 +454,7 @@ export interface DirectUpgradeLine {
 
 export interface UpgradeRelocation {
   originalRelocationAddress: string | null;
-  receiptBatches: {ledgerId:number;batchKey:string;version:string;warehouse:string;quantity:number;originalQuantity:number;locked:number;onHand:number;issue:string}[];
+  receiptBatches: {ledgerId:number;batchKey:string;at:string;version:string;warehouse:string;quantity:number;originalQuantity:number;locked:number;onHand:number;issue:string}[];
   externalShipments: RelocationExternalShipment[];
   id: number;
   workId: number | null;
@@ -680,6 +682,7 @@ export interface AuditRecord {
   recordId?: number;
   documentId?: number | null;
   businessNo?: string | null;
+  batchInfo?: {plan:string;date:string;version:string;fnsku:string;warehouse:string} | null;
   documentNo?: string | null;
   model?: string | null;
   category?: string | null;
@@ -723,7 +726,7 @@ export interface TransferUpgradePreview {
 }
 export interface TransferUpgradeRecord extends TransferUpgradeRow {
   documentNo: string; revision: number; updatedAt: string;
-  receiptBatches: {ledgerId:number;batchKey:string;version:string;warehouse:string;originalQuantity:number;quantity:number;locked:number;onHand:number;issue:string}[];
+  receiptBatches: {ledgerId:number;batchKey:string;at:string;version:string;warehouse:string;originalQuantity:number;quantity:number;locked:number;onHand:number;issue:string}[];
   history: {role:Role;at:string;stage:string;before:TransferUpgradeData;after:TransferUpgradeData}[];
   id: number; importId: number; fileName: string; sheetName: string; importedByRole: Role; importedAt: string;
 }

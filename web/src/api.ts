@@ -38,7 +38,7 @@ export function fetchLingxingJobs(role:Role,target:LingxingTarget,requestId:stri
 
 
 
-export type PendingBusinessRequest = { url: string; role: Role; body: string; requestId: string; databaseId: string };
+export type PendingBusinessRequest = { url: string; role: Role; body: string; requestId: string; databaseId: string; context?: string };
 const pendingStorageKey = "aster-pending-business-requests";
 const activeRequests = new Set<string>();
 let currentDatabaseId: string | null = null;
@@ -62,17 +62,17 @@ function pendingRequestError(message: string): ApiError {
 export async function confirmPendingBusinessRequest(record: PendingBusinessRequest): Promise<unknown> {
   const sync = await fetchSync(record.role);
   if (sync.databaseId !== record.databaseId) throw pendingRequestError("当前数据库与原提交不一致，本次未重发。");
-  return requestJson(record.url, record.role, { method: "POST", headers: { "content-type": "application/json" }, body: record.body });
+  return requestJson(record.url, record.role, { method: "POST", headers: { "content-type": "application/json" }, body: record.body }, record.context);
 }
 
-async function requestJson<T>(url: string, role: Role, init?: RequestInit): Promise<T> {
+async function requestJson<T>(url: string, role: Role, init?: RequestInit, context?: string): Promise<T> {
   let pending: PendingBusinessRequest | null = null;
   let replaying = false;
   if (init?.method === "POST" && typeof init.body === "string" && url !== "/api/lingxing/jobs") {
     const payload = JSON.parse(init.body);
     if (payload.requestId) {
       if (!currentDatabaseId) await fetchSync(role);
-      pending = { url, role, body: init.body, requestId: payload.requestId, databaseId: currentDatabaseId! };
+      pending = { url, role, body: init.body, requestId: payload.requestId, databaseId: currentDatabaseId!, context };
       let records: PendingBusinessRequest[];
       try { records = readPendingBusinessRequests(true); }
       catch { throw pendingRequestError("无法读取本次提交的确认信息，本次未发送。"); }
@@ -189,10 +189,10 @@ export function fetchApprovals(role: Role): Promise<ApprovalsPayload> {
   return requestJson<ApprovalsPayload>("/api/approvals", role);
 }
 
-export function reviewAllocation(role: Role, id: number, payload: ApprovalReview): Promise<unknown> {
+export function reviewAllocation(role: Role, id: number, payload: ApprovalReview, context?: string): Promise<unknown> {
   return requestJson(`/api/allocations/${id}/review`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function createInquiry(role: Role, payload: AllocationEntry & { model: string }): Promise<unknown> {
@@ -201,32 +201,32 @@ export function createInquiry(role: Role, payload: AllocationEntry & { model: st
   });
 }
 
-export function reviewInquiry(role: Role, id: number, payload: ApprovalReview): Promise<unknown> {
+export function reviewInquiry(role: Role, id: number, payload: ApprovalReview, context?: string): Promise<unknown> {
   return requestJson(`/api/inquiries/${id}/review`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function replyInquiry(role: Role, id: number, payload: {
   supplierQuantity: number; shippingWarehouse: string; procurementNote: string; expectedRevision: number; requestId: string;
-}): Promise<unknown> {
+}, context?: string): Promise<unknown> {
   return requestJson(`/api/inquiries/${id}/reply`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
-export function recallInquiry(role: Role, id: number, payload: { expectedRevision: number; requestId: string }): Promise<unknown> {
+export function recallInquiry(role: Role, id: number, payload: { expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
   return requestJson(`/api/inquiries/${id}/recall`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function archiveInquiry(role: Role, id: number, payload: {
   plan: string; date: string; version: string; expectedRevision: number; requestId: string;
-}): Promise<unknown> {
+}, context?: string): Promise<unknown> {
   return requestJson(`/api/inquiries/${id}/archive`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 /** 统一数据库的数据版本。页面轮询只比较版本，变化后再按需重查业务数据。 */
@@ -258,24 +258,22 @@ export function createDirectUpgrade(
 export function completeDirectUpgrade(
   role: Role,
   id: number,
-  payload: { sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string },
-): Promise<unknown> {
+  payload: { sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
   return requestJson(`/api/upgrades/direct/${id}/complete`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function initiateRelocationUpgrade(
   role: Role,
-  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; sourceRevision?: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string; account?: string },
-): Promise<unknown> {
+  payload: ({ allocationId: number; inquiryId?: never; fbaArchiveId?: never } | { inquiryId: number; sourceRevision?: number; allocationId?: never; fbaArchiveId?: never } | { fbaArchiveId: number; allocationId?: never; inquiryId?: never }) & { requestId: string; account?: string }, context?: string): Promise<unknown> {
   return requestJson("/api/upgrades/relocation-work-items", role, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function recordRelocationProcurement(
@@ -291,11 +289,10 @@ export function recordRelocationProcurement(
 export function recordRelocationOperation(
   role: Role,
   id: number,
-  payload: { removalOrderNo: string; expectedRevision: number; requestId: string },
-): Promise<{automaticSync?: {state:string;message:string;requestId:string}}> {
+  payload: { removalOrderNo: string; expectedRevision: number; requestId: string }, context?: string): Promise<{automaticSync?: {state:string;message:string;requestId:string}}> {
   return requestJson(`/api/upgrades/relocation-work-items/${id}/operation`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 export function shipRelocationUpgrade(
@@ -316,13 +313,12 @@ export function shipRelocationUpgrade(
 export function completeRelocationUpgrade(
   role: Role,
   id: number,
-  payload: { inProgressQuantity?: number; reversals?: {ledgerId:number;quantity:number}[]; sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string },
-): Promise<unknown> {
+  payload: { inProgressQuantity?: number; reversals?: {ledgerId:number;quantity:number}[]; sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
   return requestJson(`/api/upgrades/relocations/${id}/complete`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 async function requestUpload<T>(url: string, role: Role, file: File, options: { dateYear: number }): Promise<T> {
@@ -373,13 +369,12 @@ export function applyTransitStatus(
 export function markTransitOnShelf(
   role: Role,
   id: number,
-  payload: { expectedRevision: number; yes: string; requestId: string },
-): Promise<{record:{status:string}}> {
+  payload: { expectedRevision: number; yes: string; requestId: string }, context?: string): Promise<{record:{status:string}}> {
   return requestJson(`/api/transit/${id}/on-shelf`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-  });
+  }, context);
 }
 
 /** 录入并预锁定；成功或失败后调用方重新拉取整页数据保持口径一致。
@@ -398,12 +393,12 @@ export function createAllocation(
 }
 
 /** 确认调拨完成：弹窗内二次确认即可，记录转“调拨完成，已备份”。 */
-export function confirmAllocation(role: Role, id: number, expectedRevision: number, requestId: string): Promise<unknown> {
+export function confirmAllocation(role: Role, id: number, expectedRevision: number, requestId: string, context?: string): Promise<unknown> {
   return requestJson(`/api/allocations/${id}/confirm`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ expectedRevision, requestId }),
-  });
+  }, context);
 }
 
 export function fetchAllocationHistory(role: Role, id: number): Promise<DocumentHistory> {
@@ -437,7 +432,7 @@ export function fetchTransferUpgrades(role: Role): Promise<TransferUpgradesPaylo
   return requestJson("/api/transfer-upgrades", role);
 }
 
-export type RelocationUpdatePreview = {unchangedCount:number;fileName:string;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;data:{id:string;revision:string;workNo:string;rma:string;relocationAddress:string};processedAddress:string;before:{rma:string;relocationAddress:string;status:string};afterStatus:string}[]};
+export type RelocationUpdatePreview = {unchangedCount:number;fileName:string;fileSha256:string;templateSha256:string;previewToken?:string;errors:{sourceRow:number;message:string}[];rows:{sourceRow:number;record:{model:string;sourceVersion:string;store:string;plan:string;shipDate:string};data:{id:string;revision:string;workNo:string;rma:string;relocationAddress:string};processedAddress:string;before:{rma:string;relocationAddress:string;status:string};afterStatus:string}[]};
 export function previewRelocationUpdate(role:Role,file:File):Promise<RelocationUpdatePreview> {
   return requestJson('/api/upgrades/relocation-update/preview',role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});
 }

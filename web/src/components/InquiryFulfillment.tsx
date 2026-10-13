@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { archiveInquiry, formatNumber, replyInquiry } from "../api";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import type { Inquiry, NoticeMessage, Role } from "../types";
+import { displayTime } from "./ui";
 import { createRequestId } from "../utils/ids";
 
 export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
@@ -15,14 +16,14 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
   const archive = (event: FormEvent) => {
     event.preventDefault();
     const payload = { plan: plan.trim(), date, version: version.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-archive") };
-    void action.perform({ execute: () => archiveInquiry(role, row.id, payload), message: row.documentNo + "：发货资料已保存，询库已归档。" });
+    void action.perform({ execute: () => archiveInquiry(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: row.model + " · " + row.store + "：发货资料已保存，询库已归档。" });
   };
   const assistant = role === "assistant-1" || role === "assistant-2";
   const allowed = (row.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : assistant) && row.status === "pending_assistant";
   const label = row.category === "墨盒" ? "采购归档" : "助理归档";
   if (!allowed && !action.uncertain) return null;
   return <div className="inquiry-fulfillment"><button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>{label}</button>
-    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.documentNo}`}><h3>{row.documentNo} · {row.model}</h3>
+    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.model} · ${row.store}`}><h3>{row.model} · {row.store}</h3>
     {allowed && <form className="approval-action-form" onSubmit={archive}>
       <label className="field"><span>发货计划号</span><input required value={plan} disabled={action.disabled} onChange={event => setPlan(event.target.value)} /></label>
       <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={action.disabled} onChange={event => setDate(event.target.value)} /></label>
@@ -54,7 +55,7 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
     event.preventDefault(); setAttempted(true);
     if (!quantity.trim() || quantityError || !["CA", "SC"].includes(warehouse)) return;
     const payload = { supplierQuantity: Number(quantity), shippingWarehouse: warehouse, procurementNote: note.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-reply") };
-    void action.perform({ execute: () => replyInquiry(role, row.id, payload), message: `${row.documentNo} 已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
+    void action.perform({ execute: () => replyInquiry(role, row.id, payload, [row.model,row.store,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
   };
   return <>
     <td className="approval-procurement-cell" data-field="供应商库存回复">{editable
@@ -64,7 +65,7 @@ export function InquiryProcurementCells({ row, quantity, onQuantityChange, role,
       ? <label className="field"><select form={formId} aria-label="发货仓库" required aria-invalid={Boolean(warehouseError)} value={warehouse} disabled={action.disabled} onChange={event => { setWarehouse(event.target.value); action.setError(null); }}><option value="">请选择</option><option value="CA">CA</option><option value="SC">SC</option></select></label>
       : row.shippingWarehouse || "—"}</td>
     <td className="approval-procurement-cell" data-field="采购备注" title={!editable ? row.procurementNote : undefined}>{editable
-      ? <form id={formId} className="inquiry-procurement-form field" aria-label={`采购回复 ${row.documentNo}`} noValidate onSubmit={reply}>
+      ? <form id={formId} className="inquiry-procurement-form field" aria-label={`采购回复 ${row.model} · ${row.store}`} noValidate onSubmit={reply}>
         <input aria-label="采购备注" value={note} disabled={action.disabled} onChange={event => { setNote(event.target.value); action.setError(null); }} />
         <button className="btn btn-primary btn-sm" type="submit" disabled={action.disabled}>{action.busy ? "正在提交…" : "提交采购回复"}</button>
       </form> : row.procurementNote || "—"}

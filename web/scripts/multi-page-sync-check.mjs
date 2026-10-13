@@ -92,7 +92,7 @@ async function retainedWorkspaces() {
  await failAndRecover('/api/audit','audit',async()=>{assert.equal(await p.getByLabel('按型号查询库存流水',{exact:true}).inputValue(),'未提交筛选');assert.equal(await p.getByLabel('选择库存操作分类',{exact:true}).inputValue(),'transit_import');assert.ok(await p.locator('.audit-table tbody tr').count()>0);});
  const upgrade=db.createDirectUpgrade({role:'admin',model:'MULTI-ORDINARY',sourceVersion:'V1',requestId:crypto.randomUUID()}).upgrade;
  await p.getByLabel('切换当前操作角色',{exact:true}).selectOption('purchasing');await nav('升级库存');await p.getByRole('tab',{name:'在库升级',exact:true}).click();
- const quantity=p.getByLabel(upgrade.upgradeNo+' 升级完成数量',{exact:true}),version=p.getByLabel(upgrade.upgradeNo+' 升级完成版本号',{exact:true});await quantity.fill('3');await version.fill('V-DRAFT');
+ const quantity=p.getByLabel('升级完成数量',{exact:true}),version=p.getByLabel('升级完成版本号',{exact:true});await quantity.fill('3');await version.fill('V-DRAFT');
  await failAndRecover('/api/upgrades','upgrade',async()=>{assert.equal(await quantity.inputValue(),'3');assert.equal(await version.inputValue(),'V-DRAFT');assert.equal(await p.getByRole('tab',{name:'在库升级',exact:true}).getAttribute('aria-selected'),'true');});
  assert.deepEqual(writes,['/api/transit/preview']);assert.equal(db.getCatalog().models.find(m=>m.model==='DRAFT-ONLY'),undefined);results.push({name:'automatic-refresh-only-reads',observedWrites:writes});
  await context.close();

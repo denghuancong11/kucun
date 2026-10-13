@@ -17,7 +17,7 @@ import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel"
 import { Icon } from "./Icon";
 import { InquiryEntry } from "./InquiryEntry";
 import { operationGroups } from "../utils/roles";
-import { Badge, Clip, Segmented, Spinner } from "./ui";
+import { Badge, Clip, displayTime, Segmented, Spinner } from "./ui";
 
 export type DetailTab = "stock" | "transit";
 
@@ -171,7 +171,7 @@ function StockPane({
                         </td>
                         <td>
                            <Clip text={row.fnsku || "—"} mono />
-                        </td><td>{row.warehouse || "历史仓库未确定"}{row.sourceTeam && <span className="muted"> · {row.sourceTeam}</span>}{row.isPublic && <div className="muted">公共库存 · {row.transferDocumentNo}</div>}{row.shippingMethod && <div className="muted">{row.shippingMethod}</div>}</td>
+                        </td><td>{row.warehouse || "历史仓库未确定"}{row.sourceTeam && <span className="muted"> · {row.sourceTeam}</span>}{row.isPublic && <div className="muted">公共库存</div>}{row.receivedAt && <div>入库 {displayTime(row.receivedAt, true)}</div>}{row.shippingMethod && <div className="muted">{row.shippingMethod}</div>}</td>
                       </>
                     )}
                     <td className="actions-col">
@@ -215,16 +215,16 @@ function StockPane({
                   {perm.detail && perm.expand && (
                     <tr className="allocation-history-row">
                       <td colSpan={colCount}>
-                        <details className="allocation-history" aria-label={`${key} 调拨记录`}>
+                        <details className="allocation-history" data-batch-key={key} aria-label={`${model.model} ${row.version} ${row.plan} 调拨记录`}>
                           <summary>调拨记录{alloc && `（${alloc.publicRecords[key]?.length ?? 0}）`}</summary>
                           {!alloc ? <p>调拨记录尚未加载。</p> : <>
                             <div className="table-wrap scroll-x">
                               <table className="data-table sub allocation-history-table">
-                                <thead><tr><th>调拨单</th><th>运营姓名</th><th>团队</th><th className="num">原申请量</th><th className="num">批准量</th><th className="num">当前调拨占用</th><th className="num">实际调出</th><th>状态</th></tr></thead>
+                                <thead><tr><th>运营姓名</th><th>团队</th><th className="num">原申请量</th><th className="num">批准量</th><th className="num">当前调拨占用</th><th className="num">实际调出</th><th>状态</th></tr></thead>
                                 <tbody>{(alloc.publicRecords[key] ?? []).length === 0
-                                  ? <tr><td colSpan={8}>暂无调拨记录</td></tr>
+                                  ? <tr><td colSpan={7}>暂无调拨记录</td></tr>
                                   : alloc.publicRecords[key].map(record => <tr key={record.id} data-allocation-summary-id={record.id}>
-                                    <td className="mono">{record.documentNo}</td><td>{record.operator || "历史未记录"}</td><td>{record.department || "历史未记录"}</td>
+                                    <td>{record.operator || "历史未记录"}</td><td>{record.department || "历史未记录"}</td>
                                     <td className="num">{record.requestedQuantity === null ? "历史未记录" : formatNumber(record.requestedQuantity)}</td>
                                     <td className="num">{record.approvedQuantity !== null ? formatNumber(record.approvedQuantity) : record.status === "待商务审核" ? "待审核" : record.status === "已拒绝" ? "已拒绝" : "历史未记录"}</td>
                                     <td className="num">{record.lockedQuantity === null ? "未记录" : formatNumber(record.lockedQuantity)}</td>

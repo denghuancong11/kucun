@@ -38,10 +38,10 @@ export function toneForStatus(status: string): Tone {
 
 /* 统一时间呈现：全站唯一入口。后端在不同接口分别返回 ISO 串与本地串，
    这里统一收敛为 zh-CN 24 小时制，避免同一份数据在三个视图出现三种格式。 */
-export function displayTime(value?: string | null): string {
+export function displayTime(value?: string | null, precise = false): string {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false, ...(precise ? { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 } as const : {}) });
 }
 
 /* 右上角浮动通知。类名保留 notice-* 语义（既有回归脚本与样式表以此定位）。 */

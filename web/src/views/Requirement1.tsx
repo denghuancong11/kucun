@@ -117,7 +117,7 @@ export function Requirement1View({
 
   const allocBusy = createMutation.isPending || onShelfMutation.isPending;
 
-  const onShelfOne = (row: TransitDetail) => onShelfMutation.mutateAsync({ id: row.id, expectedRevision: row.revision, yes: "YES", requestId: `transit-on-shelf-${row.id}-${row.revision}` });
+  const onShelfOne = (row: TransitDetail) => onShelfMutation.mutateAsync({ id: row.id, expectedRevision: row.revision, yes: "YES", requestId: `transit-on-shelf-${row.id}-${row.revision}`, context: [row.plan,row.date,row.version,row.fnsku,row.team].filter(Boolean).join(" / ") });
   const refreshShelf = async (row: TransitDetail) => {
     await refetchCatalog({throwOnError:true});
     if (row.shippingMethod !== "直发FBA") setDetailTab("stock");

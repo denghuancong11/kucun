@@ -321,9 +321,9 @@ function ensureDocumentVisibility(document, role) {
 
 async function getDocumentForRole(id, role, requireAction = true) {
   const document = inventory.getDocument(id);
-  if (!document) throw new BusinessError(404, "not_found", `找不到调拨单据 ${id}`);
+  if (!document) throw new BusinessError(404, "not_found", "找不到调拨记录");
   const model = inventory.getModel(document.model);
-  if (!model) throw new BusinessError(500, "catalog_missing", `单据 ${id} 对应型号不存在`);
+  if (!model) throw new BusinessError(500, "catalog_missing", `调拨记录对应型号“${document.model}”不存在`);
   if (requireAction) await requireActions(role, model.category);
   ensureDocumentVisibility(document, role);
   return { document, category: model.category };
@@ -505,7 +505,7 @@ async function handleAllocationsApi(request, response, pathname) {
 
 async function getInquiryForRole(id, role, requireAction = true) {
   const record = inventory.getInquiry(id);
-  if (!record) throw new BusinessError(404, "not_found", `找不到询库单据 ${id}`);
+  if (!record) throw new BusinessError(404, "not_found", "找不到询库记录");
   const model = inventory.getModel(record.model);
   if (requireAction) await requireActions(role, model.category);
   ensureDocumentVisibility(record, role);
@@ -668,8 +668,8 @@ async function handleRelocationTemplate(request,response,pathname,role) {
         if(work.status!=='awaiting_procurement')throw new Error('已进入后续环节或已取消，不能用旧模板覆盖');
         if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('RMA 不能为空或模板说明');
         const processed=processRelocationAddress(work.store,address);
-        rows.push({sourceRow,data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address,before:{rma:work.rma??'',relocationAddress:work.originalRelocationAddress??'',status:work.statusText},afterStatus:'待运营填写订单号'});
-      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行'+(workNo?'，移仓单号 '+workNo:'')+'：'+error.message+'；本批未更新'}); }
+        rows.push({sourceRow,record:{model:work.model,sourceVersion:work.sourceVersion,store:work.store,plan:work.plan,shipDate:work.shipDate},data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address,before:{rma:work.rma??'',relocationAddress:work.originalRelocationAddress??'',status:work.statusText},afterStatus:'待运营填写订单号'});
+      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message+'；本批未更新'}); }
     }
 
     const fileSha256=hashBuffer(body),templateSha256=hashTemplate(RELOCATION_UPDATE_HEADERS);
@@ -852,7 +852,7 @@ async function handleUpgradesApi(request, response, pathname) {
   const directCompleteMatch = pathname.match(/^\/api\/upgrades\/direct\/(\d+)\/complete$/);
   if (directCompleteMatch && request.method === "POST") {
     const upgrade = inventory.getUpgrade(Number(directCompleteMatch[1]));
-    if (!upgrade || upgrade.kind !== "direct") throw new BusinessError(404, "upgrade_not_found", `找不到在库升级单 ${directCompleteMatch[1]}`);
+    if (!upgrade || upgrade.kind !== "direct") throw new BusinessError(404, "upgrade_not_found", "找不到在库升级记录");
     await requireActions(role, upgrade.category);
     const payload = await parseJsonRequest(request);
     const result = inventory.completeDirectUpgrade({
@@ -885,7 +885,7 @@ async function handleUpgradesApi(request, response, pathname) {
   if (procurementMatch && request.method === "POST") {
     const workId = Number(procurementMatch[1]);
     const work = inventory.getRelocationWorkItem(workId);
-    if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
+    if (!work) throw new BusinessError(404, "relocation_work_not_found", "找不到移仓流程");
     await requireRelocationSourceVisibility(work, role);
     const payload = await parseJsonRequest(request);
     const result = inventory.recordRelocationProcurement({
@@ -904,7 +904,7 @@ async function handleUpgradesApi(request, response, pathname) {
   if (operationMatch && request.method === "POST") {
     const workId = Number(operationMatch[1]);
     const work = inventory.getRelocationWorkItem(workId);
-    if (!work) throw new BusinessError(404, "relocation_work_not_found", `找不到移仓流程 ${workId}`);
+    if (!work) throw new BusinessError(404, "relocation_work_not_found", "找不到移仓流程");
     await requireRelocationSourceVisibility(work, role);
     const payload = await parseJsonRequest(request);
     const result = inventory.recordRelocationOperation({
@@ -925,7 +925,7 @@ async function handleUpgradesApi(request, response, pathname) {
   if (relocationCompleteMatch && request.method === "POST") {
     const relocationId = Number(relocationCompleteMatch[1]);
     const row = inventory.getUpgradeRelocation(relocationId);
-    if (!row) throw new BusinessError(404, "relocation_not_found", `找不到移仓记录 ${relocationId}`);
+    if (!row) throw new BusinessError(404, "relocation_not_found", "找不到移仓记录");
     await requireRelocationSourceVisibility({ allocationId: row.allocation_document_id, inquiryId: row.inquiry_id, fbaArchiveId: row.fba_archive_id }, role);
     const payload = await parseJsonRequest(request);
     const result = inventory.completeRelocationUpgrade({
@@ -1377,7 +1377,7 @@ async function handleTransferUpdate(request,response,pathname,role,stage) {
       if(editable.every(c=>String(values[c]??'')===String(expected[c]??''))){unchangedCount++;continue;}
       const data={documentNo:no,revision:record.revision,stage,...Object.fromEntries(TRANSFER_EDITABLE[stage].map(k=>[k,String(values[fields.findIndex(([key])=>key===k)]??'')])),reversals:[]};
       const item={sourceRow,data},validated=inventory.validateTransferUpdate(item,stage,{preview:true});rows.push({...item,before:validated.before,after:validated.after,quantityDelta:validated.delta,receiptBatches:record.receiptBatches});
-    }catch(error){errors.push({sourceRow,message:(error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行'+(no?'，转仓单号 '+no:'')+'：'+error.message)+'；本批未更新'});}
+    }catch(error){errors.push({sourceRow,message:(error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行：'+error.message)+'；本批未更新'});}
   }
   const fileSha256=hashBuffer(body),templateSha256=hashTemplate([stage,...headers]),proof=errors.length||!rows.length?null:inventory.createTransitPreviewToken({kind:'transfer_update',role,fileName,fileHash:fileSha256,templateHash:templateSha256,payload:{rows}});
   sendJson(response,200,{ok:true,fileName,stage,fileSha256,templateSha256,rows,errors,unchangedCount,previewToken:proof?.token});
@@ -1675,7 +1675,7 @@ async function authorizeLingxingTarget(role, target, requireActive) {
       if (!record) throw new BusinessError(404,'sync_document_missing','同步单据不存在');
       await readable(record);
       if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
-      if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.documentNo} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
+      if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.model} · ${record.store} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
       documents.push({kind:ref.kind,id:ref.id});asins.add(record.asin);
     }
     return {action:'metrics',documents,asins:[...asins].sort()};

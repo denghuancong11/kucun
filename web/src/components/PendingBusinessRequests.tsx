@@ -18,7 +18,7 @@ const actionNames: Array<[RegExp, string]> = [
 function describe(record: PendingBusinessRequest) {
   const payload = JSON.parse(record.body);
   const action = actionNames.find(([pattern]) => pattern.test(record.url))?.[1] ?? "业务提交";
-  const document = payload.model || payload.fileName || (record.url.match(/\/([0-9]+)\//)?.[1] ? "单据 #" + record.url.match(/\/([0-9]+)\//)![1] : "");
+  const document = record.context || [payload.model, payload.store, payload.plan, payload.version || payload.sourceVersion || payload.newVersion, payload.removalOrderNo, payload.fileName].filter(Boolean).join(" / ");
   const quantity = payload.quantity ?? payload.completedQuantity ?? payload.supplierQuantity ?? payload.approvedQuantity;
   return [action, document, quantity !== undefined ? "数量 " + quantity : ""].filter(Boolean).join(" · ");
 }
