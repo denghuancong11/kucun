@@ -9,7 +9,7 @@ import { freePort, createTestInstanceId, waitForOwnedServer } from '../../script
 import { chromium } from '../node_modules/playwright-core/index.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
-const out = path.join(root, '.test-output/ui-consistency-fix/upgrade');
+const out = process.env.ASTER_ACCEPTANCE_OUTPUT || path.join(root, '.test-output/ui-consistency-fix/upgrade');
 await fs.mkdir(out, { recursive: true });
 const state = await fs.mkdtemp(path.join(out, 'state-'));
 const accountsFile = path.join(state, 'accounts.json');
@@ -189,8 +189,9 @@ try {
   check('采纳20件后余80允许再次发起，仍按同来源独立建流程', { shipped: 20, remaining: 80 });
 
   await page.getByRole('tab', { name: '在库升级', exact: true }).click();
-  await page.locator('.upgrade-filter select').nth(0).selectOption('SYNTH-TONER-001');
-  await page.locator('.upgrade-filter select').nth(1).selectOption('V11');
+  await page.getByRole('button', { name: '发起在库升级', exact: true }).click();
+  await page.getByLabel('发起型号', { exact: true }).selectOption('SYNTH-TONER-001');
+  await page.getByLabel('发起原版本', { exact: true }).selectOption('V11');
   const before = db.getDirectUpgradeSources().find(source => source.model === 'SYNTH-TONER-001' && source.sourceVersion === 'V11').available;
   assert.equal(before, 500);
   await page.route('**/api/upgrades/direct', async route => { if (route.request().method() === 'POST') shelf(warehouseTransit); await route.continue(); });

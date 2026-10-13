@@ -2,9 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   exportUpgradeFlow,
-  completeDirectUpgrade,
   completeRelocationUpgrade,
-  createDirectUpgrade,
   fetchUpgradeDashboard,
   formatNumber,
   initiateRelocationUpgrade,
@@ -16,6 +14,7 @@ import { Badge, displayTime, EmptyState, FeedbackButton, Notice, Panel, Segmente
 import { RelocationExternalHistory, RelocationExternalShipments } from "../components/RelocationExternalShipments";
 import { RelocationWaybills } from "../components/RelocationWaybills";
 import { RelocationUpdate } from "../components/RelocationUpdate";
+import { DirectUpgradeBoard } from "../components/DirectUpgrade";
 import { TransferUpgradeList } from "../components/TransferUpgrade";
 import { LingxingSync } from "../components/LingxingSync";
 import type { DirectUpgrade, NoticeMessage, RelocationCandidate, RelocationUpgrade, RelocationWorkItem, Role, UpgradeJob } from "../types";
@@ -73,15 +72,10 @@ export function Requirement4View({ role }: { role: Role }) {
   const [relocationModel, setRelocationModel] = useState("");
   const [relocationVersion, setRelocationVersion] = useState("");
   const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null);
-  const [directModel, setDirectModel] = useState("");
-  const [directVersion, setDirectVersion] = useState("");
-  const [directCompleteDrafts, setDirectCompleteDrafts] = useState<Record<number, CompleteDraft>>({});
   const [relocationCompleteDrafts, setRelocationCompleteDrafts] = useState<Record<number, CompleteDraft>>({});
-  const [pendingDirect, setPendingDirect] = useState<Record<number, CompletionRequest>>({});
   const [pendingRelocation, setPendingRelocation] = useState<Record<number, CompletionRequest>>({});
   const [operationDrafts, setOperationDrafts] = useState<Record<number, OperationDraft>>({});
   const relocationRequest = useRef<PendingRequest | null>(null);
-  const directRequest = useRef<PendingRequest | null>(null);
   const completionRequests = useRef(new Map<string, PendingRequest>());
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -98,15 +92,10 @@ export function Requirement4View({ role }: { role: Role }) {
     setSelectedSourceKey(null);
     setRelocationModel("");
     setRelocationVersion("");
-    setDirectModel("");
-    setDirectVersion("");
-    setDirectCompleteDrafts({});
     setRelocationCompleteDrafts({});
-    setPendingDirect({});
     setPendingRelocation({});
     setOperationDrafts({});
     relocationRequest.current = null;
-    directRequest.current = null;
     completionRequests.current.clear();
   }, [role]);
 
@@ -135,15 +124,6 @@ export function Requirement4View({ role }: { role: Role }) {
   useEffect(() => {
     setRelocationAccount(current => current.sourceKey === selectedKey ? current : {sourceKey:selectedKey,account:""});
   }, [selectedKey]);
-  const directModels = useMemo(
-    () => [...new Set((dashboard?.directSources ?? []).map((row) => row.model))],
-    [dashboard],
-  );
-  const directVersions = useMemo(
-    () => [...new Set((dashboard?.directSources ?? []).filter((row) => !directModel || row.model === directModel).map((row) => row.sourceVersion))],
-    [dashboard, directModel],
-  );
-  const selectedDirectSource = dashboard?.directSources.find((row) => row.model === directModel && row.sourceVersion === directVersion) ?? null;
   const relocationWorkItems = dashboard?.relocationWorkItems ?? [];
   const canInitiateRelocation = Boolean(selectedCandidate) && role !== "business" && role !== "alan"
     && !relocationWorkItems.some(work => candidateKey(work) === selectedKey && ["awaiting_procurement","awaiting_operation","awaiting_shipping"].includes(work.status));
@@ -206,23 +186,6 @@ export function Requirement4View({ role }: { role: Role }) {
     } finally { setBusy(null); }
   };
 
-  const submitDirect = async () => {
-    if (!selectedDirectSource || selectedDirectSource.available <= 0 || busy || role === "business" || role === "alan") return;
-    const payload = { model: selectedDirectSource.model, sourceVersion: selectedDirectSource.sourceVersion };
-    const requestId = requestFor(directRequest, "upgrade-direct", { role, ...payload });
-    setBusy("direct-create");
-    setNotice(null);
-    try {
-      const result = await createDirectUpgrade(role, { ...payload, requestId });
-      directRequest.current = null;
-      await notifySaved(`${selectedDirectSource.model} · ${selectedDirectSource.sourceVersion}：已锁定 ${formatNumber(result.upgrade.initialQuantity)} 件可用库存，等待采购登记升级完成数量。`);
-    } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const completionRequestId = (key: string, payload: unknown) => {
     const payloadKey = JSON.stringify(payload);
     const previous = completionRequests.current.get(key);
@@ -230,40 +193,6 @@ export function Requirement4View({ role }: { role: Role }) {
     const requestId = createRequestId(key);
     completionRequests.current.set(key, { payloadKey, requestId });
     return requestId;
-  };
-
-  const finishDirect = async (job: DirectUpgrade) => {
-    if (busy || completing.current) return;
-    const draft = directCompleteDrafts[job.id] ?? { quantity: "", version: job.newVersion ?? "" };
-    const key = `upgrade-direct-complete-${job.id}`;
-    let request = pendingDirect[job.id];
-    if (!request) {
-      const quantity = Number(draft.quantity);
-      const version = draft.version.trim();
-      const sourceLineId = draft.sourceLineId ?? job.lines.find(line => line.inProgressQuantity > 0)?.id;
-      const sourceLine = job.lines.find(line => line.id === sourceLineId && line.inProgressQuantity > 0);
-      if (!sourceLine || !Number.isInteger(quantity) || quantity <= 0 || quantity > sourceLine.inProgressQuantity || !version || !draft.warehouse) return;
-      request = { sourceLineId, completedQuantity: quantity, newVersion: version, targetWarehouse: draft.warehouse ?? "", expectedRevision: job.revision, requestId: createRequestId(key) };
-      setPendingDirect((current) => ({ ...current, [job.id]: request }));
-    }
-    // 同步可能已读到本次完成；确认未知结果时仍原样重放，先于剩余数量校验。
-    completing.current = true;
-    setBusy(key);
-    setNotice(null);
-    try {
-      await completeDirectUpgrade(role, job.id, request, [job.model,job.sourceVersion,displayTime(job.initiatedAt, true)].join(" / "));
-      setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
-      setDirectCompleteDrafts((current) => ({ ...current, [job.id]: { quantity: "", version: request.newVersion } }));
-      await notifySaved(`${job.model}：已将 ${formatNumber(request.completedQuantity)} 件从 ${job.sourceVersion} 转入 ${request.newVersion}；型号在库总量不变。`);
-    } catch (error) {
-      const status = (error as ApiError)?.status;
-      const rejected = status !== undefined && status >= 400 && status < 500;
-      if (rejected) setPendingDirect((current) => { const next = { ...current }; delete next[job.id]; return next; });
-      setNotice({ kind: "error", text: `${error instanceof Error ? error.message : String(error)}${rejected ? "" : " 本次完成记录结果待确认。"}` });
-    } finally {
-      completing.current = false;
-      setBusy(null);
-    }
   };
 
   const finishRelocation = async (job: RelocationUpgrade, relocationId: number, revision: number) => {
@@ -348,43 +277,8 @@ export function Requirement4View({ role }: { role: Role }) {
             <RelocationHistory role={role} warehouses={dashboard?.overseasWarehouses ?? []} jobs={relocationHistory.filter(row => candidateKey(row) === selectedKey)} drafts={relocationCompleteDrafts} setDrafts={setRelocationCompleteDrafts} busy={busy} pending={pendingRelocation} onComplete={finishRelocation} onRefresh={refreshAfterWrite} />
           </div>
         </div>
-      ) : (
-        <>
-          <Panel title="发起在库升级">
-            <div className="form-grid upgrade-filter">
-              <label className="field">
-                <span>型号</span>
-                <select value={directModel} onChange={(event) => { setDirectModel(event.target.value); setDirectVersion(""); directRequest.current = null; }}>
-                  <option value="">请选择型号</option>
-                  {directModels.map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>原版本号</span>
-                <select value={directVersion} onChange={(event) => { setDirectVersion(event.target.value); directRequest.current = null; }} disabled={!directModel}>
-                  <option value="">请选择原版本</option>
-                  {directVersions.map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
-              </label>
-            </div>
-            {selectedDirectSource && (
-              <>
-                <div className="upgrade-kpis">
-                  <span>在库 <strong>{formatNumber(selectedDirectSource.inStock)}</strong></span>
-                  <span>调拨锁定 <strong>{formatNumber(selectedDirectSource.allocationLocked)}</strong></span>
-                  <span>升级锁定 <strong>{formatNumber(selectedDirectSource.upgradeLocked)}</strong></span>
-                  <span className="primary">本次可锁 <strong>{formatNumber(selectedDirectSource.available)}</strong></span>
-                </div>
-                <div className="form-footer">
-                  {role !== "alan" && <button className="btn btn-primary" type="button" disabled={selectedDirectSource.available <= 0 || busy !== null || role === "business"} onClick={() => void submitDirect()}>{busy === "direct-create" ? "锁定中…" : `锁定全部 ${formatNumber(selectedDirectSource.available)} 件并发起升级`}</button>}
-                </div>
-              </>
-            )}
-          </Panel>
-
-          <DirectHistory role={role} warehouses={dashboard?.overseasWarehouses ?? []} jobs={directHistory} drafts={directCompleteDrafts} setDrafts={setDirectCompleteDrafts} busy={busy} pending={pendingDirect} onComplete={finishDirect} />
-        </>
-      )}
+      ) : null}
+      <DirectUpgradeBoard role={role} active={mode === "direct"} sources={dashboard?.directSources ?? []} jobs={directHistory} warehouses={dashboard?.overseasWarehouses ?? []} onBegin={() => setNotice(null)} onSaved={notifySaved} />
       <Notice notice={notice} onClose={() => setNotice(null)} />
     </div>
   );
@@ -440,72 +334,4 @@ function RelocationHistory({role,warehouses,jobs,drafts,setDrafts,busy,pending,o
       <div className="table-wrap"><table className="data-table" aria-label="入库批次"><thead><tr><th>入库时间</th><th>版本</th><th>实际仓库</th><th>有效入库量</th><th>当前占用</th><th>本次扣回</th></tr></thead><tbody>{row.receiptBatches.map(receipt=><tr key={receipt.ledgerId}><td>{displayTime(receipt.at, true)}</td><td>{receipt.version}</td><td>{receipt.warehouse}</td><td>{receipt.quantity}</td><td>{receipt.issue||'无'}</td><td>{decrease>0&&['purchasing','logistics'].includes(role)&&<input data-receipt-id={receipt.ledgerId} aria-label={'扣回 '+receipt.version+' '+receipt.warehouse+' '+displayTime(receipt.at, true)} disabled={!!receipt.issue||!!recovery||busy!==null} value={draft.reversals?.[receipt.ledgerId]??''} onChange={e=>update({reversals:{...draft.reversals,[receipt.ledgerId]:e.target.value}})}/>}</td></tr>)}</tbody></table></div>
     </article>;
   }))}</div>;
-}
-
-function DirectHistory({
-  role,
-  warehouses,
-  jobs,
-  drafts,
-  setDrafts,
-  busy,
-  pending,
-  onComplete,
-}: {
-  role: Role;
-  warehouses: string[];
-  jobs: DirectUpgrade[];
-  drafts: Record<number, CompleteDraft>;
-  setDrafts: React.Dispatch<React.SetStateAction<Record<number, CompleteDraft>>>;
-  busy: string | null;
-  pending: Record<number, CompletionRequest>;
-  onComplete: (job: DirectUpgrade) => Promise<void>;
-}) {
-  return (
-    <Panel title="在库升级记录">
-      {jobs.length === 0 ? <EmptyState title="暂无在库升级" /> : jobs.map((job) => {
-        const recovery = pending[job.id];
-        const draft = recovery
-          ? { sourceLineId: recovery.sourceLineId, quantity: String(recovery.completedQuantity), version: recovery.newVersion, warehouse: recovery.targetWarehouse }
-          : { sourceLineId: drafts[job.id]?.sourceLineId ?? job.lines.find(line => line.inProgressQuantity > 0)?.id, quantity: drafts[job.id]?.quantity ?? "", version: drafts[job.id]?.version ?? job.newVersion ?? "", warehouse: drafts[job.id]?.warehouse ?? "" };
-        const quantity = Number(draft.quantity);
-        const selectedLine = job.lines.find(line => line.id === draft.sourceLineId && line.inProgressQuantity > 0);
-        const valid = Boolean(selectedLine) && Number.isInteger(quantity) && quantity > 0 && quantity <= selectedLine!.inProgressQuantity && Boolean(draft.version.trim()) && Boolean(draft.warehouse);
-        return (
-          <article className="upgrade-job" key={job.id} data-upgrade-id={job.id}>
-            <div className="upgrade-job-head">
-              <div><strong>{job.model} · {job.sourceVersion}</strong><span>{displayTime(job.initiatedAt, true)}</span></div>
-              <Badge label={job.statusText} tone={job.status === "completed" ? "green" : "blue"} />
-            </div>
-            <div className="upgrade-kpis compact">
-              <span>初始锁定 <strong>{formatNumber(job.initialQuantity)}</strong></span>
-              <span>升级完成 <strong>{formatNumber(job.completedQuantity)}</strong></span>
-              <span className="primary">升级中 / 锁定 <strong>{formatNumber(job.inProgressQuantity)}</strong></span>
-
-              <span>发起岗位 <strong>{ROLE_LABELS[job.initiatedByRole]}</strong></span>
-            </div>
-            {(job.status === "active" || recovery) && ["purchasing", "logistics"].includes(role) && (
-              <div className="upgrade-inline-complete direct">
-                <select aria-label="完成来源批次" value={selectedLine?.id ?? (recovery?.sourceLineId ?? "")} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, sourceLineId: Number(event.target.value)}}))}>{!selectedLine&&!recovery&&<option value="">请重新选择实际来源批次</option>}{job.lines.filter(line => line.inProgressQuantity > 0 || line.id === recovery?.sourceLineId).map(line => <option key={line.id} value={line.id}>{line.sourceTeam ? line.sourceTeam + " / " : ""}{line.warehouse || "历史仓库未确定"} / {line.plan} / {line.shipDate} / {line.fnsku}{line.receivedAt ? " / 入库 " + displayTime(line.receivedAt, true) : ""}（{line.inProgressQuantity}）</option>)}</select>
-                <input aria-label="升级完成数量" inputMode="numeric" placeholder="所选批次的完成数量" value={draft.quantity} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, quantity: event.target.value } }))} />
-                <input aria-label="升级完成版本号" placeholder="升级完成版本号" value={draft.version} disabled={Boolean(recovery) || busy !== null} onChange={(event) => setDrafts((current) => ({ ...current, [job.id]: { ...draft, version: event.target.value } }))} />
-                <select aria-label="目标海外仓" value={draft.warehouse ?? ""} disabled={Boolean(recovery) || busy !== null} onChange={event => setDrafts(current => ({...current, [job.id]: {...draft, warehouse:event.target.value}}))}><option value="">选择目标海外仓</option>{warehouses.map(warehouse => <option key={warehouse} value={warehouse}>{warehouse}</option>)}</select>
-                          <button className="btn btn-primary" type="button" disabled={(!recovery && !valid) || busy !== null} onClick={() => void onComplete(job)}>{busy === `upgrade-direct-complete-${job.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button>
-                {!recovery&&selectedLine&&!valid&&quantity<=selectedLine.inProgressQuantity&&<p className="field-error" role="alert">请填写大于0的整数完成量、升级完成版本，并选择目标海外仓。</p>}
-                {!recovery&&!selectedLine&&<p className="form-hint">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}
-                {!recovery&&selectedLine&&quantity>selectedLine.inProgressQuantity&&<p className="form-hint">完成数量超出所选批次剩余 {selectedLine.inProgressQuantity} 件。</p>}
-              </div>
-            )}
-            {job.status === "active" && !["purchasing", "logistics"].includes(role) && <div className="form-hint">等待采购登记完成数量和新版本。</div>}
-            <div className="table-wrap">
-              <table className="data-table sub">
-                <thead><tr><th>型号</th><th>发货计划号</th><th>发货时间</th><th>原版本</th><th>已贴 FNSKU</th><th>来源海外仓</th><th className="num">发起时在库</th><th>状况</th><th className="num">升级完成</th><th className="num">升级中</th><th>升级完成版本</th></tr></thead>
-                <tbody>{job.lines.map((line) => <tr key={line.id}><td className="mono">{job.model}</td><td className="mono">{line.plan}</td><td className="date-cell">{line.shipDate}</td><td><span className="ver-chip">{line.sourceVersion}</span></td><td className="mono">{line.fnsku}</td><td>{line.warehouse || "历史仓库未确定"}</td><td className="num">{formatNumber(line.initialQuantity)}</td><td><Badge label={line.inProgressQuantity > 0 ? "升级中，预锁定" : "升级完成"} tone={line.inProgressQuantity > 0 ? "blue" : "green"} /></td><td className="num">{formatNumber(line.completedQuantity)}</td><td className="num strong">{formatNumber(line.inProgressQuantity)}</td><td>{line.completions.map(item => `${item.version} / ${item.warehouse || "历史仓库未确定"}：${item.quantity}`).join("、") || "-"}</td></tr>)}</tbody>
-              </table>
-            </div>
-          </article>
-        );
-      })}
-    </Panel>
-  );
 }

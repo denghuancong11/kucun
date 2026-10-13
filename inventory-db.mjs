@@ -4112,7 +4112,12 @@ export class InventoryDatabase {
         id: Number(line.id),
         sourceBatchKey: line.source_batch_key, warehouse: line.warehouse, sourceTeam: line.source_team || null,
         receivedAt: line.received_at,
-        completions: this.completionVersions("direct_line", Number(line.id)),
+        completions: this.db.prepare(`SELECT b.version, b.warehouse,
+          l.on_hand_delta + COALESCE(SUM(r.on_hand_delta),0) AS quantity
+          FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key
+          LEFT JOIN upgrade_inventory_ledger r ON r.related_ledger_id=l.id AND r.entry_type='direct_completion_reverse_target'
+          WHERE l.source_type='direct_line' AND l.source_id=? AND l.entry_type='direct_transfer_in'
+          GROUP BY l.id HAVING quantity>0 ORDER BY l.id`).all(Number(line.id)),
         plan: line.plan,
         shipDate: line.ship_date,
         sourceVersion: line.version,
