@@ -106,11 +106,6 @@ export function InventoryTable({
                 >
                   <td className="inventory-summary-model">
                     <span className="model-cell">
-                      <Icon
-                        name="chevron"
-                        size={12}
-                        className={`row-caret${isExpanded ? " open" : ""}`}
-                      />
                       {model.model}
                     </span>
                   </td>

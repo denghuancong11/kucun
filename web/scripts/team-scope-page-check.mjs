@@ -153,7 +153,7 @@ try {
   await page.getByRole('region',{name:model+' 库存明细',exact:true}).getByRole('button',{name:'询库',exact:true}).click();const dialog=page.getByRole('dialog');assert.deepEqual(await dialog.locator('label').filter({hasText:'询库部门'}).locator('select option').allTextContents(),[team]);
   for(const [label,value] of [['询库数量（必填）','10'],['询库店铺（必填）',team==='一团'?'AUS':'BUS'],['询库运营（必填）',team+'运营'],['ASIN（必填）','BTEAM00001'],['FNSKU（必填）','XUI']])await dialog.getByLabel(label,{exact:true}).fill(value);
   const inquiry=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/inquiries'&&r.request().method()==='POST');await dialog.getByRole('button',{name:'提交询库',exact:true}).click();assert.equal((await(await inquiry).json()).record.department,team);
-  await nav(page,'审批中心');while(await page.locator('.approval-expand[aria-expanded="false"]').count())await page.locator('.approval-expand[aria-expanded="false"]').first().click();assert.ok(!(await page.locator('.approval-page').innerText()).includes(team==='一团'?'二团专属':'一团运营'));
+  await nav(page,'审批中心');while(await page.locator('.approval-model-row[aria-expanded="false"]').count())await page.locator('.approval-model-row[aria-expanded="false"]').first().click();assert.ok(!(await page.locator('.approval-page').innerText()).includes(team==='一团'?'二团专属':'一团运营'));
   check(category+' '+team+'：调拨和询库只有本团选项、提交本团数据，审批只显示本团');
    assert.equal(await page.locator('.sidebar .nav-item').filter({hasText:/^在途库存$/}).count(),0);
    check(category+' '+team+'：库存汇总按原团队范围显示，运营侧栏不提供在途导入入口');

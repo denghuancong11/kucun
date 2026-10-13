@@ -201,9 +201,7 @@
 .direct-filters { display: grid; grid-template-columns: minmax(180px, 280px) minmax(120px, 180px) minmax(160px, 210px); gap: 12px; margin: 4px 0 16px; }
 .direct-task-table { min-width: 1060px; }
 .direct-task-table > tbody > tr > td { vertical-align: middle; }
-.direct-task-table > thead > tr > th:first-child { width: 34px; }
 .direct-task-table > tbody > tr > .direct-time { max-width: 165px; white-space: normal; }
-.direct-expand { font-size: 18px; width: 24px; }
 .direct-detail-row > td { padding: 12px !important; background: var(--surface-2); }
 .direct-batches { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow-x: auto; }
 .direct-batches .data-table { min-width: 1040px; }
@@ -737,6 +735,8 @@
 
 .allocation-history-row > td { padding-block: 5px; }
 .allocation-history summary { cursor: pointer; }
+.allocation-history summary, .relocation-external-history summary { list-style: none; }
+.allocation-history summary::-webkit-details-marker, .relocation-external-history summary::-webkit-details-marker { display: none; }
 .allocation-history summary:focus-visible, .relocation-external-history summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .allocation-history-table { min-width: 760px; }
 
@@ -755,10 +755,6 @@
 .approval-document-table { table-layout:fixed; width:100%; min-width:2890px; border-collapse:collapse; }
 .approval-data-row > td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .approval-summary-table .approval-model-name { color:#2864c5; }
-.approval-expand, .approval-model-toggle { display:inline-flex; align-items:center; border:0; background:none; padding:0; cursor:pointer; color:inherit; }
-.approval-expand { width:24px; height:24px; justify-content:center; }
-.approval-expand svg { transform:rotate(-90deg); }
-.approval-expand[aria-expanded="true"] svg { transform:rotate(0); }
 .approval-model-toggle { display:block; max-width:100%; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .approval-number { font-variant-numeric:tabular-nums; font-weight:600; }
 .approval-model-row.is-open { background:#fffaf6; }
@@ -844,7 +840,6 @@
 .upgrade-board .upgrade-source-table { min-width: 1050px; }
 .upgrade-board .upgrade-task-table { min-width: 1150px; }
 .upgrade-board .data-table td { overflow-wrap: anywhere; }
-.upgrade-board .upgrade-task-table > thead > tr > th:first-child { width: 36px; }
 .upgrade-board tr[hidden] { display: none; }
 .upgrade-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 100px; }
 .upgrade-row-actions .lingxing-sync { margin: 0; }
@@ -858,9 +853,11 @@
 .upgrade-history { padding-left: 20px; margin-bottom: 0; }
 .upgrade-history li { margin: 8px 0; }
 .upgrade-history li > div { margin-top: 4px; }
-.upgrade-template-tools { margin: 16px 0; padding: 14px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.upgrade-template-tools .transit-toolbar { align-items: end; margin: 0; }
-.upgrade-template-tools .field { min-width: 180px; }
+.upgrade-update-actions { min-width: 0; max-width: 100%; }
+.upgrade-update-actions > .transit-toolbar { margin: 0; padding: 0; border: 0; }
+.upgrade-update-actions > p { margin: 6px 0 0; max-width: 460px; overflow-wrap: anywhere; }
+.relocation-upgrade > .panel > .panel-head, .transfer-upgrade > .panel > .panel-head { flex-wrap: wrap; }
+.relocation-upgrade > .panel > .panel-head > .panel-head-actions { flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; align-items: flex-start; min-width: 0; }
 .upgrade-dialog { width: 940px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; }
 .upgrade-dialog[open] { display: flex; flex-direction: column; }
 .upgrade-dialog-wide { width: 1280px; }
@@ -889,8 +886,6 @@
 .reconcile-table .reconcile-identifier { min-width: 155px; max-width: 240px; }
 .reconcile-table .reconcile-address { min-width: 320px; max-width: 400px; white-space: pre-wrap; }
 .reconcile-table .num, .reconcile-table .reconcile-number { text-align: right; white-space: nowrap; }
-.relocation-upgrade .upgrade-task-table > thead > tr > th:first-child, .relocation-upgrade .upgrade-task-table > tbody > tr:not(.upgrade-detail-row) > td:first-child { min-width: 36px; width: 36px; }
-.direct-upgrade .direct-task-table > thead > tr > th:first-child, .direct-upgrade .direct-task-table > tbody > tr:not(.direct-detail-row) > td:first-child { min-width: 36px; width: 36px; }
 .reconcile-changes-table { min-width: 400px !important; }
 .reconcile-reversal-table { min-width: 1080px; }
 .reconcile-reversal-table input { min-width: 100px; }
@@ -898,3 +893,5 @@
   .upgrade-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .upgrade-board .upgrade-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+
+.transfer-upgrade .transfer-filters { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); max-width: 1120px; }

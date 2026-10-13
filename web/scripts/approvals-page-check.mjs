@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createInventoryDatabase, InventoryDatabase, INVENTORY_DATABASE_NAME } from "../../inventory-db.mjs";
 import { createTestInstanceId, waitForOwnedServer } from "../../scripts/test-server-ownership.mjs";
+import { openRelocationSource } from "../../scripts/fixtures/relocation-page.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aster-approvals-ui-"));
@@ -61,15 +62,15 @@ async function approvals(page) {
 async function expand(page, model = "SYNTH-TONER-001") {
   const group=page.locator('.approval-model-group[data-model="'+model+'"]');
   await group.waitFor();
-  const arrow=group.locator('.approval-expand');
-  if(await arrow.getAttribute('aria-expanded')==='false')await arrow.click();
+  const row=group.locator('.approval-model-row');
+  if(await row.getAttribute('aria-expanded')==='false')await row.click();
 }
 
 function record(page, documentNo) {
   return page.locator(`[data-document-no="${documentNo}"]`);
 }
 
-async function detailsText(row) { const group=row.locator('xpath=ancestor::tbody[contains(@class,"approval-model-group")]');if(await group.locator('.approval-expand').getAttribute('aria-expanded')==='false')await group.locator('.approval-expand').click();return row.innerText(); }
+async function detailsText(row) { const group=row.locator('xpath=ancestor::tbody[contains(@class,"approval-model-group")]');if(await group.locator('.approval-model-row').getAttribute('aria-expanded')==='false')await group.locator('.approval-model-row').click();return row.innerText(); }
 
 async function stock(page) {
   const result = await api("GET", "/api/allocations?model=SYNTH-TONER-001", "admin");
@@ -94,7 +95,7 @@ async function verifyApprovalDisplay(page, phase) {
       clipped:[...element.querySelectorAll('.approval-row-actions input,.approval-metric-cell')].filter(e=>e.getClientRects().length&&e.clientWidth>0&&e.scrollWidth>e.clientWidth+1).map(e=>({tag:e.tagName,class:e.className,width:e.clientWidth,scroll:e.scrollWidth})),
       sizes:[...element.querySelectorAll('.approval-summary-table td,.approval-metric-value,input,select')].filter(e=>e.getClientRects().length).map(e=>parseFloat(getComputedStyle(e).fontSize))
     }));
-    assert.deepEqual(result.headers,['','型号','在库库存','申请数量合计','商务审核数量合计']);
+    assert.deepEqual(result.headers,['型号','在库库存','申请数量合计','商务审核数量合计']);
     const hidesProfit=['assistant-1','assistant-2','purchasing'].includes(result.role);
     const expectedDocumentHeaders=['申请数量','商务部审核数量','套/箱','商务部备注','供应商库存回复','发货仓库','采购备注','调拨部门','调拨店铺','调拨运营','已贴FNSKU','ASIN','运营备注','提交时间','状况','7 天销量','30 天销量',...(hidesProfit?[]:['订单毛利润（USD）']),'FBA 可售','FBA 待调仓','FBA 调仓中','FBA 在途','调货前倍数','调货后倍数'];
     assert.deepEqual(result.documentHeaders,expectedDocumentHeaders);
@@ -229,10 +230,10 @@ try {
   const watchCounts = async counts => {
     await Promise.all(observers.map(async (observer, index) => {
       await todo(observer, counts[index]);
-      while(await observer.locator('.approval-expand[aria-expanded="false"]').count())await observer.locator('.approval-expand[aria-expanded="false"]').first().click();
+      while(await observer.locator('.approval-model-row[aria-expanded="false"]').count())await observer.locator('.approval-model-row[aria-expanded="false"]').first().click();
       assert.equal(await observer.locator('.approval-record').count(), counts[index], '其他电脑的实际待办行数与待办数量一致');
       if (index >= 3) {
-        while(await observer.locator('.approval-expand[aria-expanded="false"]').count())await observer.locator('.approval-expand[aria-expanded="false"]').first().click();
+        while(await observer.locator('.approval-model-row[aria-expanded="false"]').count())await observer.locator('.approval-model-row[aria-expanded="false"]').first().click();
         const departments = await observer.locator('.approval-record').allTextContents();
         assert.ok(departments.every(text => text.includes(index === 3 ? '一团' : '二团')), '运营只看到本团待办');
         assert.equal(await observer.locator('.approval-record .approval-review-form').count(), 0, '运营跟进不获得办理权限');
@@ -258,7 +259,7 @@ try {
   await operationPage.getByLabel('搜索运营姓名、型号或 ASIN',{exact:true}).fill('没有这个姓名');
   await todo(operationPage,2); await operationPage.getByText('当前筛选下没有待办',{exact:true}).waitFor();
   await operationPage.getByRole('button',{name:'清除筛选',exact:true}).click();
-  await expand(operationPage);await operationPage.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-expand').click(); await todo(operationPage,2); await expand(operationPage);
+  await expand(operationPage);await operationPage.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-model-row').click(); await todo(operationPage,2); await expand(operationPage);
   await operationPage.screenshot({path:path.join(output,'operation-pending-business.png'),fullPage:true});
   check('运营待办保留进度冲突解除、筛选无结果及清除筛选，折叠不改变计数',true);
 
@@ -282,7 +283,7 @@ try {
     assert.equal(await card.locator('[data-field="申请数量"]').innerText(),requested);
     assert.equal(await card.locator('[data-field="商务审核数量"]').innerText(),'—');
     assert.equal(await card.locator('[data-field="套/箱"]').innerText(),requested==='100'?'10':'—');
-    assert.equal(await card.locator('.approval-expand,.approval-model-toggle,[data-field="供货数量"],[data-field="来源批次"]').count(),0);
+    assert.equal(await card.locator('.approval-model-row,.approval-model-toggle,[data-field="供货数量"],[data-field="来源批次"]').count(),0);
     assert.equal(await card.getByRole('button',{name:'商务审核',exact:true}).count(),0);
     assert.equal(await card.getByLabel('审核数量',{exact:true}).count(),1);
   }
@@ -290,9 +291,9 @@ try {
   await modelGroup.locator('.approval-model-toggle').click();
   assert.equal(await allocationCard.isVisible(),false);assert.equal(await inquiryCard.isVisible(),false);
   assert.equal(await page.locator('.approval-model-group[data-model="SYNTH-INK-001"] .approval-record').isVisible(),true);
-  await page.locator('.approval-model-group[data-model="SYNTH-INK-001"] .approval-expand').click();
+  await page.locator('.approval-model-group[data-model="SYNTH-INK-001"] .approval-model-row').click();
   for(const width of [1280,1366,1920]) {await page.setViewportSize({width,height:1100});await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:path.join(output,'summary-collapsed-'+width+'.png'),fullPage:true});}
-  await modelGroup.locator('.approval-expand').click();
+  await modelGroup.locator('.approval-model-row').click();
   for(const width of [1280,1366,1920]) {
     await page.setViewportSize({width,height:1100});
     const scroll=modelGroup.locator('.approval-table-scroll');
@@ -343,7 +344,7 @@ try {
   await page.getByText('当前筛选下没有待办', {exact:true}).waitFor(); await todo(page, 3);
   await page.getByRole('button', {name:'清除筛选',exact:true}).click(); await allocationCard.waitFor();
   assert.equal(await page.getByLabel('搜索运营姓名、型号或 ASIN', {exact:true}).inputValue(), '');
-  await expand(page); await page.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-expand').click(); await todo(page, 3); await expand(page);
+  await expand(page); await page.locator('.approval-model-group[data-model="SYNTH-TONER-001"] .approval-model-row').click(); await todo(page, 3); await expand(page);
   check('搜索或类目/类型遮挡时提示筛选无结果，清除筛选恢复，型号折叠不改变岗位总数', true);
   check("删除待办说明后仍显示商务待审核单据", await page.locator(".approval-scope-hint").count()===0 && await allocationCard.isVisible() && await inquiryCard.isVisible());
   await allocationCard.getByLabel("审核数量",{exact:true}).waitFor();
@@ -354,7 +355,7 @@ try {
   const reviewPosts=[];const captureReview=request=>{if(request.method()==='POST'&&request.url().endsWith('/review'))reviewPosts.push(request.postDataJSON());};page.on('request',captureReview);
   await inquiryCard.getByLabel('商务备注',{exact:true}).press('Tab');
   await inquiryCard.getByLabel('审核数量',{exact:true}).press('Enter');
-  await modelGroup.locator('.approval-expand').click();await modelGroup.locator('.approval-model-toggle').click();
+  await modelGroup.locator('.approval-model-row').click();await modelGroup.locator('.approval-model-toggle').click();
   const refreshed=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/approvals');await page.getByRole('button',{name:'刷新',exact:true}).click();await refreshed;
   assert.equal(await allocationCard.getByLabel('审核数量',{exact:true}).inputValue(),'90');
   assert.equal(await inquiryCard.getByLabel('审核数量',{exact:true}).inputValue(),'80');
@@ -458,13 +459,13 @@ try {
   const inquirySource = inquirySources;
   await allocationSource.waitFor();
   await inquirySource.waitFor();
-  await allocationSource.getByRole('button').first().click();
-  const sourceCard=page.getByRole('dialog');
+  await openRelocationSource(page,allocationSource);
+  let sourceCard=page.locator('[data-relocation-source-detail="'+await allocationSource.getAttribute('data-source-key')+'"]');
   check("升级页面带出调拨批准量90及原计划、日期和版本",(await allocationSource.innerText()).includes('90') && (await sourceCard.innerText()).includes('TEST-PLAN-TONER') && (await sourceCard.innerText()).includes('2026-02-10') && (await sourceCard.innerText()).includes('V11'));
-  await page.getByRole('button',{name:'关闭弹窗',exact:true}).click();await inquirySource.getByRole('button').first().click();
+  await openRelocationSource(page,inquirySource);sourceCard=page.locator('[data-relocation-source-detail="'+await inquirySource.getAttribute('data-source-key')+'"]');
   check("询库来源带出回复量、ASIN、计划、日期和原版本",await inquirySource.count()===1 && (await inquirySource.innerText()).includes('60') && (await sourceCard.innerText()).includes('BUIINQ0001') && (await sourceCard.innerText()).includes('V20') && (await sourceCard.innerText()).includes('FBA-UI-INQUIRY'));
   await page.screenshot({path:path.join(output,'approval-upgrade-sources.png'),fullPage:true});
-  await page.getByRole("button",{name:"关闭弹窗",exact:true}).click();await inquirySource.getByRole("button",{name:"发起移仓升级",exact:true}).click();
+  await inquirySource.getByRole("button",{name:"发起移仓升级",exact:true}).click();
   result = await write(page, "/api/upgrades/relocation-work-items", () => page.getByRole("dialog").getByRole("button", { name: "确认发起移仓升级", exact: true }).click());
   await page.getByRole("dialog").waitFor({state:"hidden"});
   check("升级页直接发起归档询库来源", result.workItem.inquiryId===inquiry.id && result.workItem.inquiryShipmentId==null && result.workItem.sourceQuantityBefore===60 && result.workItem.shipDate==="2026-09-01");
@@ -720,7 +721,7 @@ try {
     for (const model of ['SYNTH-TONER-001', 'SYNTH-INK-001']) {
       const modelGroup = page.locator('.approval-model-group[data-model="' + model + '"]');
       await modelGroup.waitFor();
-      if (await modelGroup.locator('.approval-expand').getAttribute('aria-expanded') === 'false') await modelGroup.locator('.approval-expand').click();
+      if (await modelGroup.locator('.approval-model-row').getAttribute('aria-expanded') === 'false') await modelGroup.locator('.approval-model-row').click();
     }
     const group = currentRole === 'operation-1' || currentRole === 'assistant-1' ? '一团' : currentRole === 'operation-2' || currentRole === 'assistant-2' ? '二团' : null;
     const expectedPerModel = group ? 2 : 4;

@@ -80,12 +80,6 @@
   display: block;
 }
 
-/* 型号正文保留左侧展开箭头；表头标题补齐相同的箭头与间距，
-   使两者的文字起点稳定一致。 */
-.inventory-summary-table .inventory-summary-model-header .th-sort > span {
-  padding-left: calc(12px + var(--sp-1));
-}
-
 .inventory-summary-table .inventory-summary-model-header .th-sort {
   text-align: left;
 }
@@ -282,17 +276,6 @@
 
 .model-detail-host-cell > .detail-panel {
   margin-top: 0;
-}
-
-.row-caret {
-  color: var(--text-3);
-  transform: rotate(-90deg);
-  transition: transform var(--dur-state) var(--ease-soft);
-}
-
-.row-caret.open {
-  transform: none;
-  color: var(--brand);
 }
 
 /* ---------- 明细分段（在库 / 在途） ---------- */

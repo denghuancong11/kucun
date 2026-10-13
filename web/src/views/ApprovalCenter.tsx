@@ -197,8 +197,8 @@ export function ApprovalCenterView({ role }: { role: Role }) {
     {clearAction.uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={clearAction.busy} onClick={() => void clearAction.perform()}>{clearAction.busy?"正在确认…":"重试确认"}</button>}
     {query.isError && <div className="callout callout-danger" role="alert">{query.error instanceof Error ? query.error.message : "审批记录加载失败"}<FeedbackButton label="重新加载" pendingLabel="正在刷新…" doneLabel="刷新完成" className="btn btn-ghost btn-sm" onAction={()=>query.refetch({throwOnError:true})} onResult={setNotice}/></div>}
     {query.isLoading ? <SkeletonTable /> : !query.data ? null : groups.length === 0 ? <EmptyState title={scope === "mine" ? todoItems.length === 0 ? "当前岗位暂无待办" : "当前筛选下没有待办" : "暂无符合条件的审批记录"} /> : <table className="approval-summary-table" aria-label="审批型号汇总">
-      <colgroup><col style={{ width: 44 }} /><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>
-      <thead><tr><th aria-label="展开或收起型号" />{["型号", "在库库存", "申请数量合计", "商务审核数量合计"].map(label => <th key={label}>{label}</th>)}</tr></thead>
+      <colgroup><col style={{ width: "36%" }} /><col /><col /><col /></colgroup>
+      <thead><tr>{["型号", "在库库存", "申请数量合计", "商务审核数量合计"].map(label => <th key={label}>{label}</th>)}</tr></thead>
       {groups.map(([model, records]) => {
         const open = expanded.has(model);
         const stock = inventory.data?.models.find(item => item.model === model)?.inStock;
@@ -207,13 +207,12 @@ export function ApprovalCenterView({ role }: { role: Role }) {
         const detailId = `approval-model-${encodeURIComponent(model)}`;
         return <tbody className="approval-model-group" key={model} data-model={model}>
           <tr className={`approval-model-row expandable-row${open ? " is-open" : ""}`} {...expandableRowProps(open, () => toggle(model))} aria-controls={detailId}>
-            <td><button type="button" className="approval-expand" aria-label={`${open ? "收起" : "展开"} ${model}`} aria-expanded={open} aria-controls={detailId} onClick={() => toggle(model)}><Icon name="chevron" size={14} /></button></td>
             <td className="approval-model-name"><span className="approval-model-toggle" title={model}>{model}</span></td>
             <td className="approval-number" data-field="在库库存">{stock === undefined ? "—" : formatNumber(stock)}</td>
             <td className="approval-number" data-field="申请数量合计">{formatNumber(requested)}</td>
             <td className="approval-number" data-field="商务审核数量合计">{approved === null ? "—" : formatNumber(approved)}</td>
           </tr>
-          <tr className="approval-model-details" id={detailId} hidden={!open}><td colSpan={5}><div className="approval-table-scroll">
+          <tr className="approval-model-details" id={detailId} hidden={!open}><td colSpan={4}><div className="approval-table-scroll">
             <table className="approval-document-table" aria-label={`${model} 审批单据`} style={{ minWidth: `${documentMinWidth}px` }}>
             <colgroup>{documentColumns.map((column, index) => <col key={index} style={{ width: column.width }} />)}</colgroup>
             <thead><tr>{documentColumns.map(column => <th key={column.label}>{column.label}</th>)}</tr></thead>

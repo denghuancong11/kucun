@@ -101,7 +101,7 @@ async function approvalFailure() {
  const draft=(await json('/api/inquiries',{model:'MULTI-ORDINARY',quantity:10,department:'一团',store:'保留草稿USUS',operator:'测试',fnsku:'XNOTE00001',asin:'BNOTE00001',requestId:crypto.randomUUID()})).record;
  const context=await browser.newContext(),p=await context.newPage();const card=p.locator('[data-document-no="'+draft.documentNo+'"]');let fail=false;
  await p.route('**/api/approvals',route=>fail?route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,error:'隔离审批读取失败'})}):route.continue());
- await p.goto(base);await p.getByLabel('切换当前操作角色',{exact:true}).selectOption('business');await p.locator('.sidebar .nav-item',{hasText:'审批中心'}).click();await p.locator('.approval-model-group[data-model="MULTI-ORDINARY"] .approval-expand').click();await card.getByLabel('审核数量',{exact:true}).waitFor();
+ await p.goto(base);await p.getByLabel('切换当前操作角色',{exact:true}).selectOption('business');await p.locator('.sidebar .nav-item',{hasText:'审批中心'}).click();await p.locator('.approval-model-group[data-model="MULTI-ORDINARY"] .approval-model-row').click();await card.getByLabel('审核数量',{exact:true}).waitFor();
  await card.getByLabel('审核数量',{exact:true}).fill('7');await card.getByLabel('商务备注',{exact:true}).fill('乙尚未提交的备注');fail=true;
  await seed('MULTI-NOTE-CHANGE');await sleep(4500);
  const retained=await card.getByLabel('审核数量',{exact:true}).count()===1&&(await card.getByLabel('审核数量',{exact:true}).inputValue())==='7';

@@ -51,7 +51,7 @@ try{
  assert.equal(oldCount,8);assert.ok(initial.allocations.some(r=>r.id===pending.id));check('首次上线不清空：已完成、未完成、拒绝及零供货记录均保留');
  browser=await chromium.launch({headless:true,executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  const a=await page('business'),b=await page('operation-1');await count(a,8);await count(b,7);
- await a.locator('.approval-expand').click();
+ await a.locator('.approval-model-row').click();
  assert.equal(await a.locator(`[data-document-no="${finished.documentNo}"] .approval-progress`).innerText(),'已完成');
  assert.equal(await a.locator(`[data-document-no="${completed.documentNo}"] .approval-progress`).innerText(),'已完成');
  assert.equal(await a.locator(`[data-document-no="${zero.documentNo}"] .approval-progress`).innerText(),'已完成');
@@ -74,9 +74,9 @@ try{
  check('定时清理后，超过90天的已完成询库仍以持久化来源读取ASIN及计划并可发起升级');
 
  // 跨周期的旧单从页面继续办理，HTTP结果、持久化单据和库存流水同时核对。
- actor=await page('business');await actor.locator('.approval-expand').click();
+ actor=await page('business');await actor.locator('.approval-model-row').click();
  async function pageWrite(route,action){const [response]=await Promise.all([actor.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===route),action()]);const result=await response.json();assert.equal(response.status(),200,JSON.stringify(result));return result;}
- async function actorRole(role){const selector=actor.getByLabel('切换当前操作角色',{exact:true});if(await selector.inputValue()!==role){const ready=actor.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname==='/api/approvals'&&r.request().headers()['x-role']===role);await selector.selectOption(role);await ready;}await actor.locator('.approval-summary-table').waitFor();while(await actor.locator('.approval-expand[aria-expanded="false"]').count())await actor.locator('.approval-expand[aria-expanded="false"]').first().click();}
+ async function actorRole(role){const selector=actor.getByLabel('切换当前操作角色',{exact:true});if(await selector.inputValue()!==role){const ready=actor.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname==='/api/approvals'&&r.request().headers()['x-role']===role);await selector.selectOption(role);await ready;}await actor.locator('.approval-summary-table').waitFor();while(await actor.locator('.approval-model-row[aria-expanded="false"]').count())await actor.locator('.approval-model-row[aria-expanded="false"]').first().click();}
  const pendingRow=actor.locator('[data-document-no="'+pending.documentNo+'"]'),beforeQuantity=db.getCatalog().models.find(m=>m.model===pending.model).inStock;
  await pendingRow.getByLabel('审核数量',{exact:true}).fill('6');let current=(await pageWrite('/api/allocations/'+pending.id+'/review',()=>pendingRow.getByRole('button',{name:'批准',exact:true}).click())).record;
  assert.equal(current.approvedQuantity,6);assert.equal(db.db.prepare('SELECT locked FROM stock_balances WHERE batch_key=?').get(pending.batchKey).locked,6);

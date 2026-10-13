@@ -40,27 +40,31 @@ async function dragSelect(locator){
  await page.mouse.move(box.x+1,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-1,box.y+box.height/2,{steps:8});await page.mouse.up();
  const selected=await page.evaluate(()=>getSelection()?.toString());assert(selected?.length,'actual mouse drag must select text');await page.keyboard.press('Control+c');return selected;
 }
-async function rowCycle({name,row,icon,middle,plain,detail}){
+async function rowCycle({name,row,middle,plain,detail,columns}){
+ const layout=await row.evaluate(el=>({headers:[...el.closest('table').querySelectorAll(':scope > thead > tr > th')].map(cell=>cell.textContent.trim()),cells:el.children.length,modelWidth:el.children[0].getBoundingClientRect().width}));
+ assert.equal(layout.headers.length,columns);assert.equal(layout.cells,columns);assert.equal(layout.headers[0],'型号');assert(layout.headers.every(label=>label&&label!=='详情'));assert(layout.modelWidth>60,'型号不能沿用原展开图标列的窄宽度');
+ assert.equal(await row.locator('.row-caret,.approval-expand,.direct-expand').count(),0);assert.equal(await row.getByRole('button',{name:/^(展开|收起)/}).count(),0);
  await expanded(row,false);
- await icon.click();await expanded(row,true);
+ await plain.click();await expanded(row,true);
+ assert.equal(await detail.evaluate(el=>el.closest('tr').querySelector(':scope > td').colSpan),columns);
  await middle.click();await expanded(row,false);
  const right=row.locator(':scope > td').last();const box=await right.boundingBox();assert(box);await right.click({position:{x:box.width-4,y:box.height/2}});await expanded(row,true);
  await detail.locator('td,dd').first().click();await expanded(row,true);
  await row.focus();await page.keyboard.press('Space');await expanded(row,false);await page.keyboard.press('Enter');await expanded(row,true);
  const focused=await row.evaluate(el=>({active:document.activeElement===el,outline:getComputedStyle(el).outlineWidth}));assert(focused.active);assert.notEqual(focused.outline,'0px');
  const selected=await dragSelect(plain);await expanded(row,true);await clearSelection();
- if(await icon.evaluate(el=>el.tagName==='BUTTON')){await icon.focus();await page.keyboard.press('Space');await expanded(row,false);await page.keyboard.press('Enter');await expanded(row,true);}
- check(name+'：图标、中间文字、右空白、行与图标键盘每次只切换一次；正文与拖选复制不误收起',{selected,focusOutline:focused.outline});
+ check(name+'：无展开符号和专用空列；普通文字、中间、右空白及行键盘每次只切换一次，正文与拖选复制不误收起',{layout,selected,focusOutline:focused.outline});
 }
 async function summaryCycle(details,name){
  const summary=details.locator(':scope > summary');assert.equal(await details.getAttribute('open'),null);
+ assert.equal(await summary.evaluate(el=>getComputedStyle(el).listStyleType),'none','折叠标题不能保留原生三角');
  const dimensions=await summary.evaluate(el=>({summary:el.getBoundingClientRect().width,parent:el.parentElement.getBoundingClientRect().width}));assert(dimensions.summary>dimensions.parent*.9);
  let box=await summary.boundingBox();await summary.click({position:{x:box.width-4,y:box.height/2}});assert.notEqual(await details.getAttribute('open'),null);
  await details.locator('tbody td').first().click();assert.notEqual(await details.getAttribute('open'),null);
  await summary.focus();await page.keyboard.press('Space');assert.equal(await details.getAttribute('open'),null);await page.keyboard.press('Enter');assert.notEqual(await details.getAttribute('open'),null);
  const selected=await dragSelect(summary);assert.notEqual(await details.getAttribute('open'),null);await clearSelection();
  box=await summary.boundingBox();await summary.click({position:{x:box.width/2,y:box.height/2}});assert.equal(await details.getAttribute('open'),null);
- check(name+'：标题整条与键盘可切换，正文和标题拖选不误收起',{dimensions,selected});
+ check(name+'：无三角，标题整条与键盘可切换，正文和标题拖选不误收起',{dimensions,selected});
 }
 function inquiry(plan,model='SYNTH-TONER-001',version='V1'){
  let row=db.createInquiry({role:'operation-1',model,quantity:100,department:'一团',store:'AUS',operator:'交互隔离',fnsku:'000'+plan,asin:'BROWEXPAND1',requestId:rid()}).record;
@@ -87,7 +91,9 @@ try{
 
  await nav('operation-1','库存汇总');
  const inventory=page.locator('.inventory-model-row').filter({hasText:'SYNTH-TONER-001'}),inventoryDetail=page.locator('#inventory-detail-SYNTH-TONER-001');
- await rowCycle({name:'库存型号',row:inventory,icon:inventory.locator('.row-caret'),middle:inventory.locator(':scope > td').nth(2),plain:inventory.locator('.model-cell'),detail:inventoryDetail});
+ const inventoryAlignment=await inventory.evaluate(el=>({header:el.closest('table').querySelector('.inventory-summary-model-header .th-sort > span').getBoundingClientRect().left,model:el.querySelector('.model-cell').getBoundingClientRect().left}));assert(Math.abs(inventoryAlignment.header-inventoryAlignment.model)<1,'库存型号表头与正文起点应对齐');
+ await rowCycle({name:'库存型号',row:inventory,columns:8,middle:inventory.locator(':scope > td').nth(2),plain:inventory.locator('.model-cell'),detail:inventoryDetail});
+ checks.at(-1).textAlignment=inventoryAlignment;
  const allocationHistory=inventoryDetail.locator('.allocation-history[data-batch-key="'+batch.batchKey+'"]');await summaryCycle(allocationHistory,'调拨记录');
  const allocationButton=inventoryDetail.getByRole('button',{name:'调拨',exact:true}).first(),batchRow=allocationButton.locator('xpath=ancestor::tr[1]');
  await batchRow.locator(':scope > td').first().click();assert.equal(await inventoryDetail.locator('.allocation-panel').count(),0);await expanded(inventory,true);
@@ -98,20 +104,20 @@ try{
 
  await nav('business','审批中心');
  const approval=page.locator('.approval-model-group[data-model="SYNTH-TONER-001"]'),approvalRow=approval.locator(':scope > .approval-model-row'),approvalDetail=approval.locator('.approval-model-details');
- await rowCycle({name:'审批型号汇总',row:approvalRow,icon:approvalRow.locator('.approval-expand'),middle:approvalRow.locator(':scope > td').nth(2),plain:approvalRow.locator(':scope > td').nth(3),detail:approvalDetail});
+ await rowCycle({name:'审批型号汇总',row:approvalRow,columns:4,middle:approvalRow.locator(':scope > td').nth(1),plain:approvalRow.locator(':scope > td').first(),detail:approvalDetail});
  const approvalRecord=page.locator('[data-document-key="allocation-'+allocation.id+'"]');await approvalRecord.getByLabel('审核数量',{exact:true}).fill('50');await approvalRecord.getByLabel('审核数量',{exact:true}).press('Space');await expanded(approvalRow,true);await approvalRow.locator(':scope > td').nth(2).click();await expanded(approvalRow,false);await approvalRow.locator(':scope > td').nth(2).click();assert.equal(await approvalRecord.getByLabel('审核数量',{exact:true}).inputValue(),'50');
  const approvalOther=page.locator('.approval-model-group[data-model="SYNTH-INK-001"] > .approval-model-row');await approvalOther.locator(':scope > td').nth(2).click();await expanded(approvalOther,true);await expanded(approvalRow,true);check('审批保持多行展开，明细输入与父行收起重开不丢草稿');await shot('approval-expansion');
 
  await nav('purchasing','升级库存','在库升级');
  const directRow=page.locator('[data-upgrade-id="'+direct.id+'"]'),directDetail=page.locator('[data-direct-batches="'+direct.id+'"]');
- await rowCycle({name:'在库升级',row:directRow,icon:directRow.locator('.direct-expand'),middle:directRow.locator(':scope > td').nth(2),plain:directRow.locator(':scope > td').nth(1),detail:directDetail});await shot('direct-expanded-details');
+ await rowCycle({name:'在库升级',row:directRow,columns:9,middle:directRow.locator(':scope > td').nth(1),plain:directRow.locator(':scope > td').first(),detail:directDetail});await shot('direct-expanded-details');
  await directRow.getByRole('button',{name:'登记完成',exact:true}).click();await expanded(directRow,true);await dialog().getByLabel('本次完成数量',{exact:true}).fill('3');await close();await directRow.getByRole('button',{name:'登记完成',exact:true}).focus();await page.keyboard.press('Enter');await dialog().waitFor();await expanded(directRow,true);assert.equal(await dialog().getByLabel('本次完成数量',{exact:true}).inputValue(),'3');await close();await directRow.locator(':scope > td').nth(2).click();await expanded(directRow,false);await directRow.getByRole('button',{name:'登记完成',exact:true}).focus();await page.keyboard.press('Space');await dialog().waitFor();await expanded(directRow,false);assert.equal(await dialog().getByLabel('本次完成数量',{exact:true}).inputValue(),'3');await close();check('登记完成鼠标/Enter/Space仅开弹窗，父行状态不切换；关闭和折叠后保留完成草稿');await shot('direct-expansion');
 
  await nav('purchasing');
  assert.equal(await page.getByRole('button',{name:'查看任务',exact:true}).count(),0);
  const sourceRow=source(recallable.id),details=sourceDetail(recallable.id);
  assert.equal(await sourceRow.getByRole('button',{name:recallable.model,exact:true}).count(),0);assert.equal(await sourceRow.getByRole('link').count(),0);
- await rowCycle({name:'移仓来源',row:sourceRow,icon:sourceRow.getByRole('button',{name:/(展开|收起).*来源/}),middle:sourceRow.locator(':scope > td').nth(1),plain:sourceRow.locator(':scope > td').first(),detail:details});
+ await rowCycle({name:'移仓来源',row:sourceRow,columns:12,middle:sourceRow.locator(':scope > td').nth(1),plain:sourceRow.locator(':scope > td').first(),detail:details});
  assert((await details.innerText()).includes('BROWEXPAND1'));await sourceRow.locator(':scope > td').first().click();await expanded(sourceRow,false);assert.equal(await dialog().count(),0);await sourceRow.locator(':scope > td').first().click();await expanded(sourceRow,true);
  const sourceFilterBefore=await page.getByLabel('移仓筛选型号').inputValue();await sourceRow.getByRole('button',{name:'发起移仓升级',exact:true}).click();await expanded(sourceRow,true);await close();assert.equal(await page.getByLabel('移仓筛选型号').inputValue(),sourceFilterBefore);
  check('移仓来源型号为普通文字整行展开，查看任务已移除；ASIN、原始来源资料保留，展开不变任务筛选，发起按钮不触发行切换');await shot('relocation-source-expanded');
@@ -128,13 +134,13 @@ try{
  check('1366/1440来源表横滚至两端，原位详情全部字段及回撤按钮均保持在可视范围，未截断',{layouts:sourceLayouts});
 
  const workRow=task(relocation.id),workDetail=page.locator('[data-relocation-detail="'+relocation.id+'"]');
- await rowCycle({name:'移仓任务',row:workRow,icon:workRow.getByRole('button',{name:/(展开|收起)移仓详情/}),middle:workRow.locator(':scope > td').nth(3),plain:workRow.locator(':scope > td').nth(1),detail:workDetail});
+ await rowCycle({name:'移仓任务',row:workRow,columns:22,middle:workRow.locator(':scope > td').nth(2),plain:workRow.locator(':scope > td').first(),detail:workDetail});
  await summaryCycle(workDetail.locator('.relocation-external-history'),'领星包裹采纳明细');await expanded(workRow,true);await shot('relocation-expanded-details');
  await workRow.getByRole('button',{name:'更新升级数量',exact:true}).click();await expanded(workRow,true);await dialog().getByLabel('升级完数量',{exact:true}).fill('4');await close();await workRow.locator(':scope > td').nth(3).click();await workRow.getByRole('button',{name:'更新升级数量',exact:true}).click();await expanded(workRow,false);assert.equal(await dialog().getByLabel('升级完数量',{exact:true}).inputValue(),'0');assert.equal(db.getRelocationWorkItem(relocation.id).shippedQuantity,20);await close();check('更新升级数量独立于整行展开；显式重开按原行为读取当前累计量，未提交不落库');await shot('relocation-task-expanded');
  await nav('operation-1');const orderRow=task(operation.id);await orderRow.getByRole('button',{name:'填写订单号',exact:true}).click();await expanded(orderRow,false);await dialog().getByLabel('移除订单号').fill('DRAFT-ONLY');await close();await orderRow.locator(':scope > td').nth(3).click();await expanded(orderRow,true);await orderRow.getByRole('button',{name:'填写订单号',exact:true}).click();await expanded(orderRow,true);assert.equal(await dialog().getByLabel('移除订单号').inputValue(),'DRAFT-ONLY');await close();assert.equal(db.getRelocationWorkItem(operation.id).removalOrderNo,operation.removalOrderNo);check('填写订单号独立弹窗，原任务草稿不丢且未提交未落库');
 
  await nav('logistics','升级库存','转仓升级');const transferRow=page.locator('[data-transfer-id="'+transfer.id+'"]'),transferDetail=page.locator('[data-transfer-detail="'+transfer.id+'"]');
- await rowCycle({name:'转仓升级',row:transferRow,icon:transferRow.getByRole('button',{name:/(展开|收起)转仓详情/}),middle:transferRow.locator(':scope > td').nth(4),plain:transferRow.locator(':scope > td').first(),detail:transferDetail});
+ await rowCycle({name:'转仓升级',row:transferRow,columns:15,middle:transferRow.locator(':scope > td').nth(4),plain:transferRow.locator(':scope > td').first(),detail:transferDetail});
  const secondTransfer=page.locator('[data-transfer-id]').filter({hasText:transferSample[0]}).nth(1);if(await secondTransfer.getAttribute('data-transfer-id')!==String(transfer.id)){await secondTransfer.locator(':scope > td').first().click();await expanded(secondTransfer,true);await expanded(transferRow,true);}await page.getByRole('button',{name:'刷新',exact:true}).last().click();await expanded(transferRow,true);check('转仓多行展开与正常刷新保持展开状态，有数据详情内数量和业务值完整');await shot('transfer-expansion');
 
  const roleVisibility=[];for(const role of ROLES){await nav(role);const row=source(recallable.id);const visible=await row.count();roleVisibility.push({role,sourceVisible:!!visible,recallExpected:!!visible&&['purchasing','logistics','business'].includes(role)});if(!visible)continue;if(await row.getAttribute('aria-expanded')!=='true')await row.locator(':scope > td').first().click();const detail=sourceDetail(recallable.id);assert.equal(await detail.getByRole('button',{name:/回撤至/}).count(),['purchasing','logistics','business'].includes(role)?1:0);assert.equal(await task(blockedWork.id).getByRole('button',{name:'更新升级数量',exact:true}).count(),0);assert.equal(await source(blocked.id).getByRole('button',{name:'发起移仓升级',exact:true}).count(),0);}
