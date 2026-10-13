@@ -17,6 +17,7 @@ import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel"
 import { Icon } from "./Icon";
 import { InquiryEntry } from "./InquiryEntry";
 import { operationGroups } from "../utils/roles";
+import { preserveSummarySelection } from "../utils/rowExpansion";
 import { Badge, Clip, displayTime, Segmented, Spinner } from "./ui";
 
 export type DetailTab = "stock" | "transit";
@@ -217,7 +218,7 @@ function StockPane({
                     <tr className="allocation-history-row">
                       <td colSpan={colCount}>
                         <details className="allocation-history" data-batch-key={key} aria-label={`${model.model} ${row.version} ${row.plan} 调拨记录`}>
-                          <summary>调拨记录{alloc && `（${alloc.publicRecords[key]?.length ?? 0}）`}</summary>
+                          <summary onClick={preserveSummarySelection}>调拨记录{alloc && `（${alloc.publicRecords[key]?.length ?? 0}）`}</summary>
                           {!alloc ? <p>调拨记录尚未加载。</p> : <>
                             <div className="table-wrap scroll-x">
                               <table className="data-table sub allocation-history-table">

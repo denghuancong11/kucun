@@ -736,7 +736,8 @@
 .audit-panel .audit-table td.relocation-correction-audit { min-width: 360px; max-width: 650px; white-space: normal; overflow-wrap: anywhere; }
 
 .allocation-history-row > td { padding-block: 5px; }
-.allocation-history summary { cursor: pointer; width: fit-content; }
+.allocation-history summary { cursor: pointer; }
+.allocation-history summary:focus-visible, .relocation-external-history summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .allocation-history-table { min-width: 760px; }
 
 
@@ -879,7 +880,7 @@
 .upgrade-reversals .field { margin-bottom: 14px; }
 .upgrade-reversals input { max-width: 180px; }
 .upgrade-board .table-wrap, .upgrade-dialog .table-wrap { overflow-x: auto; }
-.upgrade-board .table-wrap:has(> .upgrade-task-table), .direct-upgrade .table-wrap:has(> .direct-task-table) { container-type: inline-size; }
+.upgrade-board .table-wrap:has(> .upgrade-task-table, > .upgrade-source-table), .direct-upgrade .table-wrap:has(> .direct-task-table) { container-type: inline-size; }
 .upgrade-task-details { width: 100cqw; box-sizing: border-box; position: sticky; left: 0; }
 .direct-batches { max-width: 100cqw; box-sizing: border-box; position: sticky; left: 0; }
 .direct-batches .direct-batch-table { min-width: 1650px; }

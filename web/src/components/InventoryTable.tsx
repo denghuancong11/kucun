@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { formatNumber } from "../api";
 import type { ModelSummary, StockDetail } from "../types";
+import { expandableRowProps } from "../utils/rowExpansion";
 import { Icon } from "./Icon";
 import { Badge, FlashNum } from "./ui";
 
@@ -97,18 +98,9 @@ export function InventoryTable({
             return (
               <Fragment key={model.model}>
                 <tr
-                  className={`inventory-summary-row inventory-model-row${isExpanded ? " row-expanded" : ""}`}
-                  onClick={toggleExpanded}
-                  onKeyDown={(event) => {
-                    if (event.target !== event.currentTarget) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      toggleExpanded();
-                    }
-                  }}
-                  tabIndex={0}
+                  className={`inventory-summary-row inventory-model-row expandable-row${isExpanded ? " row-expanded" : ""}`}
+                  {...expandableRowProps(isExpanded, toggleExpanded)}
                   role="button"
-                  aria-expanded={isExpanded}
                   aria-controls={detailId}
                   title={isExpanded ? "收起明细" : "展开在库批次与在途明细"}
                 >

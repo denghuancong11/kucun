@@ -1,3 +1,4 @@
+import {selectRelocationSource} from '../../scripts/fixtures/relocation-page.mjs';
 import {relocationAddressFixture} from '../../scripts/fixtures/relocation-workbook.mjs';
 // 真实React页面、HTTP和隔离SQLite；领星执行端使用协议样例，不访问真实领星。
 import assert from 'node:assert/strict';
@@ -124,13 +125,13 @@ try {
  await a.locator('.approval-expand[aria-expanded="false"]').click();await a.screenshot({path:path.join(output,'metrics-complete.png'),fullPage:true});
  await role(a,'operation-1');await nav(a,'升级库存');
  const row=i=>a.locator('[data-relocation-work-id="'+works[i].id+'"]'),log=i=>row(i).locator('.lingxing-sync');
- const choose=async i=>{await a.locator('[data-source-document-no="'+works[i].documentNo+'"] button').filter({hasText:'查看任务'}).click();};
+ const choose=async i=>{await selectRelocationSource(a,a.locator('[data-source-document-no="'+works[i].documentNo+'"]'));};
  const logLabel=async(i,text,enabled)=>{await choose(i);return label(log(i),text,enabled);};
  const logSubmit=async(i,text)=>{await choose(i);return submit(a,log(i),text);};
  for(const [who,syncAllowed,shipAllowed]of [['admin',true,false],['assistant-1',true,false],['assistant-2',false,false],['purchasing',true,false],['operation-1',true,true],['operation-2',false,false],['business',false,false]]) {
   await role(a,who);await nav(a,'升级库存');
-  const source=a.locator('[data-source-document-no="'+works[0].documentNo+'"] button').filter({hasText:'查看任务'});
-  if(await source.count())await source.click();
+  const source=a.locator('[data-source-document-no="'+works[0].documentNo+'"]');
+  if(await source.count())await selectRelocationSource(a,source);
   assert.equal(await row(0).locator('.lingxing-sync button').count(),syncAllowed?1:0,who+'同步权限');
   assert.equal(await row(0).getByRole('button',{name:'登记移仓发货',exact:true}).count(),0,who+'无人工发货入口（原发货权限'+shipAllowed+'）');
   if(syncAllowed){assert.equal(await row(0).locator('td').last().locator('.lingxing-sync button').count(),1);}

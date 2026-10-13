@@ -232,7 +232,11 @@
   box-shadow: inset 3px 0 0 0 var(--brand);
 }
 
-.data-table tbody tr.inventory-model-row:focus-visible {
+.expandable-row {
+  cursor: pointer;
+}
+
+.expandable-row:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: -2px;
 }

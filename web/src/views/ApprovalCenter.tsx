@@ -10,6 +10,7 @@ import { useInventoryCatalog } from "../hooks/useInventory";
 import type { Allocation, Category, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { operationGroups } from "../utils/roles";
+import { expandableRowProps } from "../utils/rowExpansion";
 
 type ApprovalItem = { kind: "allocation"; record: Allocation & { category: Category } } | { kind: "inquiry"; record: Inquiry };
 type TypeFilter = "all" | ApprovalItem["kind"];
@@ -205,9 +206,9 @@ export function ApprovalCenterView({ role }: { role: Role }) {
         const approved = records.some(item => item.record.approvedQuantity !== null) ? records.reduce((sum, item) => sum + (item.record.approvedQuantity ?? 0), 0) : null;
         const detailId = `approval-model-${encodeURIComponent(model)}`;
         return <tbody className="approval-model-group" key={model} data-model={model}>
-          <tr className={`approval-model-row${open ? " is-open" : ""}`}>
+          <tr className={`approval-model-row expandable-row${open ? " is-open" : ""}`} {...expandableRowProps(open, () => toggle(model))} aria-controls={detailId}>
             <td><button type="button" className="approval-expand" aria-label={`${open ? "收起" : "展开"} ${model}`} aria-expanded={open} aria-controls={detailId} onClick={() => toggle(model)}><Icon name="chevron" size={14} /></button></td>
-            <td className="approval-model-name"><button type="button" className="approval-model-toggle" aria-expanded={open} aria-controls={detailId} title={model} onClick={() => toggle(model)}>{model}</button></td>
+            <td className="approval-model-name"><span className="approval-model-toggle" title={model}>{model}</span></td>
             <td className="approval-number" data-field="在库库存">{stock === undefined ? "—" : formatNumber(stock)}</td>
             <td className="approval-number" data-field="申请数量合计">{formatNumber(requested)}</td>
             <td className="approval-number" data-field="商务审核数量合计">{approved === null ? "—" : formatNumber(approved)}</td>

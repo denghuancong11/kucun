@@ -3,6 +3,7 @@ import { completeDirectUpgrade, createDirectUpgrade, formatNumber, type ApiError
 import type { DirectUpgrade, DirectUpgradeSource, Role } from "../types";
 import { useEffectivePermissions } from "../hooks/usePermissions";
 import { createRequestId } from "../utils/ids";
+import { expandableRowProps } from "../utils/rowExpansion";
 import { Badge, displayTime, EmptyState, Panel } from "./ui";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", logistics: "物流", business: "商务", alan: "Alan" };
@@ -105,7 +106,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
       </div>
       <div className="table-wrap"><table className="data-table direct-task-table reconcile-table" aria-label="在库升级任务"><thead><tr><th aria-label="批次明细" /><th>型号</th><th>原版本</th><th>发起时间</th><th>发起岗位</th><th className="num">初始锁定量</th><th className="num">升级完成量</th><th className="num">升级中锁定量</th><th>状况</th><th>操作</th></tr></thead>
         <tbody>{visible.map(job => <Fragment key={job.id}>
-          <tr data-upgrade-id={job.id} className={expanded.includes(job.id) ? "row-expanded" : undefined}>
+          <tr data-upgrade-id={job.id} className={`expandable-row${expanded.includes(job.id) ? " row-expanded" : ""}`} {...expandableRowProps(expanded.includes(job.id), () => setExpanded(current => current.includes(job.id) ? current.filter(id => id !== job.id) : [...current, job.id]))}>
             <td><button className="link-btn direct-expand" aria-label={`${expanded.includes(job.id) ? "收起" : "展开"}批次明细 ${description(job)}`} aria-expanded={expanded.includes(job.id)} onClick={() => setExpanded(current => current.includes(job.id) ? current.filter(id => id !== job.id) : [...current, job.id])}>{expanded.includes(job.id) ? "−" : "+"}</button></td>
             <td className="mono"><strong>{job.model}</strong></td><td><span className="ver-chip">{job.sourceVersion}</span></td><td className="direct-time">{displayTime(job.initiatedAt, true)}</td><td>{roleNames[job.initiatedByRole]}</td><td className="num">{formatNumber(job.initialQuantity)}</td><td className="num">{formatNumber(job.completedQuantity)}</td><td className="num strong">{formatNumber(job.inProgressQuantity)}</td><td><Badge label={job.statusText} tone={job.status === "completed" ? "green" : job.status === "cancelled" ? "neutral" : "blue"} /></td>
             <td>{canComplete && (pending[job.id] || (job.status === "active" && canAct(job.category))) && <button className="link-btn" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>{pending[job.id] ? "重试确认" : "登记完成"}</button>}</td>

@@ -1,5 +1,6 @@
 import { formatNumber } from "../api";
 import type { RelocationExternalItem, RelocationExternalShipment } from "../types";
+import { preserveSummarySelection } from "../utils/rowExpansion";
 import { displayTime } from "./ui";
 
 export function RelocationExternalShipments({ rows, selected, disabled, onChange, readOnly = false }: {
@@ -31,7 +32,7 @@ export function RelocationExternalShipments({ rows, selected, disabled, onChange
 
 export function RelocationExternalHistory({ items }: { items: RelocationExternalItem[] }) {
   if (items.length === 0) return null;
-  return <details className="relocation-external-history"><summary>领星包裹采纳明细（{items.length}）</summary><div className="table-wrap scroll-x"><table className="data-table sub reconcile-table" aria-label="移仓包裹采纳明细"><thead><tr><th>店铺</th><th>国家</th><th>订单号</th><th>FNSKU</th><th>承运商</th><th>运单号</th><th>包裹发货时间</th><th className="reconcile-number">包裹实发数量</th><th className="reconcile-number">本单采纳数量</th><th>取数时间</th></tr></thead><tbody>{items.map((item) => <tr key={item.lineId}>
+  return <details className="relocation-external-history"><summary onClick={preserveSummarySelection}>领星包裹采纳明细（{items.length}）</summary><div className="table-wrap scroll-x"><table className="data-table sub reconcile-table" aria-label="移仓包裹采纳明细"><thead><tr><th>店铺</th><th>国家</th><th>订单号</th><th>FNSKU</th><th>承运商</th><th>运单号</th><th>包裹发货时间</th><th className="reconcile-number">包裹实发数量</th><th className="reconcile-number">本单采纳数量</th><th>取数时间</th></tr></thead><tbody>{items.map((item) => <tr key={item.lineId}>
     <td>{item.snapshot.storeName || "—"}</td><td>{item.snapshot.countryCode || "—"}</td><td className="reconcile-identifier">{item.snapshot.orderNo || "—"}</td><td className="reconcile-identifier">{item.snapshot.fnsku || "—"}</td><td>{item.snapshot.carrier || "—"}</td><td className="reconcile-identifier">{item.snapshot.trackingNo || "—"}</td><td>{item.snapshot.shipDate || "—"}</td><td className="reconcile-number">{formatNumber(item.snapshot.quantity)}</td><td className="reconcile-number">{formatNumber(item.quantity)}</td><td>{displayTime(item.snapshot.capturedAt, true)}</td>
   </tr>)}</tbody></table></div></details>;
 }
