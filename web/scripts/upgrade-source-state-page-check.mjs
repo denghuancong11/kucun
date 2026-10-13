@@ -101,7 +101,8 @@ try {
   await page.goto(base); await page.locator('.sidebar .nav-item', { hasText: '升级库存' }).click();
   await sourceRow('fba', fbaA).waitFor();
 
-  assert.equal(await page.getByLabel('移仓筛选来源').inputValue(),'');
+  assert.equal(await page.getByLabel('移仓筛选来源').count(),0);
+  assert.equal(await page.getByLabel('移仓筛选原版本').count(),0);
   await selectSource('fba', fbaA); await account().selectOption('AUS'); await close();
   await selectSource('fba', fbaA); assert.equal(await account().inputValue(), 'AUS'); await close();
   check('同来源重开弹窗保留账号，任务默认全部来源');
@@ -109,6 +110,7 @@ try {
   await selectSource('fba', fbaA); await expectAccountReset(); await close();
   check('A→B→A重新选择前不可发起，不恢复其他来源的账号');
   await page.getByLabel('来源型号').selectOption('SYNTH-TONER-001');
+  await page.getByLabel('来源原版本').selectOption('VFBA-D');
   await selectSource('fba', fbaD); await expectAccountReset(); await account().selectOption('AUS'); await close();
   await page.getByLabel('来源原版本').selectOption('VFBA-C');
   await selectSource('fba', fbaC); await expectAccountReset();
@@ -119,7 +121,7 @@ try {
   await refreshComplete(db.syncState().dataVersion); assert.equal(await account().inputValue(), 'AUS');
   assert((await page.getByRole('dialog').innerText()).includes('VFBA-C'));
   check('刷新或新增来源不会自动切源，同源账号保留'); await close();
-  await page.getByLabel('来源原版本').selectOption('');
+  await page.getByLabel('来源原版本').selectOption('VFBA-E');
   await selectSource('fba', fbaE); await expectAccountReset(); await shot('account-source-reset'); await close();
 
   pendingWork = db.initiateRelocationUpgrade({ role: 'admin', inquiryId: firstInquiry.id, requestId: rid() }).workItem;

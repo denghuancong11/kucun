@@ -228,8 +228,9 @@
 .direct-quantities dd { margin: 0; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .direct-quantities small { font-size: var(--fs-aux); font-weight: 400; color: var(--text-2); }
 .direct-quantities > div:last-child dd { color: var(--green); }
-.direct-task-summary { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 18px; }
-.direct-task-summary > span:not(.badge) { color: var(--text-2); }
+.direct-task-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 20px; margin: 0 0 18px; }
+.direct-task-summary dt { color: var(--text-2); margin-bottom: 5px; }
+.direct-task-summary dd { margin: 0; overflow-wrap: anywhere; }
 .direct-source-options { margin: 0 0 20px; padding: 0; border: 0; min-width: 0; }
 .direct-source-options legend { margin-bottom: 10px; font-weight: 600; }
 .direct-source-option { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; }
@@ -240,7 +241,7 @@
 .direct-source-title { display: flex; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; }
 .direct-source-title > span { white-space: nowrap; }
 .direct-source-option dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 10px 0 0; }
-.direct-source-option dl > div { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 4px; }
+.direct-source-option dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 4px; }
 .direct-source-option dt { color: var(--text-2); }
 .direct-source-option dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .direct-complete-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -873,6 +874,21 @@
 .upgrade-form-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; padding: 0; margin: 0; border: 0; }
 .upgrade-reversals .field { margin-bottom: 14px; }
 .upgrade-reversals input { max-width: 180px; }
+.upgrade-board .table-wrap, .upgrade-dialog .table-wrap { overflow-x: auto; }
+.upgrade-board .table-wrap:has(> .upgrade-task-table), .direct-upgrade .table-wrap:has(> .direct-task-table) { container-type: inline-size; }
+.upgrade-task-details { width: 100cqw; box-sizing: border-box; position: sticky; left: 0; }
+.direct-batches { max-width: 100cqw; box-sizing: border-box; position: sticky; left: 0; }
+.direct-batches .direct-batch-table { min-width: 1650px; }
+.reconcile-table > thead > tr > th, .reconcile-table > tbody > tr:where(:not(.upgrade-detail-row):not(.direct-detail-row)) > td { min-width: 110px; vertical-align: top; }
+.reconcile-table > tbody > tr:where(:not(.upgrade-detail-row):not(.direct-detail-row)) > td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reconcile-table .reconcile-identifier { min-width: 155px; max-width: 240px; }
+.reconcile-table .reconcile-address { min-width: 320px; max-width: 400px; white-space: pre-wrap; }
+.reconcile-table .num, .reconcile-table .reconcile-number { text-align: right; white-space: nowrap; }
+.relocation-upgrade .upgrade-task-table > thead > tr > th:first-child, .relocation-upgrade .upgrade-task-table > tbody > tr:not(.upgrade-detail-row) > td:first-child { min-width: 36px; width: 36px; }
+.direct-upgrade .direct-task-table > thead > tr > th:first-child, .direct-upgrade .direct-task-table > tbody > tr:not(.direct-detail-row) > td:first-child { min-width: 36px; width: 36px; }
+.reconcile-changes-table { min-width: 400px !important; }
+.reconcile-reversal-table { min-width: 1080px; }
+.reconcile-reversal-table input { min-width: 100px; }
 @media(max-width:1000px) {
   .upgrade-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .upgrade-board .upgrade-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }

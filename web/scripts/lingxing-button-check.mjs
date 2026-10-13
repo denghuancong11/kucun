@@ -173,7 +173,7 @@ try {
  const beforeHistorySync={stock:db.getCatalog().models,shipped:db.getUpgradeRelocation(relocation.id).shipped_quantity,completed:db.getUpgradeRelocation(relocation.id).completed_quantity};
  const historyJob=await submit(a,historic.locator('.lingxing-sync'),'同步领星物流');assert.equal(historyJob.target.workId,works[0].id);
  await execute('claim');await finishLog(historyJob.id);await label(historic.locator('.lingxing-sync'),'同步完成',true);
- await historic.getByRole('button',{name:/展开移仓详情/}).click();await a.locator('[data-relocation-detail="'+works[0].id+'"] .package-quantities').filter({hasText:'已用 5'}).waitFor();
+ await historic.getByRole('button',{name:/展开移仓详情/}).click();const packages=a.locator('[data-relocation-detail="'+works[0].id+'"]').getByRole('table',{name:'移仓包裹明细',exact:true});await packages.waitFor();assert.deepEqual(await packages.locator('thead th').allTextContents(),['店铺','国家','订单号','FNSKU','承运商','运单号','包裹发货时间','包裹实发数量','已采纳数量','可采纳数量','取数时间']);const adoptedPackage=packages.locator('tbody tr').filter({hasText:'TRACK-BUTTON'});assert.equal(await adoptedPackage.count(),1);assert.deepEqual((await adoptedPackage.locator('td').allTextContents()).slice(2,10),[works[0].removalOrderNo,common.fnsku,'UPS','TRACK-BUTTON','2026-09-10T00:00:00.000Z','5','5','0']);
  assert.equal(db.relocationExternalShipments(works[0].removalOrderNo,common.fnsku)[0].usedQuantity,5);
  assert.deepEqual(db.getCatalog().models,beforeHistorySync.stock);assert.equal(db.getUpgradeRelocation(relocation.id).shipped_quantity,beforeHistorySync.shipped);assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,beforeHistorySync.completed);
  assert.equal(await secondCard.getByText('TRACK-BUTTON',{exact:true}).count(),0);

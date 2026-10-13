@@ -440,7 +440,7 @@ export function previewRelocationUpdate(role:Role,file:File):Promise<RelocationU
 export function importRelocationUpdate(role:Role,payload:unknown):Promise<unknown> {
   return requestJson('/api/upgrades/relocation-update/import',role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
 }
-export type RelocationFilters={model:string;version:string;source:string;workflowStatus:string};
+export type RelocationFilters={model:string;version:string;source:string};
 export type TransferFilters={model:string;version:string;status:string};
 export async function downloadRelocationTemplate(role:Role,filters?:RelocationFilters) {
   const response=await fetch('/api/upgrades/relocation-update/template'+(filters?'?'+new URLSearchParams(filters):''),{cache:'no-store',headers:{'x-role':role}});

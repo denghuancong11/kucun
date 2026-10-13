@@ -589,8 +589,7 @@ async function relocationRecordsForRole(role,query) {
   for(const job of dashboard.upgrades.filter(j=>j.kind==='relocation'))for(const row of job.relocations)if(row.workId)works.set(row.workId,inventory.getRelocationWorkItem(row.workId));
   return [...works.values()].filter(w=>w && ['summary','detail','expand'].every(key=>(permissions[w.category]?.[role]??openPermissions)[key])
     && (!query.get('model')||w.model===query.get('model')) && (!query.get('version')||w.sourceVersion===query.get('version'))
-    && (!query.get('source')||query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId))
-    && (!query.get('workflowStatus')||w.status===query.get('workflowStatus'))).map(relocationSavedRecord);
+    && (!query.get('source')||query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId))).map(relocationSavedRecord);
 }
 
 async function handleRelocationWaybills(request,response,pathname,role) {
