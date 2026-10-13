@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ApiError, applyTransitStatus, formatNumber, importTransit, previewTransitImport, previewTransitStatus } from "../api";
-import { TransferUpgradeImport } from "../components/TransferUpgrade";
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
 import { createRequestId } from "../utils/ids";
@@ -149,12 +148,12 @@ export function Requirement3View({ role }: { role: Role }) {
   return (
     <div className="transit-page">
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
-      {transitAccess && <TransferUpgradeImport key={role} role={role}>
+      {transitAccess && <section aria-label="表格导入"><div className="transit-toolbar">
         <label className="btn btn-primary" htmlFor="transit-import-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "preview" ? "正在预览…" : "导入在途表格"}</label>
         <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
         <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入更新物流表格"}</label>
         <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
-      </TransferUpgradeImport>}
+      </div></section>}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
         <div className="transit-status-header">
