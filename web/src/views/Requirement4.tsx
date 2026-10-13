@@ -64,7 +64,7 @@ function candidateKey(row: RelocationSource): string {
 }
 
 export function Requirement4View({ role }: { role: Role }) {
-  const [fbaAccount,setFbaAccount]=useState("");
+  const [relocationAccount,setRelocationAccount]=useState<{sourceKey:string|null;account:string}>({sourceKey:null,account:""});
   const [automaticSync,setAutomaticSync]=useState<Record<number,string>>({});
   const [mode, setMode] = useState<UpgradeMode>("relocation");
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
@@ -93,7 +93,7 @@ export function Requirement4View({ role }: { role: Role }) {
   useEffect(() => {
     setNotice(null);
     setAutomaticSync({});
-    setFbaAccount("");
+    setRelocationAccount({sourceKey:null,account:""});
     setBusy(null);
     setSelectedSourceKey(null);
     setRelocationModel("");
@@ -131,6 +131,10 @@ export function Requirement4View({ role }: { role: Role }) {
   const selectedSource = visibleCandidates.find(row => candidateKey(row) === selectedSourceKey) ?? sources.find(row => candidateKey(row) === selectedSourceKey) ?? visibleCandidates[0] ?? null;
   const selectedKey = selectedSource ? candidateKey(selectedSource) : null;
   const selectedCandidate = dashboard?.relocationCandidates.find(row => candidateKey(row) === selectedKey) ?? null;
+  const fbaAccount = relocationAccount.sourceKey === selectedKey ? relocationAccount.account : "";
+  useEffect(() => {
+    setRelocationAccount(current => current.sourceKey === selectedKey ? current : {sourceKey:selectedKey,account:""});
+  }, [selectedKey]);
   const directModels = useMemo(
     () => [...new Set((dashboard?.directSources ?? []).map((row) => row.model))],
     [dashboard],
@@ -141,6 +145,8 @@ export function Requirement4View({ role }: { role: Role }) {
   );
   const selectedDirectSource = dashboard?.directSources.find((row) => row.model === directModel && row.sourceVersion === directVersion) ?? null;
   const relocationWorkItems = dashboard?.relocationWorkItems ?? [];
+  const canInitiateRelocation = Boolean(selectedCandidate) && role !== "business" && role !== "alan"
+    && !relocationWorkItems.some(work => candidateKey(work) === selectedKey && ["awaiting_procurement","awaiting_operation","awaiting_shipping"].includes(work.status));
   const relocationHistory = relocationJobs(dashboard?.upgrades ?? []);
   const directHistory = directJobs(dashboard?.upgrades ?? []);
 
@@ -160,13 +166,12 @@ export function Requirement4View({ role }: { role: Role }) {
   };
 
   const chooseCandidate = (candidate: RelocationSource) => {
-    setFbaAccount("");
     setSelectedSourceKey(candidateKey(candidate));
     relocationRequest.current = null;
   };
 
   const submitRelocation = async () => {
-    if (!selectedCandidate || busy || role === "business" || role === "alan") return;
+    if (!selectedCandidate || !canInitiateRelocation || busy || (selectedCandidate.sourceKind === "fba" && !fbaAccount)) return;
     const payload = selectedCandidate.sourceKind === "fba" ? {fbaArchiveId:selectedCandidate.fbaArchiveId!,account:fbaAccount} : selectedCandidate.sourceKind === "inquiry"
       ? { inquiryId: selectedCandidate.inquiryId!, sourceRevision: selectedCandidate.inquiryRecall?.revision }
       : { allocationId: selectedCandidate.allocationId! };
@@ -208,9 +213,9 @@ export function Requirement4View({ role }: { role: Role }) {
     setBusy("direct-create");
     setNotice(null);
     try {
-      await createDirectUpgrade(role, { ...payload, requestId });
+      const result = await createDirectUpgrade(role, { ...payload, requestId });
       directRequest.current = null;
-      await notifySaved(`${selectedDirectSource.model} · ${selectedDirectSource.sourceVersion}：已锁定 ${formatNumber(selectedDirectSource.available)} 件可用库存，等待采购登记升级完成数量。`);
+      await notifySaved(`${selectedDirectSource.model} · ${selectedDirectSource.sourceVersion}：已锁定 ${formatNumber(result.upgrade.initialQuantity)} 件可用库存，等待采购登记升级完成数量。`);
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -329,8 +334,8 @@ export function Requirement4View({ role }: { role: Role }) {
           </Panel>
           <div className="relocation-documents">
             {role==="logistics"&&<RelocationUpdate role={role} onRefresh={refreshAfterWrite}/> }
-            {selectedSource && <Panel title={[selectedSource.model,selectedSource.sourceVersion,selectedSource.store].filter(Boolean).join(" · ")} actions={selectedCandidate && role !== "business" && role !== "alan" ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null || (selectedCandidate?.sourceKind === "fba" && !fbaAccount)} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
-              {selectedCandidate?.sourceKind==='fba' && <label className="field"><span>本次移仓账号</span><select aria-label="本次移仓账号" value={fbaAccount} onChange={e=>setFbaAccount(e.target.value)}><option value="">请选择账号</option>{dashboard?.relocationAccounts.map(item=><option key={item.store} value={item.store}>{item.account} / {item.store}</option>)}</select></label>}
+            {selectedSource && <Panel title={[selectedSource.model,selectedSource.sourceVersion,selectedSource.store].filter(Boolean).join(" · ")} actions={canInitiateRelocation ? <button className="btn btn-primary btn-sm" type="button" disabled={busy !== null || (selectedCandidate?.sourceKind === "fba" && !fbaAccount)} onClick={() => void submitRelocation()}>{busy === "relocation-initiate" ? "发起中…" : "发起移仓升级"}</button> : undefined}>
+              {selectedCandidate?.sourceKind==='fba' && <label className="field"><span>本次移仓账号</span><select aria-label="本次移仓账号" value={fbaAccount} onChange={e=>setRelocationAccount({sourceKey:selectedKey,account:e.target.value})}><option value="">请选择账号</option>{dashboard?.relocationAccounts.map(item=><option key={item.store} value={item.store}>{item.account} / {item.store}</option>)}</select></label>}
               <InquiryRecall key={`${selectedKey}-${role}`} source={selectedSource} role={role} onRefresh={refreshAfterWrite} onNotice={setNotice} />
               <dl className="relocation-fields">{[
                 ["来源 FNSKU", selectedSource.fnsku], ["原版本", selectedSource.sourceVersion], ["ASIN", selectedSource.asin || "—"], ["发货计划号", selectedSource.plan], ["发货时间", selectedSource.shipDate],

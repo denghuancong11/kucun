@@ -2,6 +2,7 @@ import type {
   TransferUpgradePreview,
   TransferUpgradeRow,
   TransferUpgradesPayload,
+  DirectUpgrade,
   AllocationsPayload,
   AllocationEntry,
   ApprovalsPayload,
@@ -247,7 +248,7 @@ export function fetchUpgradeDashboard(role: Role): Promise<UpgradeDashboardPaylo
 export function createDirectUpgrade(
   role: Role,
   payload: { model: string; sourceVersion: string; requestId: string },
-): Promise<unknown> {
+): Promise<{ok:true;upgrade:DirectUpgrade}> {
   return requestJson("/api/upgrades/direct", role, {
     method: "POST",
     headers: { "content-type": "application/json" },

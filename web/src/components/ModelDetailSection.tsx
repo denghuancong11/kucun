@@ -98,6 +98,7 @@ function StockPane({
   }
 
   const showFields = perm.detail;
+  const canCreateAllocation = ["admin", "operation-1", "operation-2"].includes(role);
   /* 明细表始终显示在库件数、预锁定和可用件数；权限只控制批次身份字段。 */
   const colCount = showFields ? 10 : 4;
   const sum = stockRows.reduce((total, row) => total + row.quantity, 0);
@@ -177,7 +178,7 @@ function StockPane({
                     <td className="actions-col">
                       <div className="row-actions">
                         {row.isLegacyPlaceholder ? null : locked > 0 && <Badge label={`预锁定 ${formatNumber(locked)}`} tone="blue" />}
-                        <button
+                        {canCreateAllocation && <button
                           type="button"
                           className={`alloc-toggle${open ? " open" : ""}`}
                            disabled={!perm.actions || row.isLegacyPlaceholder}
@@ -193,11 +194,11 @@ function StockPane({
                         >
                           <Icon name="chevron" size={13} className="alloc-toggle-caret" />
                           <span>调拨</span>
-                        </button>
+                        </button>}
                       </div>
                     </td>
                   </tr>
-                  {open && perm.actions && (
+                  {open && perm.actions && canCreateAllocation && (
                     <tr className="alloc-row">
                       <td colSpan={colCount}>
                         <AllocationPanel

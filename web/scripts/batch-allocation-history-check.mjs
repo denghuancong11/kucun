@@ -68,6 +68,18 @@ try{
  const inkReader=await open('admin',false,'READONLY-INK');
  const readOnly=await api('/api/allocations?model=READONLY-INK','admin');assert.equal(Object.values(readOnly.records).flat().length,0);assert.equal(Object.values(readOnly.publicRecords).flat().length,2);assert.equal(await inkReader.locator('.allocation-panel').count(),0);assert.equal(await inkReader.locator('.alloc-toggle:enabled').count(),0);
  checks.push({name:'两团仅互看允许字段；审批/完整单据/历史/操作权限不扩大；只读无操作权限可查'});
+ for(const who of ['admin','operation-1','operation-2','assistant-1','assistant-2','business','purchasing','logistics','alan']){
+  const page=await open(who),canCreate=['admin','operation-1','operation-2'].includes(who);
+  const source=stockRow(page,'SOURCE-A').filter({has:page.locator('.ver-chip',{hasText:'V1'})});
+  assert.equal(await source.locator('.alloc-toggle').count(),canCreate?1:0,who+' 调拨入口');
+  if(canCreate){await source.locator('.alloc-toggle').click();assert.equal(await page.locator('.allocation-panel form').count(),1);}
+  else assert.equal(await page.locator('.allocation-panel').count(),0);
+  for(const batch of [batchA,batchB])await hist(page,batch.batchKey).locator('summary').click();
+  await publicCells(page,first,100,90,0,90,'已完成');await publicCells(page,second,20,'已拒绝',0,0,'已拒绝');
+  checks.push({name:who+'：调拨入口符合录入角色，独立历史仍可展开并保留两团硒鼓记录'});
+  if(['admin','purchasing','assistant-1'].includes(who))await page.screenshot({path:path.join(out,who+'-allocation-entry-and-history.png'),fullPage:true});
+  await page.context().close();
+ }
  assert.equal(await a.getByLabel('调拨数量',{exact:true}).inputValue(),'1');assert.equal(await a.getByLabel('调拨运营',{exact:true}).inputValue(),'乙草稿');assert.equal(await a.getByLabel('运营备注（选填）',{exact:true}).inputValue(),'保持草稿');
  for(const [i,page]of [a,b,reader].entries()){assert.equal(page.url(),urls[i]);assert.equal(await page.evaluate(()=>performance.getEntriesByType('navigation').length),1);assert.equal(await hist(page,batchA.batchKey).getAttribute('open'),'');}
  assert.deepEqual(observerPosts,[]);checks.push({name:'双端展开及原页、录入草稿保留；观察端没有任何POST'});

@@ -3913,8 +3913,8 @@ export class InventoryDatabase {
       o.operation_no, o.status, j.model, COALESCE(o.new_version,j.source_version), NULL, NULL, o.performed_at, o.quantity, NULL
       FROM upgrade_operations o JOIN upgrade_jobs j ON j.id=o.upgrade_id WHERE o.upgrade_id IN (SELECT id FROM jobs)`).all({ id }).map(row => ({
         ...row, description: [row.model,row.version,row.store,row.plan,row.orderNo,row.at,row.quantity == null ? null : row.quantity+' 件'].filter(Boolean).join(' / '),
-        status: ({ awaiting_procurement: '待物流更新RMA和地址', awaiting_operation: '待运营填写订单号', awaiting_shipping: '移仓和升级中',
-          shipped: '已登记发货', withdrawn: '已撤回', cancelled: '已取消', active: '有效', completed: '已完成' })[row.status] ?? row.status,
+        status: ({ awaiting_procurement: '待物流更新RMA和地址', awaiting_operation: '待运营填写订单号', awaiting_shipping: '待确认移仓发货',
+          shipped: '移仓和升级中', withdrawn: '已撤回', cancelled: '已取消', active: '有效', completed: '已完成' })[row.status] ?? row.status,
       }));
   }
 
@@ -4398,7 +4398,7 @@ export class InventoryDatabase {
     const statusText = {
       awaiting_procurement: "待物流更新RMA和地址",
       awaiting_operation: "待运营填写订单号",
-      awaiting_shipping: "移仓和升级中",
+      awaiting_shipping: "待确认移仓发货",
       shipped: "移仓和升级中",
       withdrawn: "发货登记已撤回",
       cancelled: "已取消",
