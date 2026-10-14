@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {chromium} from 'playwright-core';
-import {createInventoryDatabase,InventoryDatabase} from '../../inventory-db.mjs';
+
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
+process.env.ASTER_OVERSEAS_WAREHOUSES = 'SyntheticWarehouseA;SyntheticWarehouseB';
+const {createInventoryDatabase,InventoryDatabase} = await import('../../inventory-db.mjs');
 const root=path.resolve(import.meta.dirname,'../..'),out=process.env.ASTER_BATCH_OUTPUT||path.join(root,'.test-output/batch-allocation-history');
 await fs.mkdir(out,{recursive:true});const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-batch-history-'));
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite'),seedCatalogData:false});

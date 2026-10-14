@@ -5,18 +5,25 @@ import type { Allocation, Inquiry, NoticeMessage, Role } from "../types";
 import { displayTime } from "./ui";
 import { createRequestId } from "../utils/ids";
 
-export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
-  row: Inquiry; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void;
+export type ApprovalFormDraft = { scope: string; quantity?: string; note?: string; warehouse?: string; plan?: string; date?: string; version?: string };
+export type ApprovalDraftControls = {
+  value: ApprovalFormDraft | null;
+  ready: boolean;
+  update: (patch: Omit<Partial<ApprovalFormDraft>, "scope">) => void;
+  prepare: (execute: () => Promise<unknown>) => () => Promise<unknown>;
+};
+
+export function InquiryFulfillment({ row, role, onRefresh, onNotice, draft }: {
+  row: Inquiry; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void; draft: ApprovalDraftControls;
 }) {
   const [open, setOpen] = useState(false);
-  const [plan, setPlan] = useState("");
-  const [date, setDate] = useState("");
-  const [version, setVersion] = useState("");
+  const plan = draft.value?.plan ?? "", date = draft.value?.date ?? "", version = draft.value?.version ?? "";
   const action = useBusinessAction(onRefresh, text => { setOpen(false); onNotice({ kind: "success", text }); });
   const archive = (event: FormEvent) => {
     event.preventDefault();
+    if (!draft.ready || action.disabled) return;
     const payload = { plan: plan.trim(), date, version: version.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-archive") };
-    void action.perform({ execute: () => archiveInquiry(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: row.model + " · " + row.store + "：发货资料已保存，询库已归档。" });
+    void action.perform({ execute: draft.prepare(() => archiveInquiry(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))), message: row.model + " · " + row.store + "：发货资料已保存，询库已归档。" });
   };
   const assistant = role === "assistant-1" || role === "assistant-2";
   const allowed = (row.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : assistant) && row.status === "pending_assistant";
@@ -25,10 +32,10 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
   return <div className="inquiry-fulfillment"><button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>{label}</button>
     {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.model} · ${row.store}`}><h3>{row.model} · {row.store}</h3>
     {allowed && <form className="approval-action-form" onSubmit={archive}>
-      <label className="field"><span>发货计划号</span><input required value={plan} disabled={action.disabled} onChange={event => setPlan(event.target.value)} /></label>
-      <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={action.disabled} onChange={event => setDate(event.target.value)} /></label>
-      <label className="field"><span>原版本号</span><input required value={version} disabled={action.disabled} onChange={event => setVersion(event.target.value)} /></label>
-      <button className="btn btn-primary" type="submit" disabled={action.disabled}>{action.busy ? "正在归档…" : "提交"}</button>
+      <label className="field"><span>发货计划号</span><input required value={plan} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ plan: event.target.value })} /></label>
+      <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ date: event.target.value })} /></label>
+      <label className="field"><span>原版本号</span><input required value={version} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ version: event.target.value })} /></label>
+      <button className="btn btn-primary" type="submit" disabled={!draft.ready || action.disabled}>{action.busy ? "正在归档…" : "提交"}</button>
     </form>}
     {action.error && <p className="dialog-error" role="alert">{action.error}</p>}
     {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
@@ -38,12 +45,12 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice }: {
 }
 
 // 表格中的三个字段共用本单提交；不与其他单据或助理归档草稿混用。
-export function ApprovalProcurementCells({ kind, row, quantity, onQuantityChange, role, onRefresh, onNotice }: {
+export function ApprovalProcurementCells({ kind, row, quantity, onQuantityChange, role, onRefresh, onNotice, draft }: {
   kind: "allocation" | "inquiry"; row: Allocation | Inquiry; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void;
   quantity: string; onQuantityChange: (value: string) => void;
+  draft: ApprovalDraftControls;
 }) {
-  const [warehouse, setWarehouse] = useState("");
-  const [note, setNote] = useState("");
+  const warehouse = draft.value?.warehouse ?? "", note = draft.value?.note ?? "";
   const [attempted, setAttempted] = useState(false);
   const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
   const stage = kind === "allocation" ? (row as Allocation).procurementStatus : (row as Inquiry).status;
@@ -55,21 +62,21 @@ export function ApprovalProcurementCells({ kind, row, quantity, onQuantityChange
   const warehouseError = kind === "inquiry" && attempted && !warehouse ? "请选择发货仓库（CA 或 SC）" : "";
   const reply = (event: FormEvent) => {
     event.preventDefault(); setAttempted(true);
-    if (!editable || !quantity.trim() || quantityError || kind === "inquiry" && !["CA", "SC"].includes(warehouse)) return;
+    if (!draft.ready || action.disabled || !editable || !quantity.trim() || quantityError || kind === "inquiry" && !["CA", "SC"].includes(warehouse)) return;
     const payload = { supplierQuantity: Number(quantity), ...(kind === "inquiry" ? { shippingWarehouse: warehouse } : {}), procurementNote: note.trim(), expectedRevision: row.revision, requestId: createRequestId(`${kind}-reply`) };
-    void action.perform({ execute: () => kind === "allocation" ? replyAllocation(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")) : replyInquiry(role, row.id, { ...payload, shippingWarehouse: warehouse }, [row.model,row.store,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
+    void action.perform({ execute: draft.prepare(() => kind === "allocation" ? replyAllocation(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")) : replyInquiry(role, row.id, { ...payload, shippingWarehouse: warehouse }, [row.model,row.store,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))), message: `${row.model} · ${row.store} 已保存供应商库存回复 ${formatNumber(payload.supplierQuantity)} 件。` });
   };
   return <>
     <td className="approval-procurement-cell" data-field="供应商库存回复">{editable
-      ? <label className="field"><input form={formId} aria-label="供应商库存回复" required type="number" min="0" step="1" aria-invalid={Boolean(quantityError)} value={quantity} disabled={action.disabled} onChange={event => { onQuantityChange(event.target.value); action.setError(null); }} /></label>
+      ? <label className="field"><input form={formId} aria-label="供应商库存回复" required type="number" min="0" step="1" aria-invalid={Boolean(quantityError)} value={quantity} disabled={!draft.ready || action.disabled} onChange={event => { onQuantityChange(event.target.value); action.setError(null); }} /></label>
       : row.supplierQuantity === null ? "—" : formatNumber(row.supplierQuantity)}</td>
     <td className="approval-procurement-cell" data-field="发货仓库">{editable && kind === "inquiry"
-      ? <label className="field"><select form={formId} aria-label="发货仓库" required aria-invalid={Boolean(warehouseError)} value={warehouse} disabled={action.disabled} onChange={event => { setWarehouse(event.target.value); action.setError(null); }}><option value="">请选择</option><option value="CA">CA</option><option value="SC">SC</option></select></label>
+      ? <label className="field"><select form={formId} aria-label="发货仓库" required aria-invalid={Boolean(warehouseError)} value={warehouse} disabled={!draft.ready || action.disabled} onChange={event => { draft.update({ warehouse: event.target.value }); action.setError(null); }}><option value="">请选择</option><option value="CA">CA</option><option value="SC">SC</option></select></label>
       : row.shippingWarehouse || "—"}</td>
     <td className="approval-procurement-cell" data-field="采购备注" title={!editable ? row.procurementNote ?? undefined : undefined}>{editable
       ? <form id={formId} className="inquiry-procurement-form field" aria-label={`采购回复 ${row.model} · ${row.store}`} noValidate onSubmit={reply}>
-        <input aria-label="采购备注" value={note} disabled={action.disabled} onChange={event => { setNote(event.target.value); action.setError(null); }} />
-        <button className="btn btn-primary btn-sm" type="submit" disabled={action.disabled}>{action.busy ? "正在提交…" : "提交采购回复"}</button>
+        <input aria-label="采购备注" value={note} disabled={!draft.ready || action.disabled} onChange={event => { draft.update({ note: event.target.value }); action.setError(null); }} />
+        <button className="btn btn-primary btn-sm" type="submit" disabled={!draft.ready || action.disabled}>{action.busy ? "正在提交…" : "提交采购回复"}</button>
       </form> : row.procurementNote || "—"}
       {editable && (quantityError || warehouseError) && <p className="field-error" role="alert">{quantityError || warehouseError}</p>}
       {action.error && <p className="dialog-error" role="alert">{action.error}</p>}
@@ -86,12 +93,12 @@ function allocationQuantityError(quantity: string, pack: string | null) {
   return Number(quantity) % packPerBox ? `来源批次套/箱为 ${packPerBox}，数量须为 ${packPerBox} 的整数倍。` : "";
 }
 
-export function AlanReviewCells({ kind, row, role, onRefresh, onNotice }: {
+export function AlanReviewCells({ kind, row, role, onRefresh, onNotice, draft }: {
   kind: "allocation" | "inquiry"; row: Allocation | Inquiry; role: Role;
   onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void;
+  draft: ApprovalDraftControls;
 }) {
-  const [quantity, setQuantity] = useState("");
-  const [note, setNote] = useState("");
+  const quantity = draft.value?.quantity ?? "", note = draft.value?.note ?? "";
   const [attempted, setAttempted] = useState(false);
   const action = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
   const stage = kind === "allocation" ? (row as Allocation).procurementStatus : (row as Inquiry).status;
@@ -102,15 +109,15 @@ export function AlanReviewCells({ kind, row, role, onRefresh, onNotice }: {
     : kind === "allocation" ? allocationQuantityError(quantity, (row as Allocation).packPerBox) : "";
   const submit = (event: FormEvent) => {
     event.preventDefault(); setAttempted(true);
-    if (!editable || !quantity.trim() || quantityError) return;
+    if (!draft.ready || action.disabled || !editable || !quantity.trim() || quantityError) return;
     const payload = { alanQuantity: Number(quantity), alanNote: note.trim(), expectedRevision: row.revision, requestId: createRequestId(`${kind}-alan-review`) };
     const context = [row.model,row.store,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ");
-    void action.perform({ execute: () => kind === "allocation" ? reviewAllocationByAlan(role, row.id, payload, context) : reviewInquiryByAlan(role, row.id, payload, context), message: `${row.model} · ${row.store}：Alan审核已提交，待采购回复。` });
+    void action.perform({ execute: draft.prepare(() => kind === "allocation" ? reviewAllocationByAlan(role, row.id, payload, context) : reviewInquiryByAlan(role, row.id, payload, context)), message: `${row.model} · ${row.store}：Alan审核已提交，待采购回复。` });
   };
-  return <><td className="approval-procurement-cell" data-field="Alan审核数量">{editable ? <label className="field"><input form={formId} aria-label="Alan审核数量" type="number" min="0" step="1" value={quantity} aria-invalid={Boolean(quantityError)} disabled={action.disabled} onChange={event => { setQuantity(event.target.value); action.setError(null); }} /></label> : row.alanQuantity == null ? "—" : formatNumber(row.alanQuantity)}</td>
+  return <><td className="approval-procurement-cell" data-field="Alan审核数量">{editable ? <label className="field"><input form={formId} aria-label="Alan审核数量" type="number" min="0" step="1" value={quantity} aria-invalid={Boolean(quantityError)} disabled={!draft.ready || action.disabled} onChange={event => { draft.update({ quantity: event.target.value }); action.setError(null); }} /></label> : row.alanQuantity == null ? "—" : formatNumber(row.alanQuantity)}</td>
     <td className="approval-procurement-cell" data-field="Alan备注" title={!editable ? row.alanNote ?? undefined : undefined}>{editable ? <form id={formId} className="inquiry-procurement-form field" aria-label={`Alan审核 ${row.model} · ${row.store}`} noValidate onSubmit={submit}>
-      <input aria-label="Alan备注" value={note} disabled={action.disabled} onChange={event => { setNote(event.target.value); action.setError(null); }} />
-      <button className="btn btn-primary btn-sm" type="submit" disabled={action.disabled}>{action.busy ? "正在提交…" : "提交Alan审核"}</button>
+      <input aria-label="Alan备注" value={note} disabled={!draft.ready || action.disabled} onChange={event => { draft.update({ note: event.target.value }); action.setError(null); }} />
+      <button className="btn btn-primary btn-sm" type="submit" disabled={!draft.ready || action.disabled}>{action.busy ? "正在提交…" : "提交Alan审核"}</button>
     </form> : row.alanNote || "—"}
       {editable && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {action.error && <p className="dialog-error" role="alert">{action.error}</p>}

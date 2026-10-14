@@ -19,6 +19,7 @@ createInventoryDatabase({databasePath, seedCatalogData: false});
 let db = new InventoryDatabase(state), server, failure;
 const port = await freePort(), base = `http://127.0.0.1:${port}`;
 const checks = [], rejectedRequests = [], quantities = [], downloads = [], migrationEvidence = [];
+const downstreamEvidence = [], raceEvidence = [], crossModuleEvidence = [];
 const rid = () => crypto.randomUUID(), common = row => ({expectedRevision: row.revision, requestId: rid()});
 const check = text => {checks.push(text); console.log('PASS ' + text);};
 const snapshot = (connection = db.db) => Object.fromEntries(connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name}) => [name, connection.prepare(`SELECT * FROM "${name}"`).all()]));
@@ -71,10 +72,24 @@ function assertStage(kind, row, stage, text) {assert.equal(kind === 'allocations
 function assertFinal(row, quantity, alanQuantity) {for (const field of ['quantity', 'requestedQuantity', 'approvedQuantity', 'supplierQuantity']) assert.equal(row[field], quantity, field); assert.equal(row.alanQuantity, alanQuantity);}
 function assertLock(row, locked, issued = 0) {const found = db.getDocument(row.id); assert.equal(found.lockedQuantity, locked); assert.equal(found.issuedQuantity, issued); quantities.push({id: row.id, stage: found.statusText, locked, issued, batch: db.getBalance(found.batchKey)});}
 function source(kind, row) {return db.getRelocationCandidates().find(item => item[kind === 'allocations' ? 'allocationId' : 'inquiryId'] === row.id);}
+async function crossCheckAllocation(row, eventType, actor, onHandDelta, lockedDelta) {
+  const approvals = await api('/api/approvals', 'purchasing');
+  const visible = approvals.allocations.find(item => item.id === row.id);
+  assert.equal(visible.revision, row.revision); assert.equal(visible.statusText, row.statusText);
+  const catalog = await api('/api/inventory/catalog', 'admin');
+  const batch = catalog.stockDetails[row.model].find(item => item.batchKey === row.batchKey);
+  const balance = db.getBalance(row.batchKey);
+  assert.equal(batch.quantity, balance.onHand); assert.equal(batch.locked, balance.locked); assert.equal(batch.available, balance.available);
+  const events = (await api('/api/audit?' + new URLSearchParams({model: row.model, action: eventType, limit: '500'}), 'admin')).records;
+  const event = events.find(item => item.documentId === row.id);
+  assert(event); assert.equal(event.role, actor); assert.equal(event.onHandDelta, onHandDelta); assert.equal(event.lockedDelta, lockedDelta);
+  const detail = await api('/api/audit/' + event.eventId, 'admin'); assert.equal(detail.record.role, actor); assert.equal(detail.record.at, event.at);
+  crossModuleEvidence.push({id: row.id, revision: row.revision, stage: row.statusText, actor, eventType, eventId: event.eventId, eventAt: event.at, onHandDelta, lockedDelta, balance, inventoryApi: true, approvalsApi: true, auditApi: true});
+}
 
 try {
   await start();
-  const csv = 'ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n' + Array.from({length: 42}, (_, index) => `INK-APPROVAL,300,10,STOCK-${index},SyntheticWarehouseA,INK-P${index},2026-10-14,一团,V1`).join('\n');
+  const csv = 'ITEM,订单数量,套/箱,FNSKU,发货方式,计划号,出货时间,团队,版本号\n' + Array.from({length: 64}, (_, index) => `INK-APPROVAL,300,10,STOCK-${index},SyntheticWarehouseA,INK-P${index},2026-10-14,一团,V1`).join('\n');
   const fileName = '隔离审批墨盒.csv';
   const previewResponse = await fetch(base + '/api/transit/preview', {method: 'POST', headers: {'x-role': 'admin', 'x-file-name': encodeURIComponent(fileName)}, body: csv});
   assert.equal(previewResponse.status, 200); const preview = await previewResponse.json();
@@ -83,24 +98,30 @@ try {
   batches.push(...(await api('/api/inventory/catalog', 'admin')).stockDetails['INK-APPROVAL']);
   db.db.prepare('INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at) VALUES(?,?,0,0,?)').run('TONER-APPROVAL', '硒鼓', new Date().toISOString());
   assert.equal(db.db.prepare('PRAGMA user_version').get().user_version, 36);
-  check('schema36隔离服务及42个独立墨盒来源批次就绪，未使用正式数据');
+  check('schema36隔离服务及64个独立墨盒来源批次就绪，未使用正式数据');
 
   let allocation = await createAllocation(); assertLock(allocation, 100);
+  await crossCheckAllocation(allocation, 'entry', 'operation-1', 0, 100);
   allocation = await review('allocations', allocation); assertLock(allocation, 80); assertStage('allocations', allocation, 'pending_alan', '待Alan审核');
+  await crossCheckAllocation(allocation, 'review', 'business', 0, -20);
   const approvedHistory = allocation.events;
   allocation = await alan('allocations', allocation); assertLock(allocation, 70); assertStage('allocations', allocation, 'pending_purchasing', '待采购回复');
+  await crossCheckAllocation(allocation, 'alan_review', 'alan', 0, -10);
   assert.equal(allocation.alanReviewedByRole, 'alan'); assert(allocation.alanReviewedAt); assert.equal(allocation.alanNote, 'Alan独立备注\n第二行');
   const alanHistory = allocation.events;
   allocation = await reply('allocations', allocation); assertLock(allocation, 60); assertFinal(allocation, 60, 70); assertStage('allocations', allocation, 'pending_archive', '待采购归档');
+  await crossCheckAllocation(allocation, 'reply', 'purchasing', 0, -10);
   assert.deepEqual(allocation.events.slice(0, approvedHistory.length), approvedHistory); assert.deepEqual(allocation.events.slice(0, alanHistory.length), alanHistory);
   const original = {batchKey: allocation.batchKey, plan: allocation.plan, date: allocation.date, version: allocation.version};
   const beforeArchive = db.getBalance(allocation.batchKey);
   allocation = await archive('allocations', allocation); assertLock(allocation, 0, 60); assert.equal(allocation.statusCode, 'confirmed'); assert.equal(allocation.statusText, '已完成');
+  await crossCheckAllocation(allocation, 'archive', 'purchasing', -60, -60);
   assert.equal(db.getBalance(allocation.batchKey).onHand, beforeArchive.onHand - 60);
   for (const [key, value] of Object.entries(original)) assert.equal(allocation[key], value);
   assert.equal(source('allocations', allocation).initialQuantity, 60);
   const completedHistory = allocation.events;
   allocation = await recall('allocations', allocation); assertLock(allocation, 70, 0); assertStage('allocations', allocation, 'pending_purchasing', '待采购回复');
+  await crossCheckAllocation(allocation, 'recall', 'purchasing', 60, 70);
   assert.equal(db.getBalance(allocation.batchKey).onHand, beforeArchive.onHand); assert.equal(allocation.requestedQuantity, 100); assert.equal(allocation.approvedQuantity, 80); assert.equal(allocation.supplierQuantity, null); assert.equal(allocation.alanQuantity, 70);
   assert.equal(allocation.alanReviewedByRole, 'alan'); assert.equal(allocation.businessNote, '商务80'); assert.deepEqual(allocation.events.slice(0, completedHistory.length), completedHistory);
   assert.equal(source('allocations', allocation), undefined); for (const [key, value] of Object.entries(original)) assert.equal(allocation[key], value);
@@ -227,7 +248,55 @@ try {
     }
     assert(source(kind, row)[kind === 'allocations' ? 'allocationRecall' : 'inquiryRecall'].blockers.length);
   }
-  check('两类来源存在待办、已取消或撤回下游均阻止三角色回撤，业务信息定位关联、不显示内部编号');
+  check('待办由API创建；取消/撤回仅历史状态兼容夹具，三角色回撤均阻止（当前已无取消/撤回办理API，不计实际闭环）');
+
+  for (const kind of ['allocations', 'inquiries']) for (const recallFirst of [false, true]) for (let attempt = 0; attempt < 3; attempt++) {
+    const row = await complete(kind), sourceField = kind === 'allocations' ? 'allocationId' : 'inquiryId';
+    const start = () => api('/api/upgrades/relocation-work-items', 'operation-1', {[sourceField]: row.id, sourceRevision: row.revision, requestId: rid()}, null);
+    const undo = () => api(route(kind, row, 'recall'), 'purchasing', common(row), null);
+    const results = await Promise.all(recallFirst ? [undo(), start()] : [start(), undo()]);
+    const [recalled, initiated] = recallFirst ? results : results.reverse();
+    assert.equal(results.filter(result => result.httpStatus === 200).length, 1);
+    assert.equal(results.filter(result => result.httpStatus === 409).length, 1);
+    const work = db.db.prepare(`SELECT * FROM upgrade_relocation_work_items WHERE ${kind === 'allocations' ? 'allocation_document_id' : 'inquiry_id'}=?`).all(row.id);
+    assert.equal(work.length, initiated.httpStatus === 200 ? 1 : 0);
+    if (recalled.httpStatus === 200) {assert.equal(source(kind, row), undefined); if (kind === 'allocations') assertLock(row, 70, 0);}
+    else {assert.equal(current(kind, row).revision, row.revision); assert.equal(source(kind, row).initialQuantity, 60); if (kind === 'allocations') assertLock(row, 0, 60);}
+    raceEvidence.push({kind, recallFirst, attempt, id: row.id, recallStatus: recalled.httpStatus, initiateStatus: initiated.httpStatus, workCount: work.length, oneWinner: true});
+  }
+  check('12组实际HTTP移仓发起/来源回撤竞争，每次仅一个成功：退库后无移仓关联，已发起时来源未退库');
+
+  // The execution endpoint receives synthetic capture data; no real Lingxing browser/account is used.
+  const origin = 'chrome-extension://' + 'a'.repeat(32); let workerId;
+  async function worker(action, body = {}) {
+    const response = await fetch(base + '/api/lingxing-worker/' + action, {method: 'POST', headers: {origin, 'content-type': 'application/json'}, body: JSON.stringify({workerId, ...body})});
+    const result = await response.json(); assert.equal(response.status, 200, JSON.stringify(result)); return result;
+  }
+  workerId = (await worker('connect', {version: 'isolated-approval-downstream'})).workerId;
+  for (const kind of ['allocations', 'inquiries']) {
+    const row = await complete(kind), sourceField = kind === 'allocations' ? 'allocationId' : 'inquiryId';
+    let work = (await api('/api/upgrades/relocation-work-items', 'operation-1', {[sourceField]: row.id, sourceRevision: row.revision, requestId: rid()})).workItem;
+    work = (await api(`/api/upgrades/relocation-work-items/${work.id}/procurement`, 'logistics', {...common(work), rma: 'R616738', relocationAddress: 'RMA#R616738\nMirella RW\n12000 Magnolia Ave, Suite#101\nRiverside , CA 92503 US\nTEL:562-404-9315'})).workItem;
+    const ordered = await api(`/api/upgrades/relocation-work-items/${work.id}/operation`, 'operation-1', {...common(work), removalOrderNo: 'INK-CHAIN-' + kind + '-' + work.id}); work = ordered.workItem;
+    const job = (await worker('claim')).job; assert.equal(job.id, ordered.automaticSync.id);
+    const capture = {shipments: [{externalId: 'INK-CHAIN-PACKAGE-' + work.id, storeId: 'synthetic', storeName: 'A-US 美国', countryCode: 'US', orderNo: work.removalOrderNo, fnsku: work.fnsku, quantity: 60, carrier: 'UPS', trackingNo: 'INK-CHAIN-TRACK-' + work.id, shipDate: '2026-10-14'}], capturedAt: new Date().toISOString()};
+    assert.equal((await worker('finish', {id: job.id, capture})).job.state, 'succeeded');
+    const captured = snapshot(); assert.equal((await worker('finish', {id: job.id, capture})).deduped, true); assert.deepEqual(snapshot(), captured);
+    work = db.getRelocationWorkItem(work.id); const relocation = db.getUpgrade(work.upgradeId).relocations[0];
+    const version = 'CHAIN-' + kind;
+    await api(`/api/upgrades/relocations/${relocation.id}/complete`, 'logistics', {...common(relocation), completedQuantity: 60, inProgressQuantity: 0, newVersion: version, targetWarehouse: 'SyntheticWarehouseA'});
+    const upgraded = (await api('/api/upgrades/direct', 'purchasing', {model: row.model, sourceVersion: version, requestId: rid()})).upgrade;
+    assert.equal(upgraded.initialQuantity, 60);
+    const blockers = kind === 'allocations' ? db.allocationDownstream(row.id) : db.inquiryDownstream(row.id);
+    assert(blockers.some(blocker => blocker.type === '升级' && blocker.number === upgraded.upgradeNo), JSON.stringify({upgraded, blockers}));
+    for (const actor of ['business', 'purchasing', 'logistics']) {
+      const rejected = await reject(route(kind, row, 'recall'), actor, common(row), 409);
+      assert(rejected.details.blockers.some(blocker => blocker.type === '升级' && blocker.number === upgraded.upgradeNo));
+    }
+    downstreamEvidence.push({kind, sourceId: row.id, workId: work.id, captureJobId: job.id, captureMode: 'synthetic worker protocol', relocationId: relocation.id, indirectUpgradeId: upgraded.id, allStagesViaHttp: true, recallBlockedWithAllTablesUnchanged: true});
+  }
+  await worker('disconnect');
+  check('两类来源API移仓→RMA地址→订单→模拟执行端包裹采纳→实际HTTP入库→在库升级，递归关联阻止三角色回撤；采集回执重试不重复入账');
 
   const exportRows = [await ready('inquiries'), await alan('inquiries', await ready('inquiries'), 0), await reply('inquiries', await alan('inquiries', await ready('inquiries'), 70), 60)];
   const headers = ['型号', '商务部审核数量', 'Alan审核数量', 'Alan备注', '供应商库存回复', '发货仓库', '采购备注', '调拨部门', '调拨店铺', '调拨运营', '已贴FNSKU', '提交时间', '状况'];
@@ -280,6 +349,6 @@ try {
 } catch (error) {failure = error.stack; throw error;}
 finally {
   await stop(); db?.close();
-  await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({version: execFileSync('git', ['rev-parse', 'HEAD'], {cwd: root, encoding: 'utf8'}).trim(), schemaVersion: 36, state, base, checks, rejectedRequests, quantities, downloads, migrationEvidence, failure: failure ?? null, productionWrites: 0, realLingxingRequests: 0}, null, 2));
+  await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({version: execFileSync('git', ['rev-parse', 'HEAD'], {cwd: root, encoding: 'utf8'}).trim(), schemaVersion: 36, state, base, checks, rejectedRequests, quantities, downloads, migrationEvidence, downstreamEvidence, raceEvidence, crossModuleEvidence, failure: failure ?? null, productionWrites: 0, realLingxingRequests: 0}, null, 2));
 }
 console.log(`INK_APPROVAL_V36_PASS ${checks.length} groups; ${rejectedRequests.length} rejected requests unchanged`);

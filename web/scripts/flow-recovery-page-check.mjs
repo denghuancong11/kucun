@@ -3,8 +3,10 @@ import {relocationUpdateFixture,relocationAddressFixture} from '../../scripts/fi
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';
 import {chromium} from 'playwright-core';
-import {createInventoryDatabase,InventoryDatabase} from '../../inventory-db.mjs';
+
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
+process.env.ASTER_OVERSEAS_WAREHOUSES = 'SyntheticWarehouseA;SyntheticWarehouseB';
+const {createInventoryDatabase,InventoryDatabase} = await import('../../inventory-db.mjs');
 const root=path.resolve(import.meta.dirname,'../..'),state=fs.mkdtempSync(path.join(os.tmpdir(),'aster-flow-page-')),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/flow-recovery-page');
 fs.mkdirSync(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID();
 function archive(n){let r=db.createInquiry({role:'operation-1',model:'SYNTH-TONER-001',quantity:20,department:'一团',store:'AUS',operator:n,fnsku:'XPAGEFLOW1',asin:'BPAGEFLOW1',requestId:rid()}).record;r=db.reviewInquiry({id:r.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:r.revision,requestId:rid()}).record;r=db.replyInquiry({id:r.id,role:'purchasing',supplierQuantity:20,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:rid()}).record;return db.archiveInquiry({id:r.id,role:'assistant-1',plan:'PAGE-'+n,date:'2026-09-11',version:'V1',expectedRevision:r.revision,requestId:rid()}).record;}

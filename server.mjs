@@ -302,10 +302,15 @@ function requireNonNegativeInteger(value, label = "数量") {
 function normalizeAuditBoundary(value, label, endOfDay = false) {
   const raw = String(value ?? "").trim();
   if (!raw) return undefined;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return new Date(`${raw}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`).toISOString();
+  if (/^\d{4}-\d{2}-\d{2}(?:$|T)/.test(raw)) {
+    const calendarDate = raw.slice(0, 10);
+    const calendar = new Date(`${calendarDate}T00:00:00.000Z`);
+    if (Number.isNaN(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== calendarDate) {
+      throw new BusinessError(400, "invalid_audit_time", `${label}不是有效时间`);
+    }
   }
-  const parsed = new Date(raw);
+  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? `${raw}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}` : raw);
   if (Number.isNaN(parsed.getTime())) {
     throw new BusinessError(400, "invalid_audit_time", `${label}不是有效时间`);
   }

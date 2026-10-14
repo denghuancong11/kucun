@@ -4,41 +4,43 @@ import { type ApiError, applyTransitStatus, formatNumber, importTransit, preview
 import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
 import { createRequestId } from "../utils/ids";
+import { useSessionDraft } from "../hooks/useSessionDraft";
 
 
 type PendingRequest = { previewToken: string; payloadKey: string; requestId: string };
+type TransitDraft = { preview: TransitImportPreview | null; statusPreview: TransitStatusPreview | null; importRequest: PendingRequest | null; statusRequest: PendingRequest | null; uncertainImport: boolean; uncertainStatus: boolean };
+const emptyDraft: TransitDraft = { preview: null, statusPreview: null, importRequest: null, statusRequest: null, uncertainImport: false, uncertainStatus: false };
 
 export function Requirement3View({ role }: { role: Role }) {
-  const [preview, setPreview] = useState<TransitImportPreview | null>(null);
-  const [statusPreview, setStatusPreview] = useState<TransitStatusPreview | null>(null);
+  const [draft, setDraft, { ready, storageError }] = useSessionDraft(role, "transit-preview", emptyDraft);
+  const { preview, statusPreview, uncertainImport, uncertainStatus } = draft;
+  const setPreview = (value: TransitImportPreview | null) => setDraft(current => ({ ...current, preview: value }));
+  const setStatusPreview = (value: TransitStatusPreview | null) => setDraft(current => ({ ...current, statusPreview: value }));
+  const setUncertainImport = (value: boolean) => setDraft(current => ({ ...current, uncertainImport: value }));
+  const setUncertainStatus = (value: boolean) => setDraft(current => ({ ...current, uncertainStatus: value }));
   const [busy, setBusy] = useState<"preview" | "import" | "status-preview" | "status-apply" | null>(null);
-  const [uncertainImport,setUncertainImport]=useState(false),[uncertainStatus,setUncertainStatus]=useState(false);
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const statusFileInput = useRef<HTMLInputElement>(null);
   const contextGeneration = useRef(0);
-  const importRequestRef = useRef<PendingRequest | null>(null);
-  const statusRequestRef = useRef<PendingRequest | null>(null);
   const queryClient = useQueryClient();
   const transitAccess = TRANSIT_ROLES.includes(role);
 
   useEffect(() => {
     contextGeneration.current += 1;
-    importRequestRef.current = null;
-    statusRequestRef.current = null;
-    setPreview(null); setStatusPreview(null); setNotice(null);
+    setNotice(null);
     if (fileInput.current) fileInput.current.value = "";
     if (statusFileInput.current) statusFileInput.current.value = "";
   }, [role]);
 
   const blockingErrors = preview?.validation.errors ?? [];
-  const canImport = Boolean(preview?.previewToken) && blockingErrors.length === 0 && busy === null;
+  const canImport = ready && Boolean(preview?.previewToken) && blockingErrors.length === 0 && busy === null;
   const isCurrentContext = (generation: number) => contextGeneration.current === generation;
 
 
   const upload = async (file?: File) => {
-    if (!transitAccess || !file) return;
-    importRequestRef.current = null;
+    if (!ready || !transitAccess || !file) return;
+    setDraft(current => ({ ...current, importRequest: null }));
     const generation = contextGeneration.current;
     setBusy("preview"); setPreview(null); setStatusPreview(null); setNotice(null);
     try {
@@ -53,8 +55,8 @@ export function Requirement3View({ role }: { role: Role }) {
   };
 
   const uploadStatus = async (file?: File) => {
-    if (!transitAccess || !file) return;
-    statusRequestRef.current = null;
+    if (!ready || !transitAccess || !file) return;
+    setDraft(current => ({ ...current, statusRequest: null }));
     const generation = contextGeneration.current;
     setBusy("status-preview"); setPreview(null); setStatusPreview(null); setNotice(null);
     try {
@@ -70,7 +72,7 @@ export function Requirement3View({ role }: { role: Role }) {
   };
 
   const applyStatus = async () => {
-    if (!transitAccess || !statusPreview?.previewToken || !statusPreview.canApply || busy !== null) return;
+    if (!ready || !transitAccess || !statusPreview?.previewToken || !statusPreview.canApply || busy !== null) return;
     const generation = contextGeneration.current;
     setBusy("status-apply"); setNotice(null);
     try {
@@ -82,14 +84,14 @@ export function Requirement3View({ role }: { role: Role }) {
         templateHash: statusPreview.templateSha256,
       };
       const payloadKey = JSON.stringify({ role, payload: requestPayload });
-      const pending = statusRequestRef.current;
+      const pending = draft.statusRequest;
       const requestId = pending?.previewToken === requestPayload.previewToken && pending.payloadKey === payloadKey
         ? pending.requestId
         : createRequestId("transit-status");
-      statusRequestRef.current = { previewToken: requestPayload.previewToken, payloadKey, requestId };
+      setDraft(current => ({ ...current, statusRequest: { previewToken: requestPayload.previewToken, payloadKey, requestId } }));
       const result = await applyTransitStatus(role, { ...requestPayload, requestId });
       if (!isCurrentContext(generation)) return;
-      statusRequestRef.current = null;
+      setDraft(current => ({ ...current, statusRequest: null }));
       setStatusPreview(null);
       setNotice({ kind: "success", text: `已处理 ${result.processedPlanCount} 个计划，更新 ${result.updatedDetailCount} 条在途记录，${result.unmatchedPlanCount} 个计划未匹配。` });
       setUncertainStatus(false);
@@ -112,11 +114,11 @@ export function Requirement3View({ role }: { role: Role }) {
       rows: preview.rows,
     };
     const payloadKey = JSON.stringify({ role, payload: requestPayload });
-    const pending = importRequestRef.current;
+    const pending = draft.importRequest;
     const requestId = pending?.previewToken === requestPayload.previewToken && pending.payloadKey === payloadKey
       ? pending.requestId
       : createRequestId("transit-import");
-    importRequestRef.current = { previewToken: requestPayload.previewToken, payloadKey, requestId };
+    setDraft(current => ({ ...current, importRequest: { previewToken: requestPayload.previewToken, payloadKey, requestId } }));
     try {
       let result: Awaited<ReturnType<typeof importTransit>>;
       try {
@@ -129,7 +131,7 @@ export function Requirement3View({ role }: { role: Role }) {
       setUncertainImport(false);
       setNotice({ kind: "success", text: `已导入 ${result.rowCount} 条在途记录。` });
       setPreview(null); 
-      importRequestRef.current = null;
+      setDraft(current => ({ ...current, importRequest: null }));
       try {
         await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, {throwOnError:true}), queryClient.invalidateQueries({ queryKey: ["audit"] }, {throwOnError:true})]);
       } catch (error) {
@@ -147,12 +149,13 @@ export function Requirement3View({ role }: { role: Role }) {
 
   return (
     <div className="transit-page">
+      {storageError && <p className="callout callout-warn" role="alert">{storageError}</p>}
       {notice && <div className={`callout callout-${notice.kind === "error" ? "danger" : notice.kind === "warning" ? "warn" : "success"}`} role="status">{notice.text}</div>}
       {transitAccess && <section aria-label="表格导入"><div className="transit-toolbar">
-        <label className="btn btn-primary" htmlFor="transit-import-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "preview" ? "正在预览…" : "导入在途表格"}</label>
-        <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
-        <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入更新物流表格"}</label>
-        <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
+        <label className="btn btn-primary" htmlFor="transit-import-file" aria-disabled={!ready||busy!==null||uncertainImport||uncertainStatus}>{busy === "preview" ? "正在预览…" : "导入在途表格"}</label>
+        <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={!ready || busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
+        <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={!ready||busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入更新物流表格"}</label>
+        <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={!ready || busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
       </div></section>}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
@@ -195,7 +198,7 @@ export function Requirement3View({ role }: { role: Role }) {
                 </tr>)}</tbody>
             </table>
           </div>
-          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "正在更新…" : uncertainStatus?"重试确认":"确认更新物流"}</button></div>
+          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!ready || !statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "正在更新…" : uncertainStatus?"重试确认":"确认更新物流"}</button></div>
         </div>}
       </section>}
 

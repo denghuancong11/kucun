@@ -9,7 +9,7 @@ import {InventoryDatabase,createInventoryDatabase,ROLES} from '../inventory-db.m
 import {transferWorkbook,transferSample} from './fixtures/transfer-workbook.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
 
-const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'.test-output/upgrade-template');
+const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/upgrade-template');
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-original-template-'));
 await fs.mkdir(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 const db=new InventoryDatabase(state),port=await freePort(),base='http://127.0.0.1:'+port,checks=[],files=[];

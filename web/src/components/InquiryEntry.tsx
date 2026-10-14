@@ -5,24 +5,36 @@ import type { ModelSummary, Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { operationGroups } from "../utils/roles";
 import { useBusinessAction } from "../hooks/useBusinessAction";
+import { useSessionDraft } from "../hooks/useSessionDraft";
 
 export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; role: Role; enabled: boolean }) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [draft, setDraft] = useState({quantity:"",department:"一团",store:"",operator:"",fnsku:"",asin:"",operatorNote:""});
   const queryClient = useQueryClient();
   const group = operationGroups[role];
+  const emptyDraft = {quantity:"",department:group??"一团",store:"",operator:"",fnsku:"",asin:"",operatorNote:""};
+  const [draft, setDraft, draftCache] = useSessionDraft(role, `inquiry-entry:${model.model}`, emptyDraft);
   const storeValid = draft.store.includes("US") && !draft.store.includes("-");
   const storeInvalid = draft.store.length > 0 && !storeValid;
   const canEntry = enabled && ["admin","operation-1","operation-2"].includes(role);
   const {perform,busy,uncertain,error} = useBusinessAction(() => queryClient.invalidateQueries({queryKey:["approvals"]}, {throwOnError:true}), text => {
-    setOpen(false);setMessage(text);setDraft({quantity:"",department:group??"一团",store:"",operator:"",fnsku:"",asin:"",operatorNote:""});
+    setOpen(false);setMessage(text);setDraft(emptyDraft);
   });
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (busy || !draftCache.ready) return;
+    if (uncertain) { void perform(); return; }
     if (!storeValid) return;
     const payload={...draft,quantity:Number(draft.quantity),department:group??draft.department,model:model.model,requestId:createRequestId("inquiry")};
-    void perform({execute:()=>createInquiry(role,payload),message:model.model+"：询库已提交，等待商务审核。"});
+    const restoreDraft = draftCache.persist(emptyDraft, true);
+    void perform({execute:async()=>{
+      try { return await createInquiry(role,payload); }
+      catch (failure) {
+        const status = (failure as {status?:number}).status;
+        if (status !== undefined && status >= 400 && status < 500) restoreDraft();
+        throw failure;
+      }
+    },message:model.model+"：询库已提交，等待商务审核。"});
   };
   if (!canEntry) return null;
   return <div className="inquiry-entry">
@@ -31,7 +43,7 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
     {open && <div className="dialog-mask" onClick={() => !busy && !uncertain && setOpen(false)}>
       <form className="dialog inquiry-dialog" role="dialog" aria-modal="true" aria-labelledby="inquiry-title" onSubmit={(event) => void submit(event)} onClick={(event) => event.stopPropagation()}>
         <h3 id="inquiry-title">提交询库需求 · {model.model}</h3>
-        <fieldset className="inquiry-fields" disabled={busy || uncertain}>
+        <fieldset className="inquiry-fields" disabled={!draftCache.ready || busy || uncertain}>
           <div className="form-grid">
             <label className="field"><span>询库数量（必填）</span><input autoFocus required type="number" min="1" step="1" value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: e.target.value })} /></label>
             <label className="field"><span>询库部门</span><select value={group ?? draft.department} disabled={Boolean(group)} onChange={(e) => setDraft({ ...draft, department: e.target.value })}>{(group ? [group] : ["一团", "二团"]).map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -43,7 +55,8 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
           </div>
         </fieldset>
         {error && <p className="dialog-error" role="alert">{error}</p>}
-        <div className="dialog-actions"><button type="button" className="btn btn-ghost" disabled={busy || uncertain} onClick={() => setOpen(false)}>取消</button><button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "提交中…" : uncertain ? "重试确认" : "提交询库"}</button></div>
+        {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
+        <div className="dialog-actions"><button type="button" className="btn btn-ghost" disabled={busy || uncertain} onClick={() => setOpen(false)}>取消</button><button type="submit" className="btn btn-primary" disabled={!draftCache.ready || busy}>{busy ? "提交中…" : uncertain ? "重试确认" : "提交询库"}</button></div>
       </form>
     </div>}
   </div>;

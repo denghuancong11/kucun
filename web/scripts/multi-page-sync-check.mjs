@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {chromium} from 'playwright-core';
-import {createInventoryDatabase,InventoryDatabase} from '../../inventory-db.mjs';
+
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
+process.env.ASTER_OVERSEAS_WAREHOUSES = 'SyntheticWarehouseA;SyntheticWarehouseB';
+const {createInventoryDatabase,InventoryDatabase} = await import('../../inventory-db.mjs');
 const root=path.resolve(import.meta.dirname,'../..'),out=process.env.ASTER_MULTI_SYNC_OUTPUT||path.join(root,'.test-output/multi-page-sync');
 await fs.mkdir(out,{recursive:true});
 const results=[],errors=[];
@@ -55,7 +57,7 @@ async function scenario(name) {
   const receipt=b.waitForResponse(r=>r.url().endsWith('/api/inquiries')&&r.request().method()==='POST');await dialog.getByRole('button',{name:'提交询库',exact:true}).click();await receipt;releaseSync();
  }
  if(name==='read-failure'){await sleep(3500);fail=false;}
- let updated=true;try {await row.getByText('YES',{exact:true}).waitFor({timeout:name==='hung'?14000:6500});}catch{updated=false;}
+ let updated=true;try {await row.getByText('已上架',{exact:true}).waitFor({timeout:name==='hung'?14000:6500});}catch{updated=false;}
  const final=db.getCatalog(),summary=final.models.find(m=>m.model===model);
  assert.equal(summary.inStock,12);assert.equal(summary.inTransit,0);assert.equal(summary.inStock+summary.inTransit,12);
  const result={name,base,databaseId:initial.sync.databaseId,saveSync:save.sync,updated,elapsedMs:Date.now()-started,log,ui:await row.innerText(),url:b.url(),summary};
@@ -92,7 +94,7 @@ async function retainedWorkspaces() {
  await failAndRecover('/api/audit','audit',async()=>{assert.equal(await p.getByLabel('按型号查询库存流水',{exact:true}).inputValue(),'未提交筛选');assert.equal(await p.getByLabel('选择库存操作分类',{exact:true}).inputValue(),'transit_import');assert.ok(await p.locator('.audit-table tbody tr').count()>0);});
  const upgrade=db.createDirectUpgrade({role:'admin',model:'MULTI-ORDINARY',sourceVersion:'V1',requestId:crypto.randomUUID()}).upgrade;
  await p.getByLabel('切换当前操作角色',{exact:true}).selectOption('purchasing');await nav('升级库存');await p.getByRole('tab',{name:'在库升级',exact:true}).click();
- const quantity=p.getByLabel('升级完成数量',{exact:true}),version=p.getByLabel('升级完成版本号',{exact:true});await quantity.fill('3');await version.fill('V-DRAFT');
+ await p.locator('[data-upgrade-id="'+upgrade.id+'"]').getByRole('button',{name:'登记完成',exact:true}).click();const upgradeDialog=p.getByRole('dialog',{name:'登记在库升级完成',exact:true});await upgradeDialog.getByRole('radio').first().check();const quantity=upgradeDialog.getByLabel('本次完成数量',{exact:true}),version=upgradeDialog.getByLabel('升级完成版本',{exact:true});await quantity.fill('3');await version.fill('V-DRAFT');
  await failAndRecover('/api/upgrades','upgrade',async()=>{assert.equal(await quantity.inputValue(),'3');assert.equal(await version.inputValue(),'V-DRAFT');assert.equal(await p.getByRole('tab',{name:'在库升级',exact:true}).getAttribute('aria-selected'),'true');});
  assert.deepEqual(writes,['/api/transit/preview']);assert.equal(db.getCatalog().models.find(m=>m.model==='DRAFT-ONLY'),undefined);results.push({name:'automatic-refresh-only-reads',observedWrites:writes});
  await context.close();

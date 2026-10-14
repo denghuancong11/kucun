@@ -1,6 +1,6 @@
 # Unismar 耗材库存系统
 
-该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 34。
+该仓库包含 Node.js 后端、React 前端、SQLite schema 与迁移、领星浏览器扩展及采集脚本、合成测试夹具和 Windows 部署脚本。当前数据库结构版本为 schema 36。
 
 ## 运行环境
 
@@ -31,9 +31,16 @@ npm run test:teams
 npm run test:teams-page
 npm run test:warehouse-fba-page
 npm run test:page
+npm run test:ink-approval-v36
+npm run test:upgrade-template
+npm run test:relocation-workflow
+npm run test:relocation-waybills
+npm run test:transfer-workflow
 ```
 
-页面测试需要已安装的 Edge。测试数据库、随机端口和生成文件相互隔离；默认测试输出位于被忽略的 `.test-output/` 或系统临时目录。测试不会读取正式数据库、历史备份或本机业务 Excel。
+`npm test` 和 `npm run check` 不是全系统覆盖结论；墨盒审批、升级、模板、运单、团队权限以及页面恢复等专项须按变更影响补充执行。测试证据需记录受测源码和构建指纹，历史分阶段 PASS 数量不能代表当前源码全部通过。
+
+页面测试需要已安装的 Edge。测试数据库、随机端口和生成文件相互隔离；默认测试输出位于被忽略的 `.test-output/` 或系统临时目录。默认测试使用合成数据。`test:upgrade-real-warehouses` 须显式提供本轮核准的静态数据库副本 `ASTER_REAL_CONFIG_BASELINE_DB` 及配置副本 `ASTER_RUNTIME_CONFIG`，仅写入再次复制的新隔离目录；不得传入正式库。原模板比对须显式指定 `ASTER_UPGRADE_TEMPLATE`，只读原文件。
 
 ## 新建本地数据库并启动
 
@@ -44,11 +51,11 @@ $env:ASTER_STATE_ROOT = Join-Path $env:LOCALAPPDATA 'UnismarInventory\developmen
 $env:HOST = '127.0.0.1'
 $env:PORT = '4174'
 $env:PROD = '1'
-npm run initialize
+npm run initialize -- --state-root "$env:ASTER_STATE_ROOT"
 npm start
 ```
 
-首次初始化会创建 schema 34 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
+首次初始化会创建 schema 36 数据库和合成演示目录；不会导入正式库存数据。停止本地开发服务可在运行窗口按 `Ctrl+C`。不要把 `ASTER_STATE_ROOT` 指向正式数据目录。
 
 ## 历史数据库迁移与私有来源
 
@@ -61,7 +68,9 @@ $env:ASTER_PRIVATE_INBOUND_SOURCES = 'C:\private\legacy-inbound-sources.local.js
 npm run migrate
 ```
 
-`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 28–33 使用同一受控脚本升级至 schema 34；当前版本无需重复迁移。
+`scripts/fixtures/legacy-inbound-sources.example.json` 仅展示格式，其中是合成的一行样例，不满足历史迁移所需的 47 行校验。schema 28–35 使用同一受控脚本升级至 schema 36；当前版本无需重复迁移。
+
+schema 36 增加墨盒独立 Alan 审核节点。采购／物流可跳过尚未办理的 Alan 直接最终回复；跳过字段保持空值，Alan 回复 0 仍进入待采购回复。调拨按各阶段差额调整预锁，采购归档才扣实际库存；询库不占库存。采购／物流回撤保留 Alan 结果，商务回撤清空后续当前结果并从历史恢复原数量。迁移只将尚待后续回复的旧墨盒单据转入 Alan 阶段，已回复单据继续原阶段。
 
 原运行配置中的仓库名称保存在被忽略的 `.local-private/runtime-config.local.json`。没有该本地文件时，新副本使用合成默认名称；也可通过 `ASTER_OVERSEAS_WAREHOUSES` 环境变量覆盖，多个名称以分号分隔。
 

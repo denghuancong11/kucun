@@ -5,7 +5,7 @@ import {spawn,execFileSync} from 'node:child_process';import {once} from 'node:e
 import {createInventoryDatabase,InventoryDatabase,ROLES,TRANSFER_UPGRADE_FIELDS} from '../inventory-db.mjs';
 import {transferWorkbook,transferSample} from './fixtures/transfer-workbook.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
-const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'.test-output/transfer-upgrade'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-transfer-'));
+const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/transfer-upgrade'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-transfer-'));
 await fs.mkdir(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 let db=new InventoryDatabase(state),child,failure;const port=await freePort(),base=`http://127.0.0.1:${port}`,checks=[],rid=()=>crypto.randomUUID(),roles=['admin','assistant-1','assistant-2','purchasing','logistics'];
 const check=n=>{checks.push(n);console.log('PASS '+n)},snap=(connection=db.db)=>Object.fromEntries(connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(({name})=>[name,connection.prepare(`SELECT * FROM "${name}"`).all().map(r=>({...r})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]));

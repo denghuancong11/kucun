@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { clearInquiryDisplay, confirmAllocation, downloadInquiryExport, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
-import { AlanReviewCells, AllocationFulfillment, ApprovalProcurementCells, InquiryFulfillment } from "../components/InquiryFulfillment";
+import { AlanReviewCells, AllocationFulfillment, ApprovalProcurementCells, InquiryFulfillment, type ApprovalDraftControls, type ApprovalFormDraft } from "../components/InquiryFulfillment";
 import { Badge, displayTime, EmptyState, FeedbackButton, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { useBusinessAction } from "../hooks/useBusinessAction";
+import { useSessionDraft } from "../hooks/useSessionDraft";
 import { useApprovals } from "../hooks/useApprovals";
 import { useInventoryCatalog } from "../hooks/useInventory";
 import type { Allocation, Category, DocumentEvent, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
@@ -87,8 +88,41 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   item: ApprovalItem; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void;
 }) {
   const row = item.record;
-  const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
-  const [procurementQuantity, setProcurementQuantity] = useState("");
+  const draftScope = `${item.kind === "inquiry" ? item.record.status : [item.record.statusCode, item.record.approvalStatus, item.record.procurementStatus].join(":")}:${row.events.filter(event => event.type === "recall").slice(-1)[0]?.id ?? 0}`;
+  const [savedDraft, setSavedDraft, draftCache] = useSessionDraft<ApprovalFormDraft | null>(role, `approval-${item.kind}-${row.id}`, null);
+  const [submittedDraft, setSubmittedDraft] = useState<ApprovalFormDraft | null>(null);
+  const currentDraft = savedDraft?.scope === draftScope ? savedDraft : submittedDraft?.scope === draftScope ? submittedDraft : null;
+  const draft: ApprovalDraftControls = {
+    value: currentDraft,
+    ready: draftCache.ready,
+    update: patch => {
+      setSubmittedDraft(null);
+      setSavedDraft(current => ({ ...(current?.scope === draftScope ? current : {}), scope: draftScope, ...patch }));
+    },
+    prepare: execute => {
+      const submitted = currentDraft ?? { scope: draftScope };
+      setSubmittedDraft(submitted);
+      const restoreDraft = draftCache.persist(null, true);
+      return async () => {
+        try {
+          const result = await execute();
+          setSubmittedDraft(current => current?.scope === submitted.scope ? null : current);
+          return result;
+        } catch (failure) {
+          const status = (failure as ApiError).status;
+          if (status !== undefined && status >= 400 && status < 500) {
+            restoreDraft();
+            setSubmittedDraft(current => current?.scope === submitted.scope ? null : current);
+          }
+          throw failure;
+        }
+      };
+    },
+  };
+  const quantity = currentDraft?.quantity ?? String(row.approvedQuantity ?? row.requestedQuantity);
+  const setQuantity = (value: string) => draft.update({ quantity: value });
+  const procurementQuantity = currentDraft?.quantity ?? "";
+  const setProcurementQuantity = (value: string) => draft.update({ quantity: value });
   const procurementStage = item.kind === "inquiry" ? item.record.status : item.record.procurementStatus;
   const previewQuantity = ["purchasing", "logistics"].includes(role) && (procurementStage === "pending_purchasing" || row.category === "墨盒" && procurementStage === "pending_alan")
     && procurementQuantity.trim() !== "" && Number.isInteger(Number(procurementQuantity)) && Number(procurementQuantity) >= 0
@@ -96,7 +130,8 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const displayedRequested = previewQuantity ?? row.requestedQuantity;
   const displayedApproved = previewQuantity ?? row.approvedQuantity;
   const previewTitle = previewQuantity === null ? undefined : "采购数量预览（未提交）";
-  const [businessNote, setBusinessNote] = useState(row.businessNote || "");
+  const businessNote = currentDraft?.note ?? row.businessNote ?? "";
+  const setBusinessNote = (value: string) => draft.update({ note: value });
   const [quantityRequestError, setQuantityRequestError] = useState(false);
   const packPerBox = Number(item.kind === "allocation" ? item.record.packPerBox : null);
   const quantityError = item.kind !== "allocation" ? ""
@@ -107,19 +142,20 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const [reviewing,setReviewing]=useState<"approve"|"reject">("approve");
   const needsReview = item.kind === "allocation" ? item.record.statusCode === "pending" && item.record.approvalStatus !== "approved" && item.record.approvalStatus !== "rejected" : item.record.status === "pending_business";
   const review = (decision: "approve" | "reject") => {
+    if (!draft.ready || busy || uncertain) return;
     const approvedQuantity = Number(quantity);
     if (decision === "approve" && quantityError) return;
     if (decision === "approve" && (!Number.isInteger(approvedQuantity) || approvedQuantity <= 0)) { setError("审核数量请填写大于 0 的整数"); return; }
     const payload = { decision, ...(decision === "approve" ? { approvedQuantity } : {}), businessNote: businessNote.trim(), expectedRevision: row.revision, requestId: createRequestId(`${item.kind}-review`) };
     setReviewing(decision);
     setQuantityRequestError(false);
-    void perform({ execute: async () => {
+    void perform({ execute: draft.prepare(async () => {
       try { return await (item.kind === "allocation" ? reviewAllocation(role, row.id, payload, [row.model,row.store,row.department,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")) : reviewInquiry(role, row.id, payload, [row.model,row.store,row.department,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))); }
       catch (failure) {
         if (item.kind === "allocation") setQuantityRequestError(["invalid_quantity", "allocation_quantity_multiple", "insufficient_available"].includes((failure as ApiError).code ?? ""));
         throw failure;
       }
-    }, message: decision === "approve" ? `${row.model} · ${row.store} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.model} · ${row.store} 已拒绝。` });
+    }), message: decision === "approve" ? `${row.model} · ${row.store} 已批准 ${formatNumber(approvedQuantity)} 件。` : `${row.model} · ${row.store} 已拒绝。` });
   };
   const metrics = row.lingxing;
   const metricColumns = approvalDocumentColumns(role).filter(column => column.key);
@@ -130,8 +166,8 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       <td className="approval-number" data-field="商务审核数量" title={previewTitle}>{displayedApproved === null ? "—" : formatNumber(displayedApproved)}</td>
       <td className="approval-number" data-field="套/箱" title={item.kind === "allocation" ? item.record.packPerBox ?? "来源批次套/箱缺失" : undefined}>{item.kind === "allocation" ? item.record.packPerBox || "—" : "—"}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
-      <AlanReviewCells kind={item.kind} row={row} role={role} onRefresh={onRefresh} onNotice={onNotice} />
-      {item.kind === "inquiry" || row.category === "墨盒" ? <ApprovalProcurementCells kind={item.kind} row={row} quantity={procurementQuantity} onQuantityChange={setProcurementQuantity} role={role} onRefresh={onRefresh} onNotice={onNotice} />
+      <AlanReviewCells kind={item.kind} row={row} role={role} onRefresh={onRefresh} onNotice={onNotice} draft={draft} />
+      {item.kind === "inquiry" || row.category === "墨盒" ? <ApprovalProcurementCells kind={item.kind} row={row} quantity={procurementQuantity} onQuantityChange={setProcurementQuantity} role={role} onRefresh={onRefresh} onNotice={onNotice} draft={draft} />
         : <><td data-field="供应商库存回复">—</td><td data-field="发货仓库">—</td><td data-field="采购备注">—</td></>}
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
@@ -145,18 +181,19 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
     </tr>
     <tr className="approval-action-row"><td colSpan={DOCUMENT_COLUMNS.length + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.model} · ${row.store}`} onSubmit={event => event.preventDefault()}>
-        <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" aria-label="审核数量" aria-invalid={Boolean(quantityError)} value={quantity} disabled={busy || uncertain} onChange={event => { setQuantity(event.target.value); if (quantityRequestError) { setError(null); setQuantityRequestError(false); } }} /></label>
+        <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" aria-label="审核数量" aria-invalid={Boolean(quantityError)} value={quantity} disabled={!draft.ready || busy || uncertain} onChange={event => { setQuantity(event.target.value); if (quantityRequestError) { setError(null); setQuantityRequestError(false); } }} /></label>
         {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.model} · ${row.store}`}>{item.record.packPerBox || "—"}</output></label>}
         <label className="field approval-calculated-coverage"><span>计算-调货后倍数</span><output aria-label={`计算-调货后倍数 ${row.model} · ${row.store}`}>{calculatedCoverage(quantity, metrics ?? null)}</output></label>
-        <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
-        <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>{busy&&reviewing==="approve"?"正在批准…":"批准"}</button>
-        <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>{busy&&reviewing==="reject"?"正在拒绝…":"拒绝"}</button>
+        <label className="field approval-business-note"><span>商务备注</span><input value={businessNote} disabled={!draft.ready || busy || uncertain} onChange={event => setBusinessNote(event.target.value)} /></label>
+        <button className="btn btn-primary" type="button" disabled={!draft.ready || busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>{busy&&reviewing==="approve"?"正在批准…":"批准"}</button>
+        <button className="btn btn-ghost" type="button" disabled={!draft.ready || busy || uncertain} onClick={() => review("reject")}>{busy&&reviewing==="reject"?"正在拒绝…":"拒绝"}</button>
       </form>}
       {item.kind === "allocation" && row.category !== "墨盒" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
       {item.kind === "allocation" && <AllocationFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
-      {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
+      {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} draft={draft} />}
       {role === "business" && needsReview && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {error && <p className="dialog-error" role="alert">{error}</p>}
+      {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
       {uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void perform()}>{busy?"正在确认…":"重试确认"}</button>}
     </div>{row.category === "墨盒" && <ApprovalHistory events={row.events} />}</td></tr>
   </tbody>;

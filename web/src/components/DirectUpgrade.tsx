@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { completeDirectUpgrade, createDirectUpgrade, formatNumber, type ApiError } from "../api";
 import type { DirectUpgrade, DirectUpgradeSource, Role } from "../types";
 import { useEffectivePermissions } from "../hooks/usePermissions";
+import { useSessionDraft } from "../hooks/useSessionDraft";
 import { createRequestId } from "../utils/ids";
 import { expandableRowProps } from "../utils/rowExpansion";
 import { Badge, displayTime, EmptyState, Panel } from "./ui";
@@ -39,7 +40,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
   const [pendingStart, setPendingStart] = useState<StartRequest | null>(null);
   const [startError, setStartError] = useState("");
   const [completeId, setCompleteId] = useState<number | null>(null);
-  const [drafts, setDrafts] = useState<Record<number, Draft>>({});
+  const [drafts, setDrafts, draftCache] = useSessionDraft<Record<number, Draft>>(role, "direct-completion", {});
   const [pending, setPending] = useState<Record<number, CompleteRequest>>({});
   const [errors, setErrors] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -78,9 +79,13 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
   };
 
   const finish = async () => {
-    if (!selectedJob || running.current || (!recovery && (!valid || !canComplete || !canAct(selectedJob.category)))) return;
+    if (!draftCache.ready || !selectedJob || running.current || (!recovery && (!valid || !canComplete || !canAct(selectedJob.category)))) return;
     const job = selectedJob;
     const request = recovery ?? { sourceLineId: selectedLine!.id, completedQuantity: quantity, newVersion: draft.version.trim(), targetWarehouse: draft.warehouse, expectedRevision: job.revision, requestId: createRequestId(`upgrade-direct-complete-${job.id}`) };
+    const submittedDraft = { ...draft };
+    const remainingDrafts = {...drafts};
+    delete remainingDrafts[job.id];
+    const restoreDraft = draftCache.persist(remainingDrafts, true);
     running.current = true; setBusy(`complete-${job.id}`); setPending(current => ({ ...current, [job.id]: request })); setErrors(current => ({ ...current, [job.id]: "" })); onBegin();
     try {
       await completeDirectUpgrade(role, job.id, request, description(job));
@@ -90,13 +95,14 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
     } catch (failure) {
       const error = failure as ApiError;
       const rejected = error.status !== undefined && error.status >= 400 && error.status < 500;
-      if (rejected) setPending(current => { const next = { ...current }; delete next[job.id]; return next; });
+      if (rejected) { restoreDraft(); setDrafts(current => ({ ...current, [job.id]: submittedDraft })); setPending(current => { const next = { ...current }; delete next[job.id]; return next; }); }
       setErrors(current => ({ ...current, [job.id]: error.message + (rejected ? "" : " 本次完成结果待确认。") }));
     } finally { running.current = false; setBusy(null); }
   };
 
   return <section className="direct-upgrade" hidden={!active}>
     <Panel title="在库升级记录" badge={<span className="muted">{visible.length} 条</span>} actions={canStart ? <button className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>发起在库升级</button> : undefined}>
+      {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
       {pendingStart && !startOpen && <div className="direct-pending" role="status"><span>{pendingStart.model} · {pendingStart.sourceVersion}：发起结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>重试确认</button></div>}
       {jobs.filter(job => pending[job.id] && completeId !== job.id).map(job => <div className="direct-pending" role="status" key={job.id}><span>{description(job)}：完成结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>重试确认</button></div>)}
       <div className="direct-filters">
@@ -134,7 +140,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
     </form></DirectDialog>}
     {active && selectedJob && <DirectDialog title="登记在库升级完成" busy={busy !== null} onClose={() => setCompleteId(null)}><form onSubmit={event => { event.preventDefault(); void finish(); }}>
       <div className="direct-dialog-body"><dl className="direct-task-summary"><div><dt>型号</dt><dd>{selectedJob.model}</dd></div><div><dt>原版本</dt><dd>{selectedJob.sourceVersion}</dd></div><div><dt>发起时间</dt><dd>{displayTime(selectedJob.initiatedAt, true)}</dd></div><div><dt>发起岗位</dt><dd>{roleNames[selectedJob.initiatedByRole]}</dd></div><div><dt>状况</dt><dd><Badge label={selectedJob.statusText} tone={selectedJob.status === "completed" ? "green" : "blue"} /></dd></div></dl>
-        <fieldset className="direct-source-options" disabled={!!recovery || busy !== null}><legend>实际来源批次</legend>
+        <fieldset className="direct-source-options" disabled={!draftCache.ready || !!recovery || busy !== null}><legend>实际来源批次</legend>
           {selectedJob.lines.filter(line => line.inProgressQuantity > 0 || line.id === draft.sourceLineId).map(line => <label className={`direct-source-option${line.id === draft.sourceLineId ? " selected" : ""}`} key={line.id}>
             <input type="radio" name="direct-source" aria-label={[line.plan, line.shipDate, line.fnsku, line.warehouse, line.sourceTeam, line.receivedAt ? displayTime(line.receivedAt, true) : ""].filter(Boolean).join(" / ")} checked={line.id === draft.sourceLineId} disabled={line.inProgressQuantity <= 0 && !recovery} onChange={() => updateDraft({ sourceLineId: line.id })} value={line.id} />
             <div><dl>{[["发货计划号", line.plan || "—"], ["发货时间", line.shipDate || "—"], ["入库时间", line.receivedAt ? displayTime(line.receivedAt, true) : "—"], ["FNSKU", line.fnsku || "—"], ["来源仓库", line.warehouse || "—"], ["来源团队", line.sourceTeam || "—"], ["初始锁定量", `${formatNumber(line.initialQuantity)} 件`], ["升级完成量", `${formatNumber(line.completedQuantity)} 件`], ["剩余升级量", `${formatNumber(line.inProgressQuantity)} 件`]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></div>
@@ -142,11 +148,11 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
         </fieldset>
         {!recovery && batchUnavailable && <p className="field-error" role="alert">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}
         <div className="direct-complete-fields">
-          <label className="field"><span>本次完成数量</span><input aria-label="本次完成数量" inputMode="numeric" value={draft.quantity} disabled={!!recovery || busy !== null} aria-invalid={!!quantityError && !recovery} onChange={event => updateDraft({ quantity: event.target.value })} />{quantityError && !recovery && <span className="field-error">{quantityError}</span>}</label>
-          <label className="field"><span>升级完成版本</span><input aria-label="升级完成版本" value={draft.version} disabled={!!recovery || busy !== null} aria-invalid={!!versionError && !recovery} onChange={event => updateDraft({ version: event.target.value })} />{versionError && !recovery && <span className="field-error">{versionError}</span>}</label>
-          <label className="field"><span>目标海外仓</span><select aria-label="目标海外仓" value={draft.warehouse} disabled={!!recovery || busy !== null} onChange={event => updateDraft({ warehouse: event.target.value })}><option value="">选择目标海外仓</option>{warehouses.map(item => <option key={item}>{item}</option>)}</select></label>
+          <label className="field"><span>本次完成数量</span><input aria-label="本次完成数量" inputMode="numeric" value={draft.quantity} disabled={!draftCache.ready || !!recovery || busy !== null} aria-invalid={!!quantityError && !recovery} onChange={event => updateDraft({ quantity: event.target.value })} />{quantityError && !recovery && <span className="field-error">{quantityError}</span>}</label>
+          <label className="field"><span>升级完成版本</span><input aria-label="升级完成版本" value={draft.version} disabled={!draftCache.ready || !!recovery || busy !== null} aria-invalid={!!versionError && !recovery} onChange={event => updateDraft({ version: event.target.value })} />{versionError && !recovery && <span className="field-error">{versionError}</span>}</label>
+          <label className="field"><span>目标海外仓</span><select aria-label="目标海外仓" value={draft.warehouse} disabled={!draftCache.ready || !!recovery || busy !== null} onChange={event => updateDraft({ warehouse: event.target.value })}><option value="">选择目标海外仓</option>{warehouses.map(item => <option key={item}>{item}</option>)}</select></label>
         </div>{errors[selectedJob.id] && <p className="dialog-error" role="alert">{errors[selectedJob.id]}</p>}
-      </div><footer className="dialog-actions"><button className="btn btn-ghost" type="button" disabled={busy !== null} onClick={() => setCompleteId(null)}>关闭</button><button className="btn btn-primary" disabled={busy !== null || (!recovery && (!valid || !canAct(selectedJob.category)))}>{busy === `complete-${selectedJob.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button></footer>
+      </div><footer className="dialog-actions"><button className="btn btn-ghost" type="button" disabled={busy !== null} onClick={() => setCompleteId(null)}>关闭</button><button className="btn btn-primary" disabled={!draftCache.ready || busy !== null || (!recovery && (!valid || !canAct(selectedJob.category)))}>{busy === `complete-${selectedJob.id}` ? "提交中…" : recovery ? "重试确认" : "登记完成并转入新版本"}</button></footer>
     </form></DirectDialog>}
   </section>;
 }

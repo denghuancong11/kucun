@@ -8,7 +8,7 @@ import {once} from 'node:events';
 import {chromium} from 'playwright-core';
 import {createInventoryDatabase,InventoryDatabase} from '../../inventory-db.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
-const root=path.resolve(import.meta.dirname,'../..'),out=path.join(root,'.test-output/allocation-pack-page');await fs.mkdir(out,{recursive:true});
+const root=path.resolve(import.meta.dirname,'../..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/allocation-pack-page');await fs.mkdir(out,{recursive:true});
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-allocation-pack-page-'));createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite'),seedCatalogData:false});
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID(),port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('allocation-pack-page');
 const server=spawn(process.execPath,[path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,ASTER_STATE_ROOT:state,HOST:'127.0.0.1',PORT:String(port),PROD:'1',ASTER_TEST_INSTANCE_ID:instanceId}});

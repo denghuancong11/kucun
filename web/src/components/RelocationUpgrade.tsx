@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { completeRelocationUpgrade, exportUpgradeFlow, formatNumber, initiateRelocationUpgrade, recallAllocation, recallInquiry, recordRelocationOperation, type RelocationFilters } from '../api';
+import { completeRelocationUpgrade, exportUpgradeFlow, formatNumber, initiateRelocationUpgrade, recallAllocation, recallInquiry, recordRelocationOperation, type RelocationFilters, type ApiError } from '../api';
 import type { DocumentEvent, NoticeMessage, RelocationCandidate, RelocationUpgrade, RelocationWorkItem, Role, UpgradeDashboardPayload, UpgradeRelocation } from '../types';
 import { useBusinessAction } from '../hooks/useBusinessAction';
 import { useEffectivePermissions } from '../hooks/usePermissions';
+import { useSessionDraft } from '../hooks/useSessionDraft';
 import { createRequestId } from '../utils/ids';
 import { expandableRowProps } from '../utils/rowExpansion';
 import { Badge, displayTime, EmptyState, FeedbackButton, Panel } from './ui';
@@ -61,11 +62,12 @@ export function RelocationUpgradeBoard({role,active,dashboard,onRefresh,onNotice
     return current;
   }),[sources]);
   const [expanded,setExpanded]=useState<number[]>([]),[expandedSource,setExpandedSource]=useState<string|null>(null),[modal,setModal]=useState<Modal|null>(null),[pendingAction,setPendingAction]=useState<PendingAction|null>(null);
-  const [account,setAccount]=useState({source:'',value:''}),[orderDrafts,setOrderDrafts]=useState<Record<number,string>>({}),[drafts,setDrafts]=useState<Record<number,Draft>>({});
+  const [account,setAccount]=useState({source:'',value:''}),[orderDrafts,setOrderDrafts]=useState<Record<number,string>>({});
+  const [drafts,setDrafts,draftCache]=useSessionDraft<Record<number,Draft>>(role,'relocation-completion',{});
   const [automaticSync,setAutomaticSync]=useState<Record<number,string>>({});
   const action=useBusinessAction(onRefresh,message=>{setModal(null);setPendingAction(null);onNotice({kind:message.includes('页面刷新失败')?'warning':'success',text:message});});
   const canStart=(row:Source)=>!['business','alan'].includes(role)&&canAct(row)&&dashboard.relocationCandidates.some(candidate=>sourceKey(candidate)===sourceKey(row))&&!works.some(work=>sourceKey(work)===sourceKey(row)&&['awaiting_procurement','awaiting_operation','awaiting_shipping'].includes(work.status));
-  const open=(next:Modal)=>{if(action.disabled)return;action.setError(null);if('source'in next&&account.source!==sourceKey(next.source))setAccount({source:sourceKey(next.source),value:''});if(next.kind==='quantity'){const row=jobs.flatMap(job=>job.relocations).find(row=>row.id===next.work.relocationId)!;setDrafts(current=>({...current,[row.id]:initialDraft(row)}));}setModal(next);};
+  const open=(next:Modal)=>{if(action.disabled||!draftCache.ready)return;action.setError(null);if('source'in next&&account.source!==sourceKey(next.source))setAccount({source:sourceKey(next.source),value:''});if(next.kind==='quantity'){const row=jobs.flatMap(job=>job.relocations).find(row=>row.id===next.work.relocationId)!;setDrafts(current=>({...current,[row.id]:current[row.id]??initialDraft(row)}));}setModal(next);};
   const currentSource=modal&&'source'in modal?(sources.find(row=>sourceKey(row)===sourceKey(modal.source))??modal.source):null;
   const currentWork=modal&&'work'in modal?(works.find(row=>row.id===modal.work.id)??modal.work):null;
   const currentJob=currentWork?jobs.find(job=>job.id===currentWork.upgradeId):undefined;
@@ -81,12 +83,13 @@ export function RelocationUpgradeBoard({role,active,dashboard,onRefresh,onNotice
   const perform=(execute:()=>Promise<unknown>,message:string,context:PendingAction|null=modal)=>{setPendingAction(context);onNotice(null);void action.perform({execute,message});};
   const start=()=>{if(!currentSource||!canStart(currentSource))return;const source=currentSource;if(source.sourceKind==='fba'&&(account.source!==sourceKey(source)||!account.value))return;const payload=source.sourceKind==='fba'?{fbaArchiveId:source.fbaArchiveId!,account:account.value}:source.sourceKind==='inquiry'?{inquiryId:source.inquiryId!,sourceRevision:source.inquiryRecall?.revision}:{allocationId:source.allocationId!};const request={...payload,requestId:createRequestId('upgrade-relocation-initiate')};perform(()=>initiateRelocationUpgrade(role,request,sourceLabel(source)),`${source.model} · ${source.store||account.value}：移仓升级已发起。`);};
   const order=()=>{if(!currentWork)return;const work=currentWork,orderNo=(orderDrafts[work.id]??'').trim();if(!orderNo)return;const payload={removalOrderNo:orderNo,expectedRevision:work.revision,requestId:createRequestId('relocation-operation')};perform(async()=>{const result=await recordRelocationOperation(role,work.id,payload,workLabel(work));if(result.automaticSync)setAutomaticSync(current=>({...current,[work.id]:result.automaticSync!.requestId}));},`${work.model} · ${work.store} 的订单号已保存；已自动发起领星同步。`);};
-  const finish=()=>{if(!canSave||!currentRow||!currentWork||!draft)return;const work=currentWork,row=currentRow,request={completedQuantity:quantity,inProgressQuantity:progressing,newVersion:draft.version.trim(),targetWarehouse:draft.warehouse,reversals:decrease>0?reversals:[],expectedRevision:row.revision,requestId:createRequestId('upgrade-relocation-complete')};perform(()=>completeRelocationUpgrade(role,row.id,request,workLabel(work)),`${work.model} · ${work.store}：已保存累计升级完 ${quantity} 件及升级中 ${progressing} 件。`);};
+  const finish=()=>{if(!draftCache.ready||!canSave||!currentRow||!currentWork||!draft)return;const work=currentWork,row=currentRow,request={completedQuantity:quantity,inProgressQuantity:progressing,newVersion:draft.version.trim(),targetWarehouse:draft.warehouse,reversals:decrease>0?reversals:[],expectedRevision:row.revision,requestId:createRequestId('upgrade-relocation-complete')};const saved={...drafts};delete saved[row.id];const restore=draftCache.persist(saved);perform(async()=>{try{const result=await completeRelocationUpgrade(role,row.id,request,workLabel(work));setDrafts(saved);return result;}catch(error){const status=(error as ApiError).status;if(status!==undefined&&status>=400&&status<500)restore();throw error;}},`${work.model} · ${work.store}：已保存累计升级完 ${quantity} 件及升级中 ${progressing} 件。`);};
   const recall=(source:Source)=>{const info=source.sourceKind==='allocation'?source.allocationRecall:source.inquiryRecall;if(!info)return;const request={expectedRevision:info.revision,requestId:createRequestId(`${source.sourceKind}-recall`)};perform(()=>source.sourceKind==='allocation'?recallAllocation(role,source.allocationId!,request,sourceLabel(source)):recallInquiry(role,source.inquiryId!,request,sourceLabel(source)),`${source.model} · ${source.store} ${sourceNames[source.sourceKind]}已回撤至${role==='business'?'待商务审核':'待采购回复'}。`,{kind:'recall',source});};
   const matches=(work:RelocationWorkItem)=>(!filters.model||work.model===filters.model)&&(!filters.version||work.sourceVersion===filters.version)&&(!filters.source||sourceKey(work)===filters.source);
   const visibleSources=sources.filter(row=>(!sourceModel||row.model===sourceModel)&&(!sourceVersion||row.sourceVersion===sourceVersion));
   const modalName=modal?{start:'发起移仓升级',order:'填写移仓订单号',quantity:'更新移仓升级数量'}[modal.kind]:'';
   return <section className="upgrade-board relocation-upgrade" hidden={!active}>
+    {draftCache.storageError&&<p className="dialog-error" role="alert">{draftCache.storageError}</p>}
     {action.uncertain&&<div className="callout" role="status"><span>{pendingAction&&('work'in pendingAction?workLabel(pendingAction.work):sourceLabel(pendingAction.source))}：结果待确认</span><button className="btn btn-primary btn-sm" disabled={action.busy} onClick={()=>pendingAction?.kind==='recall'?void action.perform():setModal(pendingAction)}>{pendingAction?.kind==='recall'?(action.busy?'正在确认…':'重试确认'):'查看并确认'}</button></div>}
     {pendingAction?.kind==='recall'&&action.error&&<p className="dialog-error" role="alert">{sourceLabel(pendingAction.source)}：{action.error}</p>}
     <Panel title="移仓来源" badge={<span className="muted">{visibleSources.length} 条</span>}>

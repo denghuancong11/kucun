@@ -2,10 +2,12 @@ import {selectRelocationSource} from '../../scripts/fixtures/relocation-page.mjs
 import {relocationUpdateFixture} from '../../scripts/fixtures/relocation-workbook.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';
-import {chromium} from 'playwright-core';import {createInventoryDatabase,InventoryDatabase} from '../../inventory-db.mjs';
+import {chromium} from 'playwright-core';
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
 import {syntheticInboundRows,writeSyntheticTransitWorkbook} from '../../scripts/fixtures/generate-synthetic-workbook.mjs';
-const root=path.resolve(import.meta.dirname,'../..'),out=process.env.ASTER_WAREHOUSE_PAGE_OUTPUT||path.join(root,'.test-output/warehouse-fba-page');await fs.mkdir(out,{recursive:true});
+process.env.ASTER_OVERSEAS_WAREHOUSES = 'SyntheticWarehouseA;SyntheticWarehouseB';
+const {createInventoryDatabase,InventoryDatabase} = await import('../../inventory-db.mjs');
+const root=path.resolve(import.meta.dirname,'../..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||process.env.ASTER_WAREHOUSE_PAGE_OUTPUT||path.join(root,'.test-output/warehouse-fba-page');await fs.mkdir(out,{recursive:true});
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-fba-pages-'));createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite'),seedCatalogData:false});
 const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('fba-pages'),rid=()=>crypto.randomUUID(),model='SYNTH-ITEM-001';
 const workbookPath=path.join(state,'synthetic-硒鼓-transit-import.xlsx');

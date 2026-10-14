@@ -11,7 +11,7 @@ import {createInventoryDatabase,InventoryDatabase,INVENTORY_DATABASE_NAME} from 
 import {freePort,createTestInstanceId,waitForOwnedServer} from '../../scripts/test-server-ownership.mjs';
 const root=path.resolve(import.meta.dirname,'../..');
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-sync-buttons-'));
-const output=process.env.ASTER_SYNC_UI_OUTPUT || path.join(root,'.test-output/sync-buttons');
+const output=process.env.ASTER_SYNC_UI_OUTPUT || process.env.ASTER_ACCEPTANCE_OUTPUT || path.join(root,'.test-output/sync-buttons');
 await fs.mkdir(path.join(state,'data'));await fs.mkdir(output,{recursive:true});
 createInventoryDatabase({databasePath:path.join(state,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID();
