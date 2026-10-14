@@ -62,9 +62,11 @@ try{
   d2=(await api(`/api/allocations/${d2.id}/review`,'business',{decision:'approve',approvedQuantity:4,expectedRevision:d2.revision,requestId:rid()})).record;
   await rejectUnchanged(`/api/allocations/${d2.id}/confirm`,'assistant-1',{expectedRevision:d2.revision,requestId:rid()},403);
   const stale=await api(`/api/allocations/${d1.id}/confirm`,'assistant-1',{expectedRevision:1,requestId:rid()},409);assert.ok(!JSON.stringify(stale).includes('orderGrossProfit'));if(category==='墨盒')assert.ok(!JSON.stringify(stale).includes(two.key));
-  const confirmBody={expectedRevision:d1.revision,requestId:rid()};const confirm=await api(`/api/allocations/${d1.id}/confirm`,'assistant-1',confirmBody);assert.ok(!JSON.stringify(confirm).includes('orderGrossProfit'));
-  assert.equal((await api(`/api/allocations/${d1.id}/confirm`,'assistant-1',confirmBody)).deduped,true);d1=confirm.record;
-  if(category==='墨盒')assert.deepEqual(Object.keys(confirm.totals),[one.key]);
+  if(category==='墨盒')d1=(await api(`/api/allocations/${d1.id}/reply`,'purchasing',{supplierQuantity:4,expectedRevision:d1.revision,requestId:rid()})).record;
+  const confirmAction=category==='墨盒'?'archive':'confirm',confirmRole=category==='墨盒'?'purchasing':'assistant-1';
+  const confirmBody={expectedRevision:d1.revision,requestId:rid()};const confirm=await api(`/api/allocations/${d1.id}/${confirmAction}`,confirmRole,confirmBody);assert.ok(!JSON.stringify(confirm).includes('orderGrossProfit'));
+  assert.equal((await api(`/api/allocations/${d1.id}/${confirmAction}`,confirmRole,confirmBody)).deduped,true);d1=confirm.record;
+  if(category==='墨盒')assert.deepEqual(Object.keys((await api('/api/allocations?model='+model,'assistant-1')).totals),[one.key]);
   const requests=[{model,sourceVersion:'V1',requestId:rid()},{model,sourceVersion:'V1',requestId:rid()}];
   const started=await Promise.all([api('/api/upgrades/direct','operation-1',requests[0]),api('/api/upgrades/direct','assistant-2',requests[1])]);
   assert.deepEqual(started.map(r=>r.upgrade.initialQuantity),[96,56]);assert.deepEqual(started[0].upgrade.lines.map(l=>l.sourceBatchKey),[one.key]);assert.deepEqual(started[1].upgrade.lines.map(l=>l.sourceBatchKey),[two.key]);
@@ -82,7 +84,8 @@ try{
   assert.equal(db.getDocument(d1.id).batchKey,one.key);assert.equal(db.getDocument(d2.id).batchKey,two.key);
   for(const role of ['operation-1','assistant-1','operation-2','assistant-2']){const dashboard=await api('/api/upgrades',role);const job=dashboard.upgrades.find(j=>j.model===model&&j.kind==='direct');assert.equal(job.lines.length,1);assert.equal(job.lines[0].sourceBatchKey,role.endsWith('-1')?one.key:two.key);assert.equal(dashboard.directSources.find(s=>s.model===model&&s.sourceVersion==='V1').available,0);}
   check(`${category} 分批回库保留本团身份/套箱/余额，角色切换与历史单据引用保持`);
-  d2=(await api(`/api/allocations/${d2.id}/confirm`,'assistant-2',{expectedRevision:d2.revision,requestId:rid()})).record;
+  if(category==='墨盒')d2=(await api(`/api/allocations/${d2.id}/reply`,'logistics',{supplierQuantity:4,expectedRevision:d2.revision,requestId:rid()})).record;
+  d2=(await api(`/api/allocations/${d2.id}/${category==='墨盒'?'archive':'confirm'}`,category==='墨盒'?'logistics':'assistant-2',{expectedRevision:d2.revision,requestId:rid()})).record;
   for(const [index,document] of [d1,d2].entries()) {
    const suffix=String(index+1),assistant='assistant-'+suffix,operation='operation-'+suffix;
    let work=(await api('/api/upgrades/relocation-work-items',assistant,{allocationId:document.id,requestId:rid()})).workItem;

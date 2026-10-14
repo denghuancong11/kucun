@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { accountStore, relocationAccounts, processRelocationAddress, lingxingStore } from './relocation-address.mjs';
 
-export const INVENTORY_SCHEMA_VERSION = 35;
+export const INVENTORY_SCHEMA_VERSION = 36;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -1628,6 +1628,7 @@ function createSchema(db, databaseId, createdAt) {
   migrateRelocationWorkflowV33(db, createdAt);
   migrateTransferWorkflowV34(db, createdAt);
   migrateWaybillExportsV35(db, createdAt);
+  migrateInkApprovalV36(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2934,6 +2935,47 @@ function migrateWaybillExportsV35(db, at) {
   db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(35,?,?)').run(at,'移仓运单全局首次导出状态与固定文件确认集合');
 }
 
+function migrateInkApprovalV36(db, at) {
+  const views = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='view'").all();
+  const triggers = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'").all();
+  for (const item of views) db.exec(`DROP VIEW "${item.name}"`);
+  for (const item of triggers) db.exec(`DROP TRIGGER "${item.name}"`);
+  for (const table of ['allocation_documents', 'inquiry_documents']) {
+    const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table).sql;
+    const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL").all(table);
+    const sequence = db.prepare("SELECT seq FROM sqlite_sequence WHERE name=?").get(table)?.seq;
+    const revised = schema.replace(new RegExp(`CREATE TABLE "?${table}"?`), `CREATE TABLE ${table}_v36`)
+      .replace(/CHECK \(quantity > 0\)/g, 'CHECK (quantity >= 0)')
+      .replace(/CHECK \(requested_quantity > 0\)/g, 'CHECK (requested_quantity >= 0)')
+      .replace(/CHECK \(approved_quantity > 0\)/g, 'CHECK (approved_quantity >= 0)')
+      .replace("'pending_business', 'pending_purchasing'", "'pending_business', 'pending_alan', 'pending_purchasing'");
+    db.exec(revised);
+    db.exec(`INSERT INTO ${table}_v36 SELECT * FROM ${table}; DROP TABLE ${table}; ALTER TABLE ${table}_v36 RENAME TO ${table};`);
+    if (sequence != null) db.prepare('UPDATE sqlite_sequence SET seq=? WHERE name=?').run(sequence, table);
+    for (const item of indexes) db.exec(item.sql);
+    db.exec(`ALTER TABLE ${table} ADD COLUMN alan_quantity INTEGER CHECK (alan_quantity >= 0);
+      ALTER TABLE ${table} ADD COLUMN alan_note TEXT;
+      ALTER TABLE ${table} ADD COLUMN alan_reviewed_by_role TEXT;
+      ALTER TABLE ${table} ADD COLUMN alan_reviewed_at TEXT;`);
+  }
+  db.exec(`ALTER TABLE allocation_documents ADD COLUMN procurement_status TEXT CHECK (procurement_status IN ('pending_alan', 'pending_purchasing', 'pending_archive'));
+    ALTER TABLE allocation_documents ADD COLUMN supplier_quantity INTEGER CHECK (supplier_quantity >= 0);
+    ALTER TABLE allocation_documents ADD COLUMN procurement_note TEXT;
+    ALTER TABLE allocation_documents ADD COLUMN shipping_warehouse TEXT;
+    ALTER TABLE allocation_documents ADD COLUMN replied_by_role TEXT;
+    ALTER TABLE allocation_documents ADD COLUMN replied_at TEXT;
+    ALTER TABLE allocation_documents ADD COLUMN archived_by_role TEXT;
+    ALTER TABLE allocation_documents ADD COLUMN archived_at TEXT;
+    UPDATE allocation_documents SET procurement_status='pending_alan'
+      WHERE status='pending' AND approval_status='approved' AND model IN (SELECT model FROM catalog_models WHERE category='墨盒');
+    UPDATE inquiry_documents SET status='pending_alan'
+      WHERE status='pending_purchasing' AND supplier_quantity IS NULL AND model IN (SELECT model FROM catalog_models WHERE category='墨盒');`);
+  for (const item of views) db.exec(item.sql);
+  for (const item of triggers) db.exec(item.sql);
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(36,?,?)')
+    .run(at, '墨盒独立Alan审核、采购接管归档及可追溯回撤；已商务批准调拨保留预锁、未采购回复询库进入Alan节点，已有采购回复继续归档');
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2943,9 +2985,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v34 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v35 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -3065,6 +3107,7 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 32) { migrateRelocationWorkflowV33(db, appliedAt); version = 33; }
     if (version === 33) { migrateTransferWorkflowV34(db, appliedAt); version = 34; }
     if (version === 34) { migrateWaybillExportsV35(db, appliedAt); version = 35; }
+    if (version === 35) { migrateInkApprovalV36(db, appliedAt); version = 36; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3245,6 +3288,13 @@ function rowToDocument(row, lingxing = null) {
     quantity: Number(row.quantity),
     requestedQuantity: Number(row.requested_quantity),
     approvedQuantity: row.approved_quantity == null ? null : Number(row.approved_quantity),
+    alanQuantity: row.alan_quantity == null ? null : Number(row.alan_quantity),
+    alanNote: row.alan_note, alanReviewedByRole: row.alan_reviewed_by_role, alanReviewedAt: row.alan_reviewed_at,
+    supplierQuantity: row.supplier_quantity == null ? null : Number(row.supplier_quantity),
+    procurementNote: row.procurement_note, shippingWarehouse: row.shipping_warehouse,
+    repliedByRole: row.replied_by_role, repliedAt: row.replied_at,
+    archivedByRole: row.archived_by_role, archivedAt: row.archived_at,
+    procurementStatus: row.procurement_status,
     asin: row.asin,
     operatorNote: row.operator_note,
     businessNote: row.business_note,
@@ -3283,7 +3333,7 @@ function rowToDocument(row, lingxing = null) {
 }
 
 const AUDIT_OPERATIONS = [
-  "entry", "review", "reject", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import", "transfer_upgrade_update",
+  "entry", "review", "reject", "alan_review", "reply", "archive", "recall", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import", "transfer_upgrade_update",
   "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf",
   "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed",
   "upgrade_direct_start", "upgrade_direct_complete", "upgrade_relocation_started",
@@ -3296,6 +3346,10 @@ const AUDIT_OPERATION_SET = new Set([...AUDIT_OPERATIONS, AUDIT_OPERATIONS_EXTRA
 const AUDIT_LEDGER_TYPES = {
   entry: ["reserve"],
   review: ["review_adjustment"],
+  alan_review: ["review_adjustment"],
+  reply: ["review_adjustment"],
+  archive: ["release_reservation", "issue"],
+  recall: ["reverse_issue", "review_adjustment"],
   reject: ["release_reservation"],
   confirm: ["release_reservation", "issue"],
   cancel: ["release_reservation"],
@@ -3351,6 +3405,10 @@ function rowToUpgradeLedgerEntry(row) {
 
 function auditResult(operation, payload = {}) {
   if (operation === "review") return "商务已批准";
+  if (operation === 'alan_review') return 'Alan已审核，待采购回复';
+  if (operation === 'reply') return payload.supplierQuantity === 0 ? '供应商回复0，已拒绝' : '供应商已回复，待采购归档';
+  if (operation === 'archive') return '采购归档完成，已调出';
+  if (operation === 'recall') return payload.target === 'pending_business' ? '已退库并恢复预锁，待商务审核' : '已退库并恢复预锁，待采购回复';
   if (operation === "reject") return "商务已拒绝";
   if (operation === "import_stage") return "已暂存";
   if (operation === "transfer_upgrade_update") return `转仓${({rma:"RMA",count:"清点数量",progress:"升级进度"})[payload.stage]}已更新，${payload.after.status}`;
@@ -3693,10 +3751,7 @@ export class InventoryDatabase {
         approvedQuantity: row.approval_status === 'legacy' || row.approved_quantity == null ? null : Number(row.approved_quantity),
         lockedQuantity: row.current_locked == null ? null : Number(row.current_locked),
         issuedQuantity: row.actual_issued == null ? null : Number(row.actual_issued),
-        status: row.approval_status === 'rejected' ? '已拒绝'
-          : row.status === 'confirmed' ? '已完成'
-          : row.status === 'pending' ? row.approval_status === 'approved' ? '待助理完成' : '待商务审核'
-          : STATUS_TEXT[row.status] ?? row.status,
+        status: this.allocationStatusText(row),
       });
     }
     const allTotals = this.batchTotals(model);
@@ -3723,7 +3778,21 @@ export class InventoryDatabase {
   documentRecord(row) {
     if (!row) return null;
     const batch = this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key);
-    return { ...rowToDocument(row, this.lingxingForDocument(row)), packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box) };
+    const quantities = this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS locked, COALESCE(-SUM(on_hand_delta),0) AS issued FROM inventory_ledger WHERE document_id=?').get(row.id);
+    return { ...rowToDocument(row, this.lingxingForDocument(row)), packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box),
+      statusText: this.allocationStatusText(row), lockedQuantity: Number(quantities.locked), issuedQuantity: Number(quantities.issued),
+      recallInfo: this.allocationRecallInfo(row.id),
+      events: this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(row.id).map(rowToDocumentEvent),
+    };
+  }
+
+  allocationStatusText(row) {
+    if (row.approval_status === 'rejected') return '已拒绝';
+    if (row.status === 'confirmed') return '已完成';
+    if (row.status !== 'pending') return STATUS_TEXT[row.status] ?? row.status;
+    if (row.approval_status !== 'approved') return '待商务审核';
+    if (this.getModel(row.model).category !== '墨盒') return '待助理完成';
+    return { pending_alan: '待Alan审核', pending_purchasing: '待采购回复', pending_archive: '待采购归档' }[row.procurement_status];
   }
 
   approvalView({ refreshDisplay = true } = {}) {
@@ -3759,13 +3828,15 @@ export class InventoryDatabase {
       id: Number(row.id), documentNo: row.document_no, model: row.model, asin: row.asin, fnsku: row.fnsku,
       quantity, requestedQuantity: Number(row.requested_quantity),
       approvedQuantity: row.approved_quantity == null ? null : Number(row.approved_quantity),
+      alanQuantity: row.alan_quantity == null ? null : Number(row.alan_quantity),
+      alanNote: row.alan_note, alanReviewedByRole: row.alan_reviewed_by_role, alanReviewedAt: row.alan_reviewed_at,
       supplierQuantity: row.supplier_quantity == null ? null : Number(row.supplier_quantity),
       department: row.department, store: row.store_name, operator: row.operator_name,
       operatorNote: row.operator_note, businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
       plan: row.plan, date: row.ship_date, version: row.version,
       status: row.status, statusCode: row.status,
       // pending_assistant 是既有归档阶段存储码；办理岗位按类目确定。
-      statusText: { pending_business: "待商务审核", pending_purchasing: ink ? "待Alan或采购回复" : "待采购回复", pending_assistant: ink ? "待采购归档" : "待助理归档", archived: "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
+      statusText: { pending_business: "待商务审核", pending_alan: "待Alan审核", pending_purchasing: "待采购回复", pending_assistant: ink ? "待采购归档" : "待助理归档", archived: ink ? "已完成" : "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
       approvalStatus: row.status === "rejected" ? "rejected" : row.approved_quantity == null ? "pending" : "approved",
       createdByRole: row.created_by_role, createdAt: row.created_at, updatedAt: row.updated_at,
       reviewedByRole: row.reviewed_by_role, reviewedAt: row.reviewed_at,
@@ -3839,30 +3910,46 @@ export class InventoryDatabase {
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET approved_quantity = ?, business_note = ?, status = ?,
         reviewed_by_role = ?, reviewed_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(approved, note, decision === "approve" ? "pending_purchasing" : "rejected", role, at,
+        .run(approved, note, decision === "approve" ? this.getModel(row.model).category === '墨盒' ? 'pending_alan' : "pending_purchasing" : "rejected", role, at,
           decision === "reject" ? JSON.stringify(this.lingxingForDocument(row)) : null, at, id);
       this.addInquiryEvent(id, decision === "approve" ? "review" : "reject", role, at, { approvedQuantity: approved, businessNote: note });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
 
+  reviewAlanInquiry({ id, role, alanQuantity, alanNote, expectedRevision, requestId }) {
+    if (role !== 'alan') throw new BusinessError(403, 'alan_review_forbidden', '仅Alan可提交Alan审核');
+    const quantity = Number(alanQuantity);
+    if (alanQuantity == null || String(alanQuantity).trim() === '' || !Number.isSafeInteger(quantity) || quantity < 0) throw new BusinessError(400, 'invalid_quantity', 'Alan审核数量请填写0或正整数');
+    const note = String(alanNote ?? '').trim();
+    return this.idempotent(`inquiry:alan-review:${id}`, requestId, { id, role, alanQuantity: quantity, alanNote: note, expectedRevision }, () => {
+      const row = this.inquiryForUpdate(id, expectedRevision, ['pending_alan']);
+      if (this.getModel(row.model).category !== '墨盒') throw new BusinessError(403, 'alan_review_forbidden', 'Alan仅可审核墨盒询库');
+      const at = new Date().toISOString();
+      this.db.prepare(`UPDATE inquiry_documents SET alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,
+        status='pending_purchasing',revision=revision+1,updated_at=? WHERE id=?`).run(quantity,note,role,at,at,id);
+      this.addInquiryEvent(id, 'alan_review', role, at, { alanQuantity: quantity, alanNote: note });
+      return { ok: true, record: this.getInquiry(id) };
+    });
+  }
+
   replyInquiry({ id, role, supplierQuantity, shippingWarehouse, procurementNote, expectedRevision, requestId }) {
-    if (!["purchasing", "logistics", "alan"].includes(role)) throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购、物流或Alan可填写供应商库存回复");
+    if (!["purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_reply_forbidden", "仅采购或物流可填写供应商库存回复");
     const quantity = Number(supplierQuantity);
     const warehouse = String(shippingWarehouse ?? "").trim();
-    if (!Number.isInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
+    if (supplierQuantity == null || String(supplierQuantity).trim() === '' || !Number.isSafeInteger(quantity) || quantity < 0) throw new BusinessError(400, "invalid_quantity", "供应商库存回复请填写 0 或正整数");
     const note = String(procurementNote ?? "").trim();
     if (!warehouse) throw new BusinessError(400, "missing_shippingWarehouse", "请选择发货仓库（CA 或 SC），回复 0 也须选择");
     if (!["CA", "SC"].includes(warehouse)) throw new BusinessError(400, "invalid_shippingWarehouse", "发货仓库仅允许 CA 或 SC");
     return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note, expectedRevision }, () => {
-      const row = this.inquiryForUpdate(id, expectedRevision, ["pending_purchasing"]);
+      const row = this.inquiryForUpdate(id, expectedRevision, ["pending_alan", "pending_purchasing"]);
       const ink = this.getModel(row.model).category === "墨盒";
-      if (role === "alan" && !ink) throw new BusinessError(403, "inquiry_reply_forbidden", "Alan仅可回复墨盒询库");
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = ?,
         replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
         .run(quantity, quantity, quantity, warehouse, note, ink && quantity === 0 ? "rejected" : "pending_assistant", role, at, at, id);
-      this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note });
+      this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note,
+        ...(ink ? { skippedAlan: row.alan_reviewed_at == null, before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity } } : {}) });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
@@ -3925,6 +4012,89 @@ export class InventoryDatabase {
     return { revision: Number(row.revision), blockers: this.inquiryDownstream(id) };
   }
 
+  allocationDownstream(id) {
+    return this.db.prepare(`WITH RECURSIVE jobs(id) AS (
+      SELECT id FROM upgrade_jobs WHERE allocation_document_id=:id
+      UNION SELECT upgrade_id FROM upgrade_relocations WHERE allocation_document_id=:id
+      UNION SELECT upgrade_id FROM upgrade_relocation_work_items WHERE allocation_document_id=:id AND upgrade_id IS NOT NULL
+      UNION SELECT s.upgrade_id FROM jobs j JOIN upgrade_inventory_ledger l ON l.upgrade_id=j.id
+        JOIN upgrade_stock_lines s ON s.source_batch_key=l.batch_key
+        WHERE l.entry_type IN ('relocation_receipt','direct_transfer_in')
+    )
+    SELECT '移仓任务' AS type,w.work_no AS number,w.status,s.model,s.version,s.plan,
+      COALESCE(w.account_store,s.store_name) AS store,w.initiated_at AS at,w.source_quantity_before AS quantity,w.removal_order_no AS orderNo
+      FROM upgrade_relocation_work_items w LEFT JOIN relocation_sources s
+        ON s.allocation_document_id=w.allocation_document_id OR s.inquiry_id=w.inquiry_id OR s.fba_archive_id=w.fba_archive_id
+      WHERE w.allocation_document_id=:id OR w.upgrade_id IN (SELECT id FROM jobs)
+    UNION ALL SELECT '移仓发货',r.relocation_no,r.status,j.model,j.source_version,s.plan,s.store_name,r.created_at,r.shipped_quantity,r.removal_order_no
+      FROM upgrade_relocations r JOIN upgrade_jobs j ON j.id=r.upgrade_id LEFT JOIN relocation_sources s
+        ON s.allocation_document_id=r.allocation_document_id OR s.inquiry_id=r.inquiry_id OR s.fba_archive_id=r.fba_archive_id
+      WHERE r.allocation_document_id=:id OR r.upgrade_id IN (SELECT id FROM jobs)
+    UNION ALL SELECT '升级',upgrade_no,CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' ELSE status END,
+      model,source_version,NULL,NULL,initiated_at,NULL,NULL FROM upgrade_jobs WHERE id IN (SELECT id FROM jobs)
+    UNION ALL SELECT CASE WHEN o.operation_type IN ('direct_complete','relocation_complete') THEN '升级入库' ELSE '升级操作' END,
+      o.operation_no,o.status,j.model,COALESCE(o.new_version,j.source_version),NULL,NULL,o.performed_at,o.quantity,NULL
+      FROM upgrade_operations o JOIN upgrade_jobs j ON j.id=o.upgrade_id WHERE o.upgrade_id IN (SELECT id FROM jobs)
+    UNION ALL SELECT '关联记录',r.reference_id,r.status,d.model,d.version,d.plan,d.store_name,r.created_at,d.quantity,NULL
+      FROM document_references r JOIN allocation_documents d ON d.id=r.document_id
+      WHERE r.document_id=:id AND r.reference_type NOT IN ('upgrade_relocation')`).all({ id }).map(row => ({
+        ...row, description: [row.model,row.version,row.store,row.plan,row.orderNo,row.at,row.quantity == null ? null : row.quantity+' 件'].filter(Boolean).join(' / '),
+        status: ({ awaiting_procurement: '待物流更新RMA和地址', awaiting_operation: '待运营填写订单号', awaiting_shipping: '待确认移仓发货',
+          shipped: '移仓和升级中', withdrawn: '已撤回', cancelled: '已取消', active: '有效', released: '已解除', completed: '已完成' })[row.status] ?? row.status,
+      }));
+  }
+
+  allocationRecallInfo(id) {
+    if (id == null) return null;
+    const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+    if (!row || row.status !== 'confirmed' || this.getModel(row.model).category !== '墨盒') return null;
+    return { revision: Number(row.revision), blockers: this.allocationDownstream(id) };
+  }
+
+  recallAllocation({ id, role, expectedRevision, requestId }) {
+    if (!['purchasing','logistics','business'].includes(role)) throw new BusinessError(403, 'allocation_recall_forbidden', '仅采购、物流或商务可回撤已完成的墨盒调拨');
+    return this.idempotent(`allocation:recall:${id}`, requestId, { id, role, expectedRevision }, () => {
+      const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+      if (!row) throw new BusinessError(404, 'not_found', '找不到调拨记录');
+      this.requireRevision(row, expectedRevision);
+      if (row.status !== 'confirmed' || this.getModel(row.model).category !== '墨盒') throw new BusinessError(409, 'allocation_recall_unavailable', '仅已完成的墨盒调拨可回撤');
+      const blockers = this.allocationDownstream(id);
+      if (blockers.length) throw new BusinessError(409, 'allocation_has_downstream', '不能回撤，已产生下游关联：'+blockers.map(item=>`${item.type} ${item.description}（${item.status}）`).join('；'), { blockers });
+      const events = this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(id).map(rowToDocumentEvent);
+      const entry = events.find(event=>event.type === 'entry');
+      const review = events.findLast(event=>event.type === 'review');
+      const requested = entry?.payload.quantity;
+      const approved = review?.payload.approvedQuantity;
+      if (!Number.isSafeInteger(requested) || requested <= 0 || !Number.isSafeInteger(approved) || approved <= 0) throw new BusinessError(409, 'allocation_history_missing', '原申请或商务审核历史缺失，无法恢复数量，请核对该单历史');
+      const purchasing = ['purchasing','logistics'].includes(role);
+      const restoreLock = purchasing ? row.alan_quantity ?? approved : requested;
+      const quantities = this.db.prepare('SELECT COALESCE(-SUM(on_hand_delta),0) AS issued,COALESCE(SUM(locked_delta),0) AS locked FROM inventory_ledger WHERE document_id=?').get(id);
+      const issued = Number(quantities.issued);
+      const balance = this.getBalance(row.batch_key);
+      const difference = restoreLock - Number(quantities.locked);
+      if (difference > balance.available + issued) throw new BusinessError(409, 'insufficient_available', `退回 ${issued} 件后可用库存 ${balance.available + issued} 件，不足以恢复预锁 ${restoreLock} 件，未回撤`);
+      const at = new Date().toISOString();
+      const target = purchasing ? 'pending_purchasing' : 'pending_business';
+      const reversal = this.addLedger(id,row.batch_key,'reverse_issue',issued,0,role,at,null,null,{ requestId, reason: '墨盒调拨回撤' });
+      const relock = this.addLedger(id,row.batch_key,'review_adjustment',0,difference,role,at,null,null,{ requestId, restoredLockedQuantity: restoreLock });
+      this.db.prepare(`UPDATE allocation_documents SET status='pending',quantity=?,requested_quantity=?,approved_quantity=?,business_note=?,approval_status=?,
+        reviewed_by_role=?,reviewed_at=?,alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,procurement_status=?,
+        supplier_quantity=NULL,shipping_warehouse=NULL,procurement_note=NULL,replied_by_role=NULL,replied_at=NULL,
+        archived_by_role=NULL,archived_at=NULL,confirmed_by_role=NULL,confirmed_at=NULL,source_document=NULL,lingxing_snapshot_json=NULL,
+        revision=revision+1,updated_at=? WHERE id=?`)
+        .run(restoreLock,requested,purchasing ? approved : null,purchasing ? review.payload.businessNote ?? review.reason ?? '' : '',purchasing ? 'approved' : 'pending',
+          purchasing ? review.role : null,purchasing ? review.at : null,purchasing ? row.alan_quantity : null,purchasing ? row.alan_note : null,
+          purchasing ? row.alan_reviewed_by_role : null,purchasing ? row.alan_reviewed_at : null,purchasing ? 'pending_purchasing' : null,at,id);
+      this.addEvent(id,'recall',role,at,null,{ quantity: issued, target,originalEntryEventId:entry.id,reviewEventId:review.id,returnedQuantity:issued,restoredLockedQuantity:restoreLock,
+        ledgerIds: [Number(reversal.lastInsertRowid), Number(relock.lastInsertRowid)],
+        onHandDelta:issued,lockedDelta:difference,
+        before:{ requestedQuantity:row.requested_quantity,approvedQuantity:row.approved_quantity,alanQuantity:row.alan_quantity,alanNote:row.alan_note,
+          supplierQuantity:row.supplier_quantity,businessNote:row.business_note,procurementNote:row.procurement_note,status:row.status },
+        after:{ requestedQuantity:requested,approvedQuantity:purchasing ? approved : null,alanQuantity:purchasing ? row.alan_quantity : null,supplierQuantity:null,status:target } });
+      return { ok:true,record:this.getDocument(id),totals:this.batchTotals(row.model) };
+    });
+  }
+
   recallInquiry({ id, role, expectedRevision, requestId }) {
     if (!["purchasing", "logistics", "business"].includes(role)) throw new BusinessError(403, "inquiry_recall_forbidden", "仅采购、物流或商务可回撤已归档的墨盒询库");
     return this.idempotent(`inquiry:recall:${id}`, requestId, { id, role, expectedRevision }, () => {
@@ -3939,16 +4109,21 @@ export class InventoryDatabase {
       const target = ['purchasing', 'logistics'].includes(role) ? 'pending_purchasing' : 'pending_business';
       const requested = entry.payload.requestedQuantity;
       const approved = ['purchasing', 'logistics'].includes(role) ? review.payload.approvedQuantity : null;
+      if (!Number.isSafeInteger(requested) || requested <= 0 || !Number.isSafeInteger(review.payload.approvedQuantity) || review.payload.approvedQuantity <= 0) throw new BusinessError(409, 'inquiry_history_missing', '原申请或商务审核历史数量不完整，无法恢复，请核对该单历史');
+      const purchasing = ['purchasing', 'logistics'].includes(role);
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET requested_quantity = ?, approved_quantity = ?, business_note = ?, reviewed_by_role = ?, reviewed_at = ?,
         supplier_quantity = NULL, shipping_warehouse = '', procurement_note = '', replied_by_role = NULL, replied_at = NULL,
         plan = '', ship_date = '', version = '', archived_by_role = NULL, archived_at = NULL, lingxing_snapshot_json = NULL,
-        fba_shipped_at = NULL, fba_confirmed_by_role = NULL, approval_hidden = 0, status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+        fba_shipped_at = NULL, fba_confirmed_by_role = NULL, approval_hidden = 0,
+        alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
         .run(requested, approved, ['purchasing', 'logistics'].includes(role) ? review.payload.businessNote : '', ['purchasing', 'logistics'].includes(role) ? review.role : null,
-          ['purchasing', 'logistics'].includes(role) ? review.at : null, target, at, id);
+          ['purchasing', 'logistics'].includes(role) ? review.at : null,
+          purchasing ? row.alan_quantity : null, purchasing ? row.alan_note : null, purchasing ? row.alan_reviewed_by_role : null, purchasing ? row.alan_reviewed_at : null, target, at, id);
       this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review.id,
         before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity, supplierQuantity: row.supplier_quantity,
-          businessNote: row.business_note, shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
+          businessNote: row.business_note, alanQuantity: row.alan_quantity, alanNote: row.alan_note, alanReviewedByRole: row.alan_reviewed_by_role, alanReviewedAt: row.alan_reviewed_at,
+          shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
           plan: row.plan, date: row.ship_date, version: row.version, status: row.status },
         after: { requestedQuantity: requested, approvedQuantity: approved, supplierQuantity: null, status: target } });
       return { ok: true, record: this.getInquiry(id) };
@@ -4205,6 +4380,7 @@ export class InventoryDatabase {
       allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
       inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
       inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
+      allocationRecall: this.allocationRecallInfo(row.allocation_document_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
       sourceKind: row.fba_archive_id != null ? "fba" : row.inquiry_id == null ? "allocation" : "inquiry",
       documentNo: row.document_no,
@@ -4414,6 +4590,7 @@ export class InventoryDatabase {
       allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
       inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
       inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
+      allocationRecall: this.allocationRecallInfo(row.allocation_document_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
       sourceKind: row.fba_archive_id != null ? "fba" : row.inquiry_id == null ? "allocation" : "inquiry",
       documentNo: row.document_no,
@@ -4553,6 +4730,7 @@ export class InventoryDatabase {
         allocationId: row.allocation_document_id == null ? null : Number(row.allocation_document_id),
         inquiryId: row.inquiry_id == null ? null : Number(row.inquiry_id),
         inquiryRecall: this.inquiryRecallInfo(row.inquiry_id),
+        allocationRecall: this.allocationRecallInfo(row.allocation_document_id),
       fbaArchiveId: row.fba_archive_id == null ? null : Number(row.fba_archive_id),
         sourceKind: row.source_kind,
         documentNo: row.document_no,
@@ -5238,10 +5416,10 @@ export class InventoryDatabase {
         const balance = this.getBalance(row.batch_key);
         if (difference > balance.available) throw new BusinessError(409, "insufficient_available", `增批 ${difference} 件超出可用库存（当前可用 ${balance.available}）`);
         this.db.prepare(`UPDATE allocation_documents SET quantity = ?, approved_quantity = ?, business_note = ?,
-          approval_status = 'approved', reviewed_at = ?, reviewed_by_role = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-          .run(approved, approved, note, at, role, at, id);
+          approval_status = 'approved', procurement_status=?, reviewed_at = ?, reviewed_by_role = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
+          .run(approved, approved, note, this.getModel(row.model).category === '墨盒' ? 'pending_alan' : null, at, role, at, id);
         this.addLedger(id, row.batch_key, "review_adjustment", 0, difference, role, at, reserve.id, null, { requestedQuantity: Number(row.requested_quantity), approvedQuantity: approved });
-        this.addEvent(id, "review", role, at, note, { quantity: approved, requestedQuantity: Number(row.requested_quantity), approvedQuantity: approved, lockedDelta: difference });
+        this.addEvent(id, "review", role, at, note, { quantity: approved, requestedQuantity: Number(row.requested_quantity), approvedQuantity: approved, businessNote: note, lockedDelta: difference });
       } else {
         this.db.prepare(`UPDATE allocation_documents SET status = 'cancelled', approval_status = 'rejected', business_note = ?,
           reviewed_at = ?, reviewed_by_role = ?, cancelled_at = ?, cancelled_by_role = ?, cancel_reason = ?,
@@ -5254,12 +5432,94 @@ export class InventoryDatabase {
     });
   }
 
+  inkAllocationForUpdate(id, expectedRevision, stages) {
+    const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+    if (!row) throw new BusinessError(404, 'not_found', '找不到调拨记录');
+    this.requireRevision(row, expectedRevision);
+    if (this.getModel(row.model).category !== '墨盒') throw new BusinessError(403, 'ink_allocation_required', '本步骤仅适用于墨盒调拨');
+    if (row.status !== 'pending' || row.approval_status !== 'approved' || !stages.includes(row.procurement_status)) throw new BusinessError(409, 'invalid_approval_status', '当前调拨单不在本步骤，请刷新查看进度');
+    return row;
+  }
+
+  adjustInkAllocationLock(row, quantity, role, at, metadata) {
+    if (quantity > 0) {
+      const pack = Number(this.db.prepare('SELECT pack_per_box FROM stock_batches WHERE batch_key=?').get(row.batch_key)?.pack_per_box);
+      if (!Number.isSafeInteger(pack) || pack <= 0) throw new BusinessError(400, 'invalid_pack_per_box', '来源批次套/箱数据异常，无法提交调拨审核');
+      if (quantity % pack !== 0) throw new BusinessError(400, 'allocation_quantity_multiple', `来源批次套/箱为 ${pack}，数量须为 ${pack} 的整数倍。`);
+    }
+    const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS quantity FROM inventory_ledger WHERE document_id=?').get(row.id).quantity);
+    const difference = quantity - locked;
+    const available = this.getBalance(row.batch_key).available;
+    if (difference > available) throw new BusinessError(409, 'insufficient_available', `增加锁定 ${difference} 件超出可用库存（当前可用 ${available}）`);
+    const ledger = this.addLedger(Number(row.id), row.batch_key, 'review_adjustment', 0, difference, role, at, null, null, metadata);
+    return { difference, ledgerId: Number(ledger.lastInsertRowid) };
+  }
+
+  reviewAlanAllocation({ id, role, alanQuantity, alanNote, expectedRevision, requestId }) {
+    if (role !== 'alan') throw new BusinessError(403, 'alan_review_forbidden', '仅Alan可提交Alan审核');
+    const quantity = Number(alanQuantity);
+    if (alanQuantity == null || String(alanQuantity).trim() === '' || !Number.isSafeInteger(quantity) || quantity < 0) throw new BusinessError(400, 'invalid_quantity', 'Alan审核数量请填写0或正整数');
+    const note = String(alanNote ?? '').trim();
+    return this.idempotent(`allocation:alan-review:${id}`, requestId, { id, role, alanQuantity: quantity, alanNote: note, expectedRevision }, () => {
+      const row = this.inkAllocationForUpdate(id, expectedRevision, ['pending_alan']);
+      const at = new Date().toISOString();
+      const { difference, ledgerId } = this.adjustInkAllocationLock(row, quantity, role, at, { alanQuantity: quantity, requestId });
+      this.db.prepare(`UPDATE allocation_documents SET quantity=?,alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,
+        procurement_status='pending_purchasing',revision=revision+1,updated_at=? WHERE id=?`).run(quantity,quantity,note,role,at,at,id);
+      this.addEvent(id, 'alan_review', role, at, note, { quantity, alanQuantity: quantity, alanNote: note, lockedDelta: difference, ledgerIds: [ledgerId] });
+      return { ok: true, record: this.getDocument(id), totals: this.batchTotals(row.model) };
+    });
+  }
+
+  replyAllocation({ id, role, supplierQuantity, procurementNote, expectedRevision, requestId }) {
+    if (!['purchasing', 'logistics'].includes(role)) throw new BusinessError(403, 'allocation_reply_forbidden', '仅采购或物流可填写供应商库存回复');
+    const quantity = Number(supplierQuantity);
+    if (supplierQuantity == null || String(supplierQuantity).trim() === '' || !Number.isSafeInteger(quantity) || quantity < 0) throw new BusinessError(400, 'invalid_quantity', '供应商库存回复请填写0或正整数');
+    const note = String(procurementNote ?? '').trim();
+    return this.idempotent(`allocation:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, procurementNote: note, expectedRevision }, () => {
+      const row = this.inkAllocationForUpdate(id, expectedRevision, ['pending_alan', 'pending_purchasing']);
+      const at = new Date().toISOString();
+      const { difference, ledgerId } = this.adjustInkAllocationLock(row, quantity, role, at, { supplierQuantity: quantity, requestId });
+      this.db.prepare(`UPDATE allocation_documents SET quantity=?,requested_quantity=?,approved_quantity=?,supplier_quantity=?,procurement_note=?,
+        replied_by_role=?,replied_at=?,status=?,approval_status=?,procurement_status=?,
+        cancelled_by_role=?,cancelled_at=?,cancel_reason=?,lingxing_snapshot_json=?,revision=revision+1,updated_at=? WHERE id=?`)
+        .run(quantity,quantity,quantity,quantity,note,role,at,quantity === 0 ? 'cancelled' : 'pending',quantity === 0 ? 'rejected' : 'approved',
+          quantity === 0 ? null : 'pending_archive',quantity === 0 ? role : null,quantity === 0 ? at : null,quantity === 0 ? note : null,
+          quantity === 0 ? JSON.stringify(this.lingxingForDocument(row)) : null,at,id);
+      this.addEvent(id, 'reply', role, at, note, { quantity, supplierQuantity: quantity, procurementNote: note, skippedAlan: row.alan_reviewed_at == null,
+        before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity }, lockedDelta: difference, ledgerIds: [ledgerId] });
+      return { ok: true, record: this.getDocument(id), totals: this.batchTotals(row.model) };
+    });
+  }
+
+  archiveAllocation({ id, role, expectedRevision, requestId }) {
+    if (!['purchasing', 'logistics'].includes(role)) throw new BusinessError(403, 'allocation_archive_forbidden', '仅采购或物流可归档墨盒调拨');
+    return this.idempotent(`allocation:archive:${id}`, requestId, { id, role, expectedRevision }, () => {
+      const row = this.inkAllocationForUpdate(id, expectedRevision, ['pending_archive']);
+      const quantity = Number(row.supplier_quantity);
+      const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS quantity FROM inventory_ledger WHERE document_id=?').get(id).quantity);
+      if (quantity <= 0 || locked !== quantity) throw new BusinessError(409, 'allocation_lock_mismatch', '本单供应商回复与锁定数量不一致，无法归档');
+      const balance = this.getBalance(row.batch_key);
+      if (balance.onHand < quantity) throw new BusinessError(409, 'insufficient_stock', '在库数量不足，无法确认调出');
+      const at = new Date().toISOString();
+      const release = this.addLedger(id, row.batch_key, 'release_reservation', 0, -quantity, role, at);
+      const issue = this.addLedger(id, row.batch_key, 'issue', -quantity, 0, role, at);
+      this.db.prepare(`UPDATE allocation_documents SET status='confirmed',procurement_status=NULL,confirmed_by_role=?,confirmed_at=?,
+        archived_by_role=?,archived_at=?,lingxing_snapshot_json=?,revision=revision+1,updated_at=? WHERE id=?`)
+        .run(role,at,role,at,JSON.stringify(this.lingxingForDocument(row)),at,id);
+      this.addEvent(id, 'archive', role, at, null, { quantity, plan: row.plan, date: row.ship_date, version: row.version, onHandDelta: -quantity, lockedDelta: -quantity,
+        ledgerIds: [Number(release.lastInsertRowid), Number(issue.lastInsertRowid)] });
+      return { ok: true, record: this.getDocument(id), totals: this.batchTotals(row.model) };
+    });
+  }
+
   confirmAllocation({ id, role, expectedRevision, requestId }) {
     if (!ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "confirm_forbidden", "仅助理角色可确认调拨完成");
     return this.idempotent(`allocation:confirm:${id}`, requestId, { id, role, expectedRevision }, () => {
       const row = this.db.prepare("SELECT * FROM allocation_documents WHERE id = ?").get(id);
       if (!row) throw new BusinessError(404, "not_found", "找不到调拨记录");
       this.requireRevision(row, expectedRevision);
+      if (this.getModel(row.model).category === '墨盒') throw new BusinessError(403, 'confirm_forbidden', '墨盒调拨由采购或物流归档完成');
       if (row.status !== "pending") throw new BusinessError(409, "invalid_status", `当前状态“${STATUS_TEXT[row.status]}”不能确认`);
       if (row.approval_status !== "approved") throw new BusinessError(409, "approval_required", "调拨须先由商务审核通过，助理才能确认完成");
       const balance = this.getBalance(row.batch_key);
@@ -5325,7 +5585,7 @@ export class InventoryDatabase {
       FROM document_events e
       LEFT JOIN allocation_documents d ON d.id = e.document_id
       WHERE e.id = ?
-        AND e.event_type IN ('entry', 'review', 'reject', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transfer_upgrade_update', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
+        AND e.event_type IN ('entry', 'review', 'reject', 'alan_review', 'reply', 'archive', 'recall', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transfer_upgrade_update', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
     `).get(eventId) ?? null;
   }
 
@@ -5433,7 +5693,7 @@ export class InventoryDatabase {
         WHERE document_id = ? AND created_at = ?
         ORDER BY id
       `).all(Number(row.document_id), row.occurred_at);
-      matchingLedger = operation === "legacy_import"
+      matchingLedger = Array.isArray(payload.ledgerIds) ? rows.filter(entry => payload.ledgerIds.includes(Number(entry.id))) : operation === "legacy_import"
         ? rows
         : rows.filter((entry) => expectedTypes.includes(entry.entry_type));
     }

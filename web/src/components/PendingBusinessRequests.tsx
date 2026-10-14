@@ -9,6 +9,8 @@ const actionNames: Array<[RegExp, string]> = [
   [/^\/api\/transfer-upgrades\/update\/import(?:\?|$)/, "转仓升级办理"],
   [/^\/api\/transfer-upgrades\/import$/, "转仓升级导入"],
   [/^\/api\/approvals\/inquiries\/clear$/, "清空询库列表"],
+  [/\/(?:inquiries|allocations)\/\d+\/alan-review$/, "Alan审核"],
+  [/\/allocations\/\d+\/reply$/, "调拨采购回复"], [/\/allocations\/\d+\/archive$/, "调拨采购归档"], [/\/allocations\/\d+\/recall$/, "调拨回撤"],
   [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
   [/^\/api\/allocations$/, "调拨录入"], [/\/allocations\/\d+\/review$/, "调拨审核"], [/\/allocations\/\d+\/confirm$/, "调拨完成"],
   [/^\/api\/upgrades\/direct$/, "在库升级发起"], [/\/upgrades\/direct\/\d+\/complete$/, "在库升级入库"], [/\/upgrades\/relocations\/\d+\/complete$/, "移仓升级入库"],
@@ -19,7 +21,7 @@ function describe(record: PendingBusinessRequest) {
   const payload = JSON.parse(record.body);
   const action = actionNames.find(([pattern]) => pattern.test(record.url))?.[1] ?? "业务提交";
   const document = record.context || [payload.model, payload.store, payload.plan, payload.version || payload.sourceVersion || payload.newVersion, payload.removalOrderNo, payload.fileName].filter(Boolean).join(" / ");
-  const quantity = payload.quantity ?? payload.completedQuantity ?? payload.supplierQuantity ?? payload.approvedQuantity;
+  const quantity = payload.quantity ?? payload.completedQuantity ?? payload.supplierQuantity ?? payload.approvedQuantity ?? payload.alanQuantity;
   return [action, document, quantity !== undefined ? "数量 " + quantity : ""].filter(Boolean).join(" · ");
 }
 export function PendingBusinessRequests({ role }: { role: Role }) {

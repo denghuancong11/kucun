@@ -208,6 +208,36 @@ export function reviewInquiry(role: Role, id: number, payload: ApprovalReview, c
   }, context);
 }
 
+export function reviewInquiryByAlan(role: Role, id: number, payload: { alanQuantity: number; alanNote: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/inquiries/${id}/alan-review`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function reviewAllocationByAlan(role: Role, id: number, payload: { alanQuantity: number; alanNote: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/alan-review`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function replyAllocation(role: Role, id: number, payload: { supplierQuantity: number; procurementNote: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/reply`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function archiveAllocation(role: Role, id: number, payload: { expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/archive`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function recallAllocation(role: Role, id: number, payload: { expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/recall`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
 export function replyInquiry(role: Role, id: number, payload: {
   supplierQuantity: number; shippingWarehouse: string; procurementNote: string; expectedRevision: number; requestId: string;
 }, context?: string): Promise<unknown> {

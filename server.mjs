@@ -476,6 +476,27 @@ async function handleAllocationsApi(request, response, pathname) {
     return true;
   }
 
+  const inkMatch = pathname.match(/^\/api\/allocations\/(\d+)\/(alan-review|reply|archive|recall)$/);
+  if (inkMatch && request.method === "POST") {
+    const id = Number(inkMatch[1]), action = inkMatch[2];
+    const allowedRoles = { "alan-review": ["alan"], reply: ["purchasing", "logistics"], archive: ["purchasing", "logistics"], recall: ["purchasing", "logistics", "business"] }[action];
+    if (!allowedRoles.includes(role)) throw new BusinessError(403, "allocation_action_forbidden", "当前角色不能执行此调拨步骤");
+    await getDocumentForRole(id, role);
+    const payload = await parseJsonRequest(request);
+    const common = { id, role, expectedRevision: Number(payload.expectedRevision), requestId: requireNonBlank(payload, "requestId", "提交编号") };
+    let result;
+    if (action === "alan-review") {
+      if (payload.alanQuantity == null || String(payload.alanQuantity).trim() === "") throw new BusinessError(400, "missing_alan_quantity", "请填写Alan审核数量");
+      result = inventory.reviewAlanAllocation({ ...common, alanQuantity: requireNonNegativeInteger(payload.alanQuantity, "Alan审核数量"), alanNote: String(payload.alanNote ?? "").trim() });
+    } else if (action === "reply") {
+      if (payload.supplierQuantity == null || String(payload.supplierQuantity).trim() === "") throw new BusinessError(400, "missing_supplier_quantity", "请填写供应商库存回复，有货填数量，无货填 0");
+      result = inventory.replyAllocation({ ...common, supplierQuantity: requireNonNegativeInteger(payload.supplierQuantity, "供应商库存回复"), procurementNote: String(payload.procurementNote ?? "").trim() });
+    } else if (action === "archive") result = inventory.archiveAllocation(common);
+    else result = inventory.recallAllocation(common);
+    sendJson(response, 200, approvalResultForRole(result, role));
+    return true;
+  }
+
   const confirmMatch = pathname.match(/^\/api\/allocations\/(\d+)\/confirm$/);
   if (confirmMatch && request.method === "POST") {
     if (!confirmRoles.has(role)) throw new BusinessError(403, "confirm_forbidden", "仅助理角色可确认调拨完成");
@@ -525,7 +546,9 @@ function filteredInquiryExport(visible, role, query) {
     .sort((a, b) => (b.record.createdAt ?? "").localeCompare(a.record.createdAt ?? ""))
     .filter(item => (type === "all" || item.kind === type) && (category === "all" || item.record.category === category)
       && (progress === "all" || active(item))
-      && (scope === "all" || ["purchasing", "logistics"].includes(role) && item.kind === "inquiry" && (item.record.status === "pending_purchasing" || item.record.category === "墨盒" && item.record.status === "pending_assistant"))
+      && (scope === "all" || ["purchasing", "logistics"].includes(role) && (item.kind === "inquiry"
+        ? item.record.status === "pending_purchasing" || item.record.category === "墨盒" && ["pending_alan", "pending_assistant"].includes(item.record.status)
+        : active(item) && item.record.category === "墨盒" && ["pending_alan", "pending_purchasing", "pending_archive"].includes(item.record.procurementStatus)))
       && (!keyword || [item.record.operator, item.record.model, item.record.asin, item.record.documentNo].some(value => value.toLocaleLowerCase().includes(keyword))));
   const groups = new Map();
   for (const item of items) {
@@ -536,8 +559,8 @@ function filteredInquiryExport(visible, role, query) {
 }
 
 function inquiryExportWorkbook(records) {
-  const headers = ["型号", "商务部审核数量", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
-  const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
+  const headers = ["型号", "商务部审核数量", "Alan审核数量", "Alan备注", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
+  const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.alanQuantity, row.alanNote, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
     row.department, row.store, row.operator, row.fnsku, new Date(row.createdAt).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }),
     row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "墨盒" && ["purchasing", "logistics"].includes(row.archivedByRole ?? "")) ? "已完成" : "" : row.statusText])];
   const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
@@ -547,14 +570,14 @@ function inquiryExportWorkbook(records) {
       ? '<c r="' + ref + '"><v>' + value + '</v></c>'
       : '<c r="' + ref + '" t="inlineStr"' + style + '><is><t xml:space="preserve">' + xml(value) + '</t></is></c>';
   }).join('') + '</row>').join('');
-  const widths = [26, 20, 20, 14, 40, 14, 22, 18, 26, 26, 20];
+  const widths = [26, 20, 20, 40, 20, 14, 40, 14, 22, 18, 26, 26, 20];
   const entries = [
     ["[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
     ["_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
     ["xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="询库明细" sheetId="1" r:id="rId1"/></sheets></workbook>'],
     ["xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
     ["xl/styles.xml", '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
-    ["xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:K' + rows.length + '"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols>' + widths.map((width, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + width + '" customWidth="1"/>').join('') + '</cols><sheetData>' + sheetRows + '</sheetData></worksheet>'],
+    ["xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:M' + rows.length + '"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols>' + widths.map((width, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + width + '" customWidth="1"/>').join('') + '</cols><sheetData>' + sheetRows + '</sheetData></worksheet>'],
   ];
   const locals = [], directory = []; let offset = 0;
   for (const [file, text] of entries) {
@@ -753,11 +776,11 @@ async function handleApprovalsApi(request, response, pathname) {
     return true;
   }
 
-  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|reply|archive|recall)$/);
+  const match = pathname.match(/^\/api\/inquiries\/(\d+)\/(review|alan-review|reply|archive|recall)$/);
   if (match && request.method === "POST") {
     const id = Number(match[1]);
     const action = match[2];
-    const allowedRoles = { review: ["business"], reply: ["purchasing", "logistics", "alan"], archive: ["purchasing", "logistics", ...assistantRoleSet], recall: ["purchasing", "logistics", "business"] }[action];
+    const allowedRoles = { review: ["business"], "alan-review": ["alan"], reply: ["purchasing", "logistics"], archive: ["purchasing", "logistics", ...assistantRoleSet], recall: ["purchasing", "logistics", "business"] }[action];
     if (!allowedRoles.includes(role)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
     await getInquiryForRole(id, role);
     const payload = await parseJsonRequest(request);
@@ -772,8 +795,11 @@ async function handleApprovalsApi(request, response, pathname) {
         approvedQuantity: payload.decision === "reject" ? null : requirePositiveInteger(payload.approvedQuantity, "审核数量"),
         businessNote: String(payload.businessNote ?? "").trim(),
       });
+    } else if (action === "alan-review") {
+      if (payload.alanQuantity == null || String(payload.alanQuantity).trim() === "") throw new BusinessError(400, "missing_alan_quantity", "请填写Alan审核数量");
+      result = inventory.reviewAlanInquiry({ ...common, alanQuantity: requireNonNegativeInteger(payload.alanQuantity, "Alan审核数量"), alanNote: String(payload.alanNote ?? "").trim() });
     } else if (action === "reply") {
-      if (payload.supplierQuantity == null || payload.supplierQuantity === "") {
+      if (payload.supplierQuantity == null || String(payload.supplierQuantity).trim() === "") {
         throw new BusinessError(400, "missing_supplier_quantity", "请填写供应商库存回复，有货填数量，无货填 0");
       }
       result = inventory.replyInquiry({
@@ -1676,7 +1702,7 @@ async function authorizeLingxingTarget(role, target, requireActive) {
       const record = ref.kind==='allocation' ? inventory.getDocument(ref.id) : inventory.getInquiry(ref.id);
       if (!record) throw new BusinessError(404,'sync_document_missing','同步单据不存在');
       await readable(record);
-      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
+      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_alan','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
       if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.model} · ${record.store} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
       documents.push({kind:ref.kind,id:ref.id});asins.add(record.asin);
     }
@@ -1736,8 +1762,8 @@ async function handleLingxingApi(request,response,pathname) {
 const server = http.createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, `http://${request.headers.host || "localhost"}`).pathname;
-    if (requestRole(request) === "alan" && request.method !== "GET" && !(request.method === "POST" && /^\/api\/inquiries\/\d+\/reply$/.test(pathname))) {
-      throw new BusinessError(403, "alan_write_forbidden", "Alan仅可办理墨盒询库回复");
+    if (requestRole(request) === "alan" && request.method !== "GET" && !(request.method === "POST" && /^\/api\/(inquiries|allocations)\/\d+\/alan-review$/.test(pathname))) {
+      throw new BusinessError(403, "alan_write_forbidden", "Alan仅可办理墨盒调拨、询库的Alan审核");
     }
     if (pathname.startsWith('/api/lingxing/') || pathname.startsWith('/api/lingxing-worker/')) { await handleLingxingApi(request,response,pathname); return; }
     if (pathname.startsWith("/api/permissions") && (await handlePermissionsApi(request, response, pathname))) return;

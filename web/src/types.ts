@@ -218,6 +218,20 @@ export interface Allocation {
   approvedQuantity: number | null;
   businessNote: string;
   approvalStatus: "pending" | "approved" | "rejected" | "legacy";
+  procurementStatus: "pending_alan" | "pending_purchasing" | "pending_archive" | null;
+  alanQuantity: number | null;
+  alanNote: string | null;
+  alanReviewedByRole: string | null;
+  alanReviewedAt: string | null;
+  supplierQuantity: number | null;
+  procurementNote: string | null;
+  shippingWarehouse: string | null;
+  repliedByRole: string | null;
+  repliedAt: string | null;
+  archivedByRole: string | null;
+  archivedAt: string | null;
+  statusText: string;
+  events: DocumentEvent[];
   reviewedAt: string | null;
   reviewedByRole: string | null;
   category?: Category;
@@ -271,7 +285,7 @@ export interface LingxingMetrics {
   scope: "all_stores";
 }
 
-export type InquiryStatus = "pending_business" | "pending_purchasing" | "pending_assistant" | "archived" | "rejected" | "cancelled";
+export type InquiryStatus = "pending_business" | "pending_alan" | "pending_purchasing" | "pending_assistant" | "archived" | "rejected" | "cancelled";
 
 export interface InquiryShipment {
   id: number;
@@ -291,6 +305,10 @@ export interface Inquiry {
   requestedQuantity: number;
   approvedQuantity: number | null;
   supplierQuantity: number | null;
+  alanQuantity: number | null;
+  alanNote: string | null;
+  alanReviewedByRole: string | null;
+  alanReviewedAt: string | null;
   department: string;
   store: string;
   operator: string;
@@ -407,6 +425,7 @@ export interface InquiryRecallInfo {
 
 export interface RelocationCandidate {
   inquiryRecall: InquiryRecallInfo | null;
+  allocationRecall: InquiryRecallInfo | null;
   allocationId: number | null;
   inquiryId: number | null;
   inquiryShipmentId: number | null;
@@ -515,6 +534,7 @@ export interface RelocationWorkItem {
   history: DocumentEvent[];
   originalRelocationAddress: string | null;
   inquiryRecall: InquiryRecallInfo | null;
+  allocationRecall: InquiryRecallInfo | null;
   id: number;
   workNo: string;
   allocationId: number | null;
@@ -594,6 +614,7 @@ export interface DirectUpgrade extends UpgradeBase {
 
 export interface RelocationUpgrade extends UpgradeBase {
   inquiryRecall: InquiryRecallInfo | null;
+  allocationRecall: InquiryRecallInfo | null;
   kind: "relocation";
   allocationId: number | null;
   inquiryId: number | null;
@@ -661,7 +682,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;

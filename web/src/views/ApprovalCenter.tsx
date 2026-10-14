@@ -2,15 +2,15 @@ import { useMemo, useState } from "react";
 import { clearInquiryDisplay, confirmAllocation, downloadInquiryExport, formatNumber, reviewAllocation, reviewInquiry, type ApiError } from "../api";
 import { Icon } from "../components/Icon";
 import { LingxingSync } from "../components/LingxingSync";
-import { InquiryFulfillment, InquiryProcurementCells } from "../components/InquiryFulfillment";
+import { AlanReviewCells, AllocationFulfillment, ApprovalProcurementCells, InquiryFulfillment } from "../components/InquiryFulfillment";
 import { Badge, displayTime, EmptyState, FeedbackButton, Notice, Panel, Segmented, SkeletonTable } from "../components/ui";
 import { useBusinessAction } from "../hooks/useBusinessAction";
 import { useApprovals } from "../hooks/useApprovals";
 import { useInventoryCatalog } from "../hooks/useInventory";
-import type { Allocation, Category, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
+import type { Allocation, Category, DocumentEvent, Inquiry, LingxingMetrics, NoticeMessage, Role } from "../types";
 import { createRequestId } from "../utils/ids";
 import { operationGroups } from "../utils/roles";
-import { expandableRowProps } from "../utils/rowExpansion";
+import { expandableRowProps, preserveSummarySelection } from "../utils/rowExpansion";
 
 type ApprovalItem = { kind: "allocation"; record: Allocation & { category: Category } } | { kind: "inquiry"; record: Inquiry };
 type TypeFilter = "all" | ApprovalItem["kind"];
@@ -22,8 +22,13 @@ function isMyTodo(item: ApprovalItem, role: Role) {
   const group = operationGroups[role];
   if (role === "operation-1" || role === "operation-2") return item.record.department === group;
   const assistant = role === "assistant-1" || role === "assistant-2";
-  if (item.kind === "allocation") return (role === "business" && item.record.approvalStatus !== "approved") || (assistant && item.record.approvalStatus === "approved");
-  return (role === "business" && item.record.status === "pending_business") || ((["purchasing", "logistics"].includes(role) || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing")
+  if (item.kind === "allocation") return (role === "business" && item.record.approvalStatus !== "approved")
+    || (item.record.category !== "墨盒" && assistant && item.record.approvalStatus === "approved")
+    || (item.record.category === "墨盒" && (role === "alan" && item.record.procurementStatus === "pending_alan"
+      || ["purchasing", "logistics"].includes(role) && ["pending_alan", "pending_purchasing", "pending_archive"].includes(item.record.procurementStatus ?? "")));
+  return (role === "business" && item.record.status === "pending_business")
+    || (role === "alan" && item.record.category === "墨盒" && item.record.status === "pending_alan")
+    || (["purchasing", "logistics"].includes(role) && (item.record.status === "pending_purchasing" || item.record.category === "墨盒" && item.record.status === "pending_alan"))
     || ((item.record.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : assistant) && item.record.status === "pending_assistant");
 }
 function metricCoverage(value: number | null, metrics: LingxingMetrics | null) {
@@ -43,6 +48,7 @@ function calculatedCoverage(quantity: string, metrics: LingxingMetrics | null) {
 function progressLabel(item: ApprovalItem) {
   if (isArchived(item)) return item.kind === "allocation" || (["assistant", "assistant-1", "assistant-2"].includes(item.record.archivedByRole ?? "") || item.record.category === "墨盒" && ["purchasing", "logistics"].includes(item.record.archivedByRole ?? "")) ? "已完成" : "";
   if (item.kind === "inquiry") return item.record.statusText;
+  if (item.record.category === "墨盒") return item.record.statusText;
   if (item.record.approvalStatus === "rejected") return "已拒绝";
   if (item.record.statusCode === "pending") return item.record.approvalStatus === "approved" ? "待助理确认" : "待商务审核";
   return item.record.status;
@@ -62,6 +68,7 @@ const METRIC_COLUMNS: ApprovalColumn[] = [
 
 const DOCUMENT_COLUMNS: ApprovalColumn[] = [
   { label: "申请数量", width: 100 }, { label: "商务部审核数量", width: 140 }, { label: "套/箱", width: 100 }, { label: "商务部备注", width: 230 },
+  { label: "Alan审核数量", width: 160 }, { label: "Alan备注", width: 250 },
   { label: "供应商库存回复", width: 150 }, { label: "发货仓库", width: 130 }, { label: "采购备注", width: 250 },
   { label: "调拨部门", width: 100 }, { label: "调拨店铺", width: 160 }, { label: "调拨运营", width: 110 },
   { label: "已贴FNSKU", width: 145 }, { label: "ASIN", width: 130 }, { label: "运营备注", width: 230 },
@@ -82,7 +89,8 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
   const row = item.record;
   const [quantity, setQuantity] = useState(String(row.approvedQuantity ?? row.requestedQuantity));
   const [procurementQuantity, setProcurementQuantity] = useState("");
-  const previewQuantity = item.kind === "inquiry" && (["purchasing", "logistics"].includes(role) || role === "alan" && item.record.category === "墨盒") && item.record.status === "pending_purchasing"
+  const procurementStage = item.kind === "inquiry" ? item.record.status : item.record.procurementStatus;
+  const previewQuantity = ["purchasing", "logistics"].includes(role) && (procurementStage === "pending_purchasing" || row.category === "墨盒" && procurementStage === "pending_alan")
     && procurementQuantity.trim() !== "" && Number.isInteger(Number(procurementQuantity)) && Number(procurementQuantity) >= 0
     ? Number(procurementQuantity) : null;
   const displayedRequested = previewQuantity ?? row.requestedQuantity;
@@ -122,7 +130,8 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
       <td className="approval-number" data-field="商务审核数量" title={previewTitle}>{displayedApproved === null ? "—" : formatNumber(displayedApproved)}</td>
       <td className="approval-number" data-field="套/箱" title={item.kind === "allocation" ? item.record.packPerBox ?? "来源批次套/箱缺失" : undefined}>{item.kind === "allocation" ? item.record.packPerBox || "—" : "—"}</td>
       <td title={row.reviewedAt ? row.businessNote : undefined} data-field="商务备注">{row.reviewedAt ? row.businessNote || "—" : "—"}</td>
-      {item.kind === "inquiry" ? <InquiryProcurementCells row={item.record} quantity={procurementQuantity} onQuantityChange={setProcurementQuantity} role={role} onRefresh={onRefresh} onNotice={onNotice} />
+      <AlanReviewCells kind={item.kind} row={row} role={role} onRefresh={onRefresh} onNotice={onNotice} />
+      {item.kind === "inquiry" || row.category === "墨盒" ? <ApprovalProcurementCells kind={item.kind} row={row} quantity={procurementQuantity} onQuantityChange={setProcurementQuantity} role={role} onRefresh={onRefresh} onNotice={onNotice} />
         : <><td data-field="供应商库存回复">—</td><td data-field="发货仓库">—</td><td data-field="采购备注">—</td></>}
       <td>{row.department || "—"}</td><td title={row.store}>{row.store || "—"}</td><td title={row.operator}>{row.operator || "—"}</td>
       <td title={row.fnsku}>{row.fnsku || "—"}</td><td title={row.asin}>{row.asin || "—"}</td><td title={row.operatorNote} data-field="运营备注">{row.operatorNote || "—"}</td>
@@ -143,13 +152,27 @@ function ApprovalRecord({ item, role, onRefresh, onNotice }: {
         <button className="btn btn-primary" type="button" disabled={busy || uncertain || Boolean(quantityError)} onClick={() => review("approve")}>{busy&&reviewing==="approve"?"正在批准…":"批准"}</button>
         <button className="btn btn-ghost" type="button" disabled={busy || uncertain} onClick={() => review("reject")}>{busy&&reviewing==="reject"?"正在拒绝…":"拒绝"}</button>
       </form>}
-      {item.kind === "allocation" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
+      {item.kind === "allocation" && row.category !== "墨盒" && item.record.statusCode === "pending" && item.record.approvalStatus === "approved" && (role === "assistant-1" || role === "assistant-2") && <button className="btn btn-primary btn-sm" type="button" disabled={busy || uncertain} onClick={() => { const requestId = createRequestId("allocation-confirm"); void perform({ execute: () => confirmAllocation(role, row.id, row.revision, requestId, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / ")), message: `${row.model} · ${row.store} 已确认调拨。` }); }}>{busy?"正在确认…":"确认调拨完成"}</button>}
+      {item.kind === "allocation" && <AllocationFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
       {item.kind === "inquiry" && <InquiryFulfillment row={item.record} role={role} onRefresh={onRefresh} onNotice={onNotice} />}
       {role === "business" && needsReview && quantityError && <p className="field-error" role="alert">{quantityError}</p>}
       {error && <p className="dialog-error" role="alert">{error}</p>}
       {uncertain && <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void perform()}>{busy?"正在确认…":"重试确认"}</button>}
-    </div></td></tr>
+    </div>{row.category === "墨盒" && <ApprovalHistory events={row.events} />}</td></tr>
   </tbody>;
+}
+
+function ApprovalHistory({ events }: { events: DocumentEvent[] }) {
+  const roles: Record<string, string> = { admin: "管理员", "operation-1": "运营一团", "operation-2": "运营二团", "assistant-1": "助理一团", "assistant-2": "助理二团", business: "商务", alan: "Alan", purchasing: "采购", logistics: "物流" };
+  const names: Record<string, string> = { entry: "提交申请", created: "提交申请", review: "商务审核", reject: "商务拒绝", alan_review: "Alan审核", reply: "采购回复", archive: "采购归档", confirm: "调拨完成", recall: "回撤", cancel: "取消", withdraw: "撤回" };
+  const approvalEvents = events.filter(event => names[event.type]);
+  return <details className="allocation-history"><summary onClick={preserveSummarySelection}>办理历史（{approvalEvents.length}）</summary><div className="table-wrap"><table className="data-table sub reconcile-table" aria-label="审批办理历史"><thead><tr>{["办理时间", "办理岗位", "办理结果", "申请数量", "商务部审核数量", "Alan审核数量", "供应商库存回复", "归档数量", "退库数量", "回撤后预锁数量", "发货仓库", "发货计划号", "发货时间", "原版本", "备注"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{approvalEvents.map(event => {
+    const p = event.payload;
+    const after = p.after as Record<string, unknown> | undefined;
+    const result = event.type === "recall" ? `回撤至${p.target === "pending_business" ? "待商务审核" : "待采购回复"}` : event.type === "reply" ? `采购回复${p.skippedAlan ? "（跳过Alan审核）" : ""}${Number(p.supplierQuantity) === 0 ? "，已拒绝" : ""}` : names[event.type];
+    const values = [event.type === "entry" || event.type === "created" ? p.requestedQuantity ?? p.quantity : event.type === "recall" ? after?.requestedQuantity : null, event.type === "review" ? p.approvedQuantity : event.type === "recall" ? after?.approvedQuantity : null, event.type === "alan_review" ? p.alanQuantity : null, event.type === "reply" ? p.supplierQuantity : null, event.type === "archive" || event.type === "confirm" ? p.quantity : null, p.returnedQuantity, p.restoredLockedQuantity, p.shippingWarehouse, p.plan, p.date, p.version, p.alanNote ?? p.procurementNote ?? p.businessNote ?? p.operatorNote ?? event.reason];
+    return <tr key={event.id}><td>{displayTime(event.at, true)}</td><td>{roles[event.role] || event.role}</td><td>{result || "—"}</td>{values.map((value, index) => <td key={index}>{value == null || value === "" ? "—" : String(value)}</td>)}</tr>;
+  })}</tbody></table></div></details>;
 }
 
 export function ApprovalCenterView({ role }: { role: Role }) {
@@ -216,7 +239,7 @@ export function ApprovalCenterView({ role }: { role: Role }) {
             <table className="approval-document-table" aria-label={`${model} 审批单据`} style={{ minWidth: `${documentMinWidth}px` }}>
             <colgroup>{documentColumns.map((column, index) => <col key={index} style={{ width: column.width }} />)}</colgroup>
             <thead><tr>{documentColumns.map(column => <th key={column.label}>{column.label}</th>)}</tr></thead>
-            {records.map(item => <ApprovalRecord key={`${item.kind}-${item.record.id}-${role}-${item.kind === "inquiry" ? item.record.events.filter(event => event.type === "recall").slice(-1)[0]?.id ?? 0 : 0}`} item={item} role={role} onRefresh={query.refresh} onNotice={setNotice} />)}
+            {records.map(item => <ApprovalRecord key={`${item.kind}-${item.record.id}-${role}-${item.record.events.filter(event => event.type === "recall").slice(-1)[0]?.id ?? 0}`} item={item} role={role} onRefresh={query.refresh} onNotice={setNotice} />)}
           </table></div></td></tr>
         </tbody>;
       })}
