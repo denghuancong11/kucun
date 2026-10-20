@@ -60,7 +60,7 @@ async function queryUi(expectedIds){
   await until(async()=>assert.equal(await page.locator('.audit-table tbody tr').count(),expectedIds.length));
   queries.push({url:response.url(),ids:body.records.map(r=>r.eventId)});return body.records;
 }
-async function detailValue(label){return page.getByRole('dialog',{name:'流水详情',exact:true}).locator('dl > div').filter({has:page.locator('dt').getByText(label,{exact:true})}).locator('dd').innerText();}
+async function detailValue(label){return page.locator('.audit-detail-dialog').locator('dl > div').filter({has:page.locator('dt').getByText(label,{exact:true})}).locator('dd').innerText();}
 try{
   child=spawn(process.execPath,['--import',pathToFileURL(preload).href,path.join(root,'server.mjs')],{cwd:root,windowsHide:true,stdio:'ignore',env:{...process.env,ASTER_STATE_ROOT:state,HOST:'127.0.0.1',PORT:String(port),PROD:'1',TZ:'Asia/Shanghai',ASTER_TEST_INSTANCE_ID:instanceId,ASTER_OVERSEAS_WAREHOUSES:'SyntheticWarehouseA;SyntheticWarehouseB'}});
   await waitForOwnedServer({base,child,instanceId});
@@ -119,7 +119,7 @@ try{
   await categories.getByRole('button',{name:/^墨盒/}).click();await until(async()=>assert.equal(await search.inputValue(),''));assert.equal(await page.getByRole('region',{name:'QUERY-A-TONER 库存明细',exact:true}).count(),0);
   await page.screenshot({path:path.join(out,'inventory-filter-sort.png'),fullPage:true});
   check('搜索大小写/空格、类目组合、空结果与清除搜索、键盘候选、URL刷新恢复和切类目收起不匹配型号均正确');
-  await page.locator('.sidebar .nav-item',{hasText:'库存流水'}).click();await page.getByLabel('选择库存操作分类',{exact:true}).waitFor();
+  await page.locator('.sidebar .nav-item',{hasText:'库存流水'}).click();await page.getByLabel('选择库存业务动作',{exact:true}).waitFor();
   await filters('query-a-toner','2026-10-14','2026-10-14');
   const included=fixtureEvents.filter(e=>e.model==='QUERY-A-TONER').slice(1,3);
   const records=await queryUi(included.map(e=>e.id));
@@ -129,22 +129,22 @@ try{
     assert.equal(raw.role,'operation-1');assert.equal(raw.occurred_at,expectedEvent.at);
     const cells=await row.locator('td').allTextContents();assert.equal(cells[1],'调拨录入');assert.equal(cells[3],'5');assert.equal(cells[5],'-5');assert.equal(cells[7],'运营·一团');
     assert.match(cells[4],/在库0预锁定\+5/);
-    await row.getByRole('button',{name:'查看',exact:true}).click();
-    assert.equal(await detailValue('型号'),'QUERY-A-TONER');assert.equal(await detailValue('数量'),'5');assert.equal(await detailValue('操作岗位'),'运营·一团');assert.equal(await detailValue('运营'),expectedEvent.operator);
+    await row.getByRole('button',{name:'查看流水',exact:true}).click();
+    assert.equal(await detailValue('型号'),'QUERY-A-TONER');assert.equal(await detailValue('数量'),'5');assert.equal(await detailValue('办理岗位'),'运营·一团');assert.equal(await detailValue('运营'),expectedEvent.operator);
     const d=records.find(r=>r.eventId===expectedEvent.id);assert.equal(d.at,expectedEvent.at);assert.equal(d.onHandDelta,0);assert.equal(d.lockedDelta,5);assert.equal(d.availableDelta,-5);
     assert.equal(await detailValue('时间'),new Date(expectedEvent.at).toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'}));
-    await page.getByRole('dialog',{name:'流水详情',exact:true}).getByRole('button',{name:'关闭',exact:true}).click();
+    await page.locator('.audit-detail-dialog').getByRole('button',{name:'关闭',exact:true}).click();
   }
   await page.screenshot({path:path.join(out,'audit-date-boundary.png'),fullPage:true});
   check('页面日期查询包含本地00:00与23:59:59.999、排除前后1ms；两条结果与详情核对实际岗位、时间和在库0/锁+5/可用-5');
   await filters('query-a-toner','2026-10-16','2026-10-16');await queryUi([]);await page.getByText('未找到符合条件的流水。',{exact:true}).waitFor();
   await filters('query-a-toner','2026-10-15','2026-10-14');
   const count=auditRequests.length;await page.getByRole('button',{name:'查询',exact:true}).click();await page.getByRole('alert').filter({hasText:'开始日期不能晚于结束日期'}).waitFor();assert.equal(auditRequests.length,count);
-  await page.getByRole('button',{name:'清空',exact:true}).click();await until(async()=>assert.equal(await page.getByLabel('按开始日期查询库存流水',{exact:true}).inputValue(),''));
-  await page.getByLabel('选择库存操作分类',{exact:true}).selectOption('review');await filters('QUERY-B-INK','2026-10-14','2026-10-14');
+  await page.getByRole('button',{name:'清除筛选',exact:true}).click();await until(async()=>assert.equal(await page.getByLabel('按开始日期查询库存流水',{exact:true}).inputValue(),''));
+  await page.getByLabel('选择库存业务动作',{exact:true}).selectOption('review');await filters('QUERY-B-INK','2026-10-14','2026-10-14');
   const review=db.db.prepare("SELECT id FROM document_events WHERE event_type='review'").all();assert.equal(review.length,1);await queryUi(review.map(r=>r.id));
   const reviewRow=page.locator('.audit-table tbody tr');assert.equal(await reviewRow.locator('td').nth(7).innerText(),'商务');assert.equal(await reviewRow.locator('td').nth(5).innerText(),'+10');
-  await reviewRow.getByRole('button',{name:'查看',exact:true}).click();assert.equal(await detailValue('操作岗位'),'商务');await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
+  await reviewRow.getByRole('button',{name:'查看流水',exact:true}).click();assert.equal(await detailValue('办理岗位'),'商务');await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
   check('流水空结果、反向日期反馈、清空及切换商务审核分类正确；独立DB事件唯一，缩量释放10与实际办理岗位一致');
   // Native date input rejects invalid calendar strings. Rewrite one outgoing GET to exercise the real server error in the actual page.
   let invalidResponse;

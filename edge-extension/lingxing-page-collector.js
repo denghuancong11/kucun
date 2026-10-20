@@ -121,7 +121,7 @@
       const rect = menu.getBoundingClientRect(), style = getComputedStyle(menu);
       return `${menu.className}|${style.display}|${style.visibility}|${style.transform}|${Math.round(rect.width)}x${Math.round(rect.height)}`;
     });
-    throw new Error(`选择“${value}”未完成：${selected ? `已点击，等待回填${updateWaitMs}毫秒后仍未更新` : '5秒内未找到可见选项'}，当前值“${readValue()}”；打开${Math.round(started - openingStarted)}毫秒，检查${checks}次/${Math.round(performance.now() - started)}毫秒，最后检查${lastOptions}个/结束可见${finalOptions}个；页面可见性${document.visibilityState ?? '未知'}；菜单${menus.join(';')}`);
+    throw new Error(`未能在领星中选择“${value}”，当前值为“${readValue()}”。请在部署电脑核对报表后重新同步。`);
   }
 
   // 2026-09-20 真实保存页：字段选择与搜索输入并列，当前字段由标签显示。
@@ -181,7 +181,7 @@
       if (remaining <= 0) break;
       await waitForChange(remaining);
     }
-    throw new Error(`领星日期面板5秒内没有“${label}”选项（检查${checks}次，页面可见性${document.visibilityState ?? '未知'}），请检查报表状态`);
+    throw new Error(`未找到领星日期选项“${label}”，请在部署电脑检查报表后重新同步。`);
   }
 
   async function selectedRange(days) {
@@ -279,7 +279,7 @@
         const elapsed = now - started;
         const stableFor = now - Math.max(state.lastChange, state.lastLoadingAt);
         if (!loading && elapsed >= 900 && stableFor >= 750) return;
-        if (elapsed >= 20000) throw new Error(`领星${stage}后未能读取稳定结果（已等待${Math.round(elapsed)}毫秒，加载${loading ? '中' : '已结束'}，距最近变化${Math.round(stableFor)}毫秒，页面可见性${document.visibilityState ?? '未知'}）`);
+        if (elapsed >= 20000) throw new Error(`未能确认领星${stage}后的报表结果，请在部署电脑检查报表后重新同步。`);
         const remaining = 20000 - elapsed;
         const stableRemaining = Math.max(900 - elapsed, 750 - stableFor, 1);
         await state.waitForChange(loading ? remaining : Math.min(remaining, stableRemaining));
@@ -296,7 +296,7 @@
   }
 
   async function queryRange(asin, days, progress) {
-    progress('复位表格横向位置');
+    progress('正在准备领星报表。');
     one(MAIN.body, "主表主体").scrollLeft = 0;
     await nextMicrotask();
     progress('填写ASIN');
@@ -328,7 +328,7 @@
         const stableRemaining = 750 - stableFor;
         await state.waitForChange(state.loadingSeen && !loading && stableRemaining > 0 ? Math.min(remaining, stableRemaining) : remaining);
       }
-      throw new Error(`${asin} 近${days}天报表20秒内未完成刷新（页面可见性${document.visibilityState ?? '未知'}），查询未采集`);
+      throw new Error(`${asin} 近${days}天报表在 20 秒内未完成刷新，本次未取得数据，请重新同步。`);
     } finally { state.observer.disconnect(); }
   }
 
@@ -352,7 +352,7 @@
     const raw = {};
     try {
       for (let position = 0; ; position = Math.min(max, position + step)) {
-        progress(`读取底部总计（横向位置${position}/${max}）`);
+        progress('正在读取领星报表汇总。');
         body.scrollLeft = position;
         // 逐位置通知虚拟表格更新列，并让Vue完成本次scroll事件后的微任务提交，无须等待绘制帧。
         body.dispatchEvent(new Event('scroll'));
@@ -378,7 +378,7 @@
 
   async function configure(progress) {
     if (location.origin + location.pathname !== PRODUCT_URL) throw new Error("未打开领星产品表现页面，请在部署电脑的 Edge 登录领星后重新同步");
-    progress('重置筛选并等待表格稳定');
+    progress('正在重置领星查询条件。');
     await settleControls(async () => {
       const msku = one("#tab-msku", "MSKU维度");
       if (msku.getAttribute("aria-selected") !== "true") { msku.click(); await nextMicrotask(); }
@@ -391,7 +391,7 @@
       await selectDropdown(type, 'ASIN', queryTypeValue, '.el-select-dropdown .el-select-dropdown__item');
       progress('选择USD币种');
       await selectDropdown(currencyInput(), "USD");
-      progress('等待查询类型及币种切换稳定');
+      progress('正在应用查询类型和币种。');
     }, '查询类型及币种切换');
   }
 

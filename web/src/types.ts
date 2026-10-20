@@ -107,6 +107,8 @@ export interface TransitValidationError {
 
 export interface TransitImportPreview {
   fileName: string;
+  dateYear?: number | null;
+  dateYearRequired?: boolean;
   rows: TransitImportRow[];
   validation: { canPreview?: boolean; canImport: boolean; errorCount: number; errors: TransitValidationError[] };
   fileSha256: string;
@@ -199,11 +201,34 @@ export interface TransitImportListPayload {
 
 export type AllocationStatus = "待修改" | "调拨中，预锁定" | "调拨完成，已备份" | "已撤销" | "已撤回";
 export type AllocationStatusCode = "draft" | "pending" | "confirmed" | "cancelled" | "withdrawn";
+export type InkWorkflowStage = "pending_business" | "pending_alan" | "pending_assistant" | "pending_conversion_confirmation" | "completed" | "rejected" | "converted";
+export type FinalQuantitySource = "alan" | "business" | "purchasing" | null;
+
+export interface AllocationSourceBatchInfo {
+  warehouse: string;
+  shippingMethod: string;
+  origin: "snapshot" | "current_batch" | "unrecorded";
+}
 
 /* 调拨记录：由 /api/allocations 持久化。
    记录行可见性（两种类目均按团）已由后端过滤；totals 与库存可见范围一致：硒鼓公开、墨盒按来源团队过滤。
    审计字段（createdByRole 等）第十三轮起写入；历史记录没有这些字段，故全部可选。 */
 export interface Allocation {
+  recallInfo?: InquiryRecallInfo | null;
+  sourceBatchInfo?: AllocationSourceBatchInfo;
+  zeroAvailableConfirmed: boolean;
+  lockedQuantity: number | null;
+  issuedQuantity: number | null;
+  convertedInquiryId: number | null;
+  convertedInquiryNo: string | null;
+  tonerConversionStatus: "pending_confirmation" | "accepted" | "rejected" | null;
+  workflowMode: "ink-v2" | "legacy";
+  inkWorkflowStage: InkWorkflowStage | null;
+  alanDeadlineAt: string | null;
+  originalRequestedQuantity: number | null;
+  businessReviewedQuantity: number | null;
+  finalQuantity: number | null;
+  finalQuantitySource: FinalQuantitySource;
   plan: string;
   date: string;
   id: number;
@@ -263,6 +288,7 @@ export interface Allocation {
 }
 
 export interface AllocationEntry {
+  zeroAvailableConfirmed?: boolean;
   quantity: number;
   department: string;
   store: string;
@@ -297,6 +323,13 @@ export interface InquiryShipment {
 }
 
 export interface Inquiry {
+  sourceAllocationId: number | null;
+  sourceAllocationNo: string | null;
+  sourceOriginalRequestedQuantity: number | null;
+  originalRequestedQuantity: number | null;
+  businessReviewedQuantity: number | null;
+  finalQuantity: number | null;
+  finalQuantitySource: FinalQuantitySource;
   id: number;
   documentNo: string;
   model: string;
@@ -348,6 +381,7 @@ export interface InquiryExportFilters {
 }
 
 export interface ApprovalsPayload {
+  hiddenCompletedAllocationIds?: number[];
   allocations: Array<Allocation & { category: Category }>;
   inquiries: Inquiry[];
   sync: SyncState;
@@ -396,6 +430,14 @@ export interface AllocationsPayload {
 }
 
 export interface AllocationSummary {
+  zeroAvailableConfirmed: boolean;
+  originalRequestedQuantity: number | null;
+  businessReviewedQuantity: number | null;
+  finalQuantity: number | null;
+  finalQuantitySource: FinalQuantitySource;
+  workflowMode: "ink-v2" | "legacy";
+  inkWorkflowStage: InkWorkflowStage | null;
+  isVirtual: boolean;
   id: number;
   documentNo: string;
   operator: string;
@@ -419,6 +461,9 @@ export interface DirectUpgradeSource {
 }
 
 export interface InquiryRecallInfo {
+  workflowMode?: "ink-v2" | "legacy" | "toner";
+  inkWorkflowStage?: InkWorkflowStage | null;
+  canRecallByRole?: Role[];
   revision: number;
   blockers: { type: string; number: string; description: string; status: string }[];
 }
@@ -473,7 +518,7 @@ export interface DirectUpgradeLine {
 
 export interface UpgradeRelocation {
   originalRelocationAddress: string | null;
-  receiptBatches: {ledgerId:number;batchKey:string;at:string;version:string;warehouse:string;quantity:number;originalQuantity:number;locked:number;onHand:number;issue:string}[];
+  receiptBatches: {ledgerId:number;batchKey:string;at:string;version:string;warehouse:string;packPerBox:string|null;quantity:number;originalQuantity:number;locked:number;onHand:number;issue:string}[];
   externalShipments: RelocationExternalShipment[];
   id: number;
   workId: number | null;
@@ -674,6 +719,19 @@ export interface DocumentHistory {
   ledger: InventoryLedgerEntry[];
 }
 
+export interface InquiryHistory {
+  document: Inquiry;
+  events: DocumentEvent[];
+}
+
+export interface AuditDetailPayload {
+  record: AuditRecord;
+  sourceAvailable: boolean;
+  document?: Allocation | Inquiry;
+  inquiry?: Inquiry;
+  events: DocumentEvent[];
+}
+
 export type NoticeKind = "success" | "warning" | "error";
 
 export interface NoticeMessage {
@@ -682,7 +740,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "alan_timeout" | "transfer_inquiry" | "conversion_accepted" | "conversion_rejected" | "inquiry_completed" | "inquiry_rejected" | "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;

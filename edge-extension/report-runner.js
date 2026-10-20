@@ -37,7 +37,7 @@ globalThis.asterStartReport = job=>{
       observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class','style','hidden']});
       timer=setTimeout(()=>{
         inspect();
-        if(!finished)finish(new Error(`领星报表页面控件30秒内未就绪；页面可见性${document.visibilityState??'unknown'}`));
+        if(!finished)finish(new Error('领星报表的查询控件在30秒内未就绪，请在部署电脑检查报表后重新同步。'));
       },Math.max(0,state.deadline-Date.now()));
       signal.addEventListener('abort',abort,{once:true});
       inspect();
@@ -58,7 +58,7 @@ globalThis.asterStartReport = job=>{
       let capture;
       if(request.action==='metrics') {
         for(const [index,asin]of request.asins.entries()) {
-          progress(`后台查询 ${asin}（${index+1}/${request.asins.length}），近30天报表的7天销量、30天销量等汇总`);
+          progress(`正在读取 ${asin} 的领星指标（${index+1}/${request.asins.length}）。`);
           let next;
           try {next=await bounded(()=>globalThis.asterLingxing.collectAsins([asin],{signal,onProgress:step=>progress(`${asin}：${step}`)}),180000);}
           catch(error) {throw new Error(`${asin}：${error.message}`);}
@@ -66,7 +66,7 @@ globalThis.asterStartReport = job=>{
           else {capture.items.push(...next.items);capture.source.captures.push(...next.source.captures);capture.capturedAt=next.capturedAt;}
         }
       } else {
-        progress(`后台查询移除单 ${request.orderNo} / ${request.fnsku}，读取包裹及商品数量`);
+        progress(`正在读取移除订单 ${request.orderNo}、FNSKU ${request.fnsku} 的包裹及商品数量。`);
         capture=await bounded(()=>queryLingxingRemoval({orderNo:request.orderNo,fnsku:request.fnsku},{signal}),600000);
       }
       state.payload={capture};

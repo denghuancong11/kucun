@@ -3,6 +3,7 @@ import os from 'node:os';
 import { BusinessError } from './inventory-db.mjs';
 
 const disconnected = '部署电脑领星插件未连接。已启用的插件会自动恢复，请保持 Edge 运行；首次使用请在插件中连接库存服务。';
+const taskDisconnected = '部署领星电脑插件未连接，请保持 Edge 运行，首次使用需连接库存服务';
 const active = state => state === 'queued' || state === 'running';
 const now = () => new Date().toISOString();
 
@@ -21,7 +22,7 @@ export class LingxingHost {
   }
   expire() {
     if (this.worker && Date.now() - this.worker.seen > this.leaseMs) {
-      this.db.prepare(`UPDATE lingxing_sync_jobs SET state='failed',message=?,finished_at=? WHERE state IN ('queued','running')`).run(disconnected, now());
+      this.db.prepare(`UPDATE lingxing_sync_jobs SET state='failed',message=?,finished_at=? WHERE state IN ('queued','running')`).run(taskDisconnected, now());
       this.worker = null;
     }
   }
@@ -42,7 +43,7 @@ export class LingxingHost {
   connect(request, workerId, version) {
     const origin = this.local(request);
     this.expire();
-    if (this.worker && (this.worker.id !== workerId || this.worker.origin !== origin)) throw new BusinessError(409, 'worker_connected', '部署电脑已有另一个领星执行器连接，等待原连接释放后将自动重试。');
+    if (this.worker && (this.worker.id !== workerId || this.worker.origin !== origin)) throw new BusinessError(409, 'worker_connected', '部署电脑已有另一个领星插件连接。原连接断开后将自动重试。');
     this.worker = { id: this.worker?.id ?? crypto.randomUUID(), origin, seen: Date.now(), version:version ?? null };
     return { ok: true, workerId: this.worker.id, databaseId: this.inventory.syncState().databaseId, host: os.hostname() };
   }
@@ -80,7 +81,7 @@ export class LingxingHost {
     const json = JSON.stringify(request);
     const existing = this.db.prepare('SELECT * FROM lingxing_sync_jobs WHERE request_id=?').get(requestId);
     if (existing) {
-      if (existing.role !== role || existing.request_json !== json) throw new BusinessError(409,'idempotency_conflict','本次重试的岗位或单据已改变，请切回原岗位和单据后确认结果');
+      if (existing.role !== role || existing.request_json !== json) throw new BusinessError(409,'idempotency_conflict','本次重试的岗位或同步范围已改变，请切回原岗位和同步范围后确认结果');
       await this.authorize(role, JSON.parse(existing.target_json), false);
       return { ok: true, job: this.publicJob(existing), deduped: true };
     }
@@ -91,7 +92,7 @@ export class LingxingHost {
   enqueue(role,requestId,request,target,requestedFrom) {
     const available = this.status().connected;
     const id = this.db.prepare(`INSERT INTO lingxing_sync_jobs(request_id,role,request_json,requested_from,target_json,state,message,created_at,finished_at)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,JSON.stringify(request),requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待部署电脑按顺序执行':disconnected,now(),available?null:now()).lastInsertRowid;
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(requestId,role,JSON.stringify(request),requestedFrom,JSON.stringify(target),available?'queued':'failed',available?'等待部署电脑按顺序执行':taskDisconnected,now(),available?null:now()).lastInsertRowid;
     return { ok: true, job: this.publicJob(this.raw(id)) };
   }
   async list(role, action, workId, requestId, latest = false) {
@@ -133,7 +134,7 @@ export class LingxingHost {
   }
   async finish(id, workerId, payload) {
     const row = this.raw(id);
-    if (!row || row.worker_id !== workerId) throw new BusinessError(409,'wrong_worker','这个同步任务由另一个执行窗口处理，请查看原窗口的进度');
+    if (!row || row.worker_id !== workerId) throw new BusinessError(409,'wrong_worker','当前插件无法处理此同步任务，请在库存系统中查看同步结果。');
     if (!active(row.state)) return { ok: true, job: this.publicJob(row), deduped: true };
     if (payload.error) this.fail(id, String(payload.error).slice(0,1000));
     else {
@@ -141,11 +142,11 @@ export class LingxingHost {
       try {
         const target = JSON.parse(row.target_json);
         const current = await this.authorize(row.role,target,false);
-        if (JSON.stringify(current) !== JSON.stringify(target)) throw new BusinessError(409,'sync_target_changed','同步期间单据查询信息已变更，请按最新信息重新同步');
+        if (JSON.stringify(current) !== JSON.stringify(target)) throw new BusinessError(409,'sync_target_changed','同步范围的信息已变更，请按最新信息重新同步');
         if (target.action === 'metrics' && JSON.stringify(capture?.items?.map(item=>item.asin).sort()) !== JSON.stringify(target.asins)) {
           throw new BusinessError(409,'capture_scope_mismatch','领星返回的 ASIN 与本次请求范围不一致，未保存');
         }
-        if (!this.worker || this.worker.id !== workerId || this.raw(id).state !== 'running') throw new BusinessError(409,'worker_disconnected',disconnected);
+        if (!this.worker || this.worker.id !== workerId || this.raw(id).state !== 'running') throw new BusinessError(409,'worker_disconnected',taskDisconnected);
         const onSaved = result => {
           this.db.prepare("UPDATE lingxing_sync_jobs SET state='succeeded',message=?,capture_json=?,result_json=?,finished_at=? WHERE id=?")
             .run(`同步成功，已保存 ${result.updated} ${target.action==='metrics'?'个 ASIN':'条包裹商品记录'}`,JSON.stringify(capture),JSON.stringify({updated:result.updated,capturedAt:result.capturedAt}),now(),id);

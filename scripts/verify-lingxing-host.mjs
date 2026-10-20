@@ -12,6 +12,9 @@ const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-host-'));
 await fs.mkdir(path.join(state,'data'));
 createInventoryDatabase({databasePath:path.join(state,'data',INVENTORY_DATABASE_NAME)});
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID();
+// 本团询库须有型号来源；给现有合成墨盒批次明确一团归属，不改变库存量。
+db.db.prepare("UPDATE stock_batches SET source_team='一团' WHERE model='SYNTH-INK-001'").run();
+assert.ok(db.visibleStockBatchKeys('SYNTH-INK-001','墨盒','一团').size>0);
 db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE model='SYNTH-TONER-001'").run();
 const common={model:'SYNTH-TONER-001',fnsku:'TEST-FNSKU-HOST-01',department:'一团',store:'AUS',operator:'同步测试',role:'operation-1',quantity:20};
 const a=db.createInquiry({...common,asin:'BTEST00001',requestId:rid()}).record;
@@ -84,7 +87,7 @@ try {
  assert.deepEqual(db.getInquiry(a.id).lingxing,previousMetric);assert.equal(db.syncState().dataVersion,previousVersion);check('任务成功状态写入失败时，指标和版本同事务回滚，不留下半次保存');
  let row=db.getInquiry(a.id);row=db.reviewInquiry({id:row.id,role:'business',decision:'approve',approvedQuantity:20,expectedRevision:row.revision,requestId:rid()}).record;
  row=db.replyInquiry({id:row.id,role:'purchasing',supplierQuantity:10,shippingWarehouse:'CA',expectedRevision:row.revision,requestId:rid()}).record;
- row=db.archiveInquiry({id:row.id,role:'assistant-1',plan:'TEST',date:'2026-09-10',version:'V1',expectedRevision:row.revision,requestId:rid()}).record;
+ row=db.archiveInquiry({id:row.id,role:'purchasing',plan:'TEST',date:'2026-09-10',version:'V1',expectedRevision:row.revision,requestId:rid()}).record;
  const snapshot=row.lingxing;
  const refresh=(await submit([same.id])).job;await execute('claim');await finish(refresh.id,[metric(a.asin,100)]);assert.deepEqual(db.getInquiry(a.id).lingxing,snapshot);check('后续刷新缓存不修改归档指标快照');
  const logistics=(await api('/api/lingxing/jobs','operation-1',{action:'logistics',workId:work.id,requestId:rid()},202)).job;await execute('claim');

@@ -8,11 +8,12 @@ import { useSessionDraft } from "../hooks/useSessionDraft";
 
 
 type PendingRequest = { previewToken: string; payloadKey: string; requestId: string };
-type TransitDraft = { preview: TransitImportPreview | null; statusPreview: TransitStatusPreview | null; importRequest: PendingRequest | null; statusRequest: PendingRequest | null; uncertainImport: boolean; uncertainStatus: boolean };
-const emptyDraft: TransitDraft = { preview: null, statusPreview: null, importRequest: null, statusRequest: null, uncertainImport: false, uncertainStatus: false };
+type TransitDraft = { preview: TransitImportPreview | null; statusPreview: TransitStatusPreview | null; importRequest: PendingRequest | null; statusRequest: PendingRequest | null; uncertainImport: boolean; uncertainStatus: boolean; importYear?: string; importYearRequired?: boolean; importFileName?: string };
+const emptyDraft: TransitDraft = { preview: null, statusPreview: null, importRequest: null, statusRequest: null, uncertainImport: false, uncertainStatus: false, importYear: "", importYearRequired: false, importFileName: "" };
+const hasMonthDayOnly = (value: string) => /^\d{1,2}[./-]\d{1,2}$/.test(value.trim()) || /^\d{1,2}月\d{1,2}日$/.test(value.trim());
 
 export function Requirement3View({ role }: { role: Role }) {
-  const [draft, setDraft, { ready, storageError }] = useSessionDraft(role, "transit-preview", emptyDraft);
+  const [draft, setDraft, { ready, storageError }] = useSessionDraft(role, "transit-preview", emptyDraft, "无法恢复在途导入或物流更新内容，请确认提交结果并重核上传文件");
   const { preview, statusPreview, uncertainImport, uncertainStatus } = draft;
   const setPreview = (value: TransitImportPreview | null) => setDraft(current => ({ ...current, preview: value }));
   const setStatusPreview = (value: TransitStatusPreview | null) => setDraft(current => ({ ...current, statusPreview: value }));
@@ -22,6 +23,7 @@ export function Requirement3View({ role }: { role: Role }) {
   const [notice, setNotice] = useState<NoticeMessage | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const statusFileInput = useRef<HTMLInputElement>(null);
+  const importFile = useRef<File | null>(null);
   const contextGeneration = useRef(0);
   const queryClient = useQueryClient();
   const transitAccess = TRANSIT_ROLES.includes(role);
@@ -29,25 +31,33 @@ export function Requirement3View({ role }: { role: Role }) {
   useEffect(() => {
     contextGeneration.current += 1;
     setNotice(null);
+    importFile.current = null;
     if (fileInput.current) fileInput.current.value = "";
     if (statusFileInput.current) statusFileInput.current.value = "";
+    return () => { contextGeneration.current += 1; };
   }, [role]);
 
   const blockingErrors = preview?.validation.errors ?? [];
-  const canImport = ready && Boolean(preview?.previewToken) && blockingErrors.length === 0 && busy === null;
+  const importErrors = blockingErrors.filter(error => error.code !== "date_year_required");
+  const importYearRequired = draft.importYearRequired ?? Boolean(preview?.dateYearRequired || preview?.rows.some(row => hasMonthDayOnly(row.data.rawDate ?? "")));
+  const importYear = draft.importYear ?? "";
+  const validImportYear = /^\d{4}$/.test(importYear) && Number(importYear) >= 1900 && Number(importYear) <= 2200;
+  const yearConfirmed = !importYearRequired || validImportYear && preview?.dateYear === Number(importYear);
+  const canImport = ready && Boolean(preview?.previewToken) && blockingErrors.length === 0 && busy === null && !uncertainStatus && (uncertainImport || yearConfirmed);
   const isCurrentContext = (generation: number) => contextGeneration.current === generation;
 
 
-  const upload = async (file?: File) => {
-    if (!ready || !transitAccess || !file) return;
-    setDraft(current => ({ ...current, importRequest: null }));
+  const upload = async (file?: File, dateYear?: number) => {
+    if (!ready || !transitAccess || !file || busy !== null || uncertainImport || uncertainStatus) return;
+    importFile.current = file;
+    setDraft(current => ({ ...current, importRequest: null, importYear: dateYear === undefined ? "" : String(dateYear), importYearRequired: dateYear !== undefined, importFileName: file.name }));
     const generation = contextGeneration.current;
     setBusy("preview"); setPreview(null); setStatusPreview(null); setNotice(null);
     try {
-      const result = await previewTransitImport(role, file, { dateYear: new Date().getFullYear() });
+      const result = await previewTransitImport(role, file, { dateYear });
       if (!isCurrentContext(generation)) return;
-      setPreview(result);
-      const errors = result.validation.errors;
+      setDraft(current => ({ ...current, preview: result, importYearRequired: dateYear !== undefined || result.dateYearRequired === true }));
+      const errors = result.validation.errors.filter(error => error.code !== "date_year_required");
       if (errors.length > 0) setNotice({ kind: "error", text: errors[0].message });
     } catch (error) {
       if (isCurrentContext(generation)) { setPreview(null); setNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) }); }
@@ -55,12 +65,13 @@ export function Requirement3View({ role }: { role: Role }) {
   };
 
   const uploadStatus = async (file?: File) => {
-    if (!ready || !transitAccess || !file) return;
-    setDraft(current => ({ ...current, statusRequest: null }));
+    if (!ready || !transitAccess || !file || busy !== null || uncertainImport || uncertainStatus) return;
+    importFile.current = null;
+    setDraft(current => ({ ...current, statusRequest: null, importYear: "", importYearRequired: false, importFileName: "" }));
     const generation = contextGeneration.current;
     setBusy("status-preview"); setPreview(null); setStatusPreview(null); setNotice(null);
     try {
-      const result = await previewTransitStatus(role, file, { dateYear: new Date().getFullYear() });
+      const result = await previewTransitStatus(role, file);
       if (!isCurrentContext(generation)) return;
       setStatusPreview(result);
       if (result.errors.length > 0) setNotice({ kind: "error", text: result.errors[0].message });
@@ -131,7 +142,8 @@ export function Requirement3View({ role }: { role: Role }) {
       setUncertainImport(false);
       setNotice({ kind: "success", text: `已导入 ${result.rowCount} 条在途记录。` });
       setPreview(null); 
-      setDraft(current => ({ ...current, importRequest: null }));
+      importFile.current = null;
+      setDraft(current => ({ ...current, importRequest: null, importYear: "", importYearRequired: false, importFileName: "" }));
       try {
         await Promise.all([queryClient.invalidateQueries({ queryKey: ["inventory", "catalog"] }, {throwOnError:true}), queryClient.invalidateQueries({ queryKey: ["audit"] }, {throwOnError:true})]);
       } catch (error) {
@@ -154,27 +166,41 @@ export function Requirement3View({ role }: { role: Role }) {
       {transitAccess && <section aria-label="表格导入"><div className="transit-toolbar">
         <label className="btn btn-primary" htmlFor="transit-import-file" aria-disabled={!ready||busy!==null||uncertainImport||uncertainStatus}>{busy === "preview" ? "正在预览…" : "导入在途表格"}</label>
         <input ref={fileInput} id="transit-import-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={!ready || busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void upload(event.target.files?.[0])} />
-        <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={!ready||busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入更新物流表格"}</label>
+        <label className="btn btn-ghost" htmlFor="transit-status-file" aria-disabled={!ready||busy!==null||uncertainImport||uncertainStatus}>{busy === "status-preview" ? "正在预览…" : "导入物流状态更新表"}</label>
         <input ref={statusFileInput} id="transit-status-file" className="visually-hidden" type="file" accept=".xlsx,.csv" disabled={!ready || busy !== null || uncertainImport || uncertainStatus || !transitAccess} onChange={(event) => void uploadStatus(event.target.files?.[0])} />
       </div></section>}
+
+      {transitAccess && importYearRequired && <section aria-label="在途文件年份">
+        <p>{draft.importFileName || preview?.fileName}：文件含只有月日的日期，请明确选择文件年份后重新预览。已有完整日期不会改变。</p>
+        <div className="transit-toolbar">
+          <label className="field"><span>文件年份</span><input aria-label="文件年份" type="number" min="1900" max="2200" step="1" value={importYear} disabled={!ready || busy !== null || uncertainImport || uncertainStatus} onChange={event => {
+            if (busy !== null || uncertainImport || uncertainStatus) return;
+            setDraft(current => ({ ...current, importYear: event.target.value, preview: null, importRequest: null }));
+            setNotice(importFile.current ? null : { kind: "warning", text: "年份已更改，请重新上传原文件以重新预览。" });
+          }} /></label>
+          <button type="button" className="btn btn-primary" disabled={!ready || busy !== null || uncertainImport || uncertainStatus || !validImportYear || !importFile.current} onClick={() => { if (importFile.current && validImportYear) void upload(importFile.current, Number(importYear)); }}>按所选年份重新预览</button>
+        </div>
+        {importYear !== "" && !validImportYear && <p className="field-error" role="alert">文件年份须为 1900 至 2200 的四位数字。</p>}
+        {!importFile.current && <p>更改年份需要重新上传原文件；已恢复且年份不变的预览仍可确认。</p>}
+      </section>}
 
       {statusPreview && <section className="transit-status-section" aria-labelledby="transit-status-title">
         <div className="transit-status-header">
           <div>
-            <h2 id="transit-status-title">物流状态更新</h2><p>预览已读取，尚未保存。</p>
+            <h2 id="transit-status-title">物流状态更新预览</h2><p>尚未保存。</p>
           </div>
 
         </div>
         {statusPreview && <div className="transit-status-preview">
           {statusPreview.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{statusPreview.errors.map((error, index) => <li key={`${error.row}-${error.code}-${index}`}>{error.message}</li>)}</ul></div>}
           <div className="transit-status-summary" aria-label="物流状态预览统计">
-            <span>计划编号 <strong>{statusPreview.totalRows}</strong> 条</span>
-            <span>匹配计划编号 <strong>{statusPreview.matchedPlanCount}</strong> 条</span>
-            <span>未匹配计划编号 <strong>{statusPreview.unmatchedPlanCount}</strong> 个</span>
+            <span>文件记录 <strong>{statusPreview.totalRows}</strong> 行</span>
+            <span>可更新的发货计划 <strong>{statusPreview.matchedPlanCount}</strong> 个</span>
+            <span>无可更新记录的发货计划 <strong>{statusPreview.unmatchedPlanCount}</strong> 个</span>
           </div>
           {statusPreview.duplicatePlanCount > 0 && <div className="callout callout-warn">
-            <div>有 {statusPreview.duplicatePlanCount} 个计划重复。</div>
-            <ul>{statusPreview.duplicatePlans.map((item) => <li key={item.plan}>计划编号 {item.plan}（文件行号 {item.sourceRows.join("、")}），最终采用第 {item.finalSourceRow ?? "—"} 行</li>)}</ul>
+            <div>文件中有 {statusPreview.duplicatePlanCount} 个发货计划重复出现。</div>
+            <ul>{statusPreview.duplicatePlans.map((item) => <li key={item.plan}>发货计划号 {item.plan}（文件行号 {item.sourceRows.join("、")}），{item.finalSourceRow === null ? "这些行均未填写物流状态。" : `采用第 ${item.finalSourceRow} 行的物流状态`}</li>)}</ul>
           </div>}
           {statusPreview.unmatchedPlanCount > 0 && <div className="callout callout-warn">
             <div>以下 {statusPreview.unmatchedPlanCount} 个计划没有可更新的在途记录</div>
@@ -182,7 +208,7 @@ export function Requirement3View({ role }: { role: Role }) {
           </div>}
           <div className="table-wrap scroll-x transit-preview-scroll">
             <table className="data-table transit-status-table">
-              <thead><tr><th>文件行号</th><th>计划编号</th><th>型号</th><th>发货时间</th><th>版本号</th><th>FNSKU</th><th>当前物流状态</th><th>更新为</th><th>在途件数</th></tr></thead>
+              <thead><tr><th>文件行号</th><th>发货计划号</th><th>型号</th><th>发货时间</th><th>版本号</th><th>FNSKU</th><th>当前物流状态</th><th>更新为</th><th>在途件数</th></tr></thead>
               <tbody>{statusPreview.updates.length === 0
                 ? <tr><td colSpan={9}>没有可更新的在途明细</td></tr>
                 : statusPreview.updates.map((update) => <tr key={`${update.sourceRow}-${update.id}`}>
@@ -198,15 +224,15 @@ export function Requirement3View({ role }: { role: Role }) {
                 </tr>)}</tbody>
             </table>
           </div>
-          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!ready || !statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "正在更新…" : uncertainStatus?"重试确认":"确认更新物流"}</button></div>
+          <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!ready || !statusPreview.canApply || busy !== null} onClick={() => void applyStatus()}>{busy === "status-apply" ? "正在更新…" : uncertainStatus?"请重试确认":"确认更新物流状态"}</button></div>
         </div>}
       </section>}
 
 
-      {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>预览已读取，尚未导入。</p><p>{preview.rows.length} 条记录</p>{preview.validation.errors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{preview.validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
-        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>ITEM</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>计划号</th><th>出货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
-      <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "正在导入…" : uncertainImport?"重试确认":"确认导入"}</button></div></section>}
-      {!preview && !statusPreview && !notice && <EmptyState title="尚未导入" />}
+      {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>待导入 {preview.rows.length} 条在途库存记录。</p>{importErrors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{importErrors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
+        <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>型号</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>发货计划号</th><th>发货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
+      <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "正在导入…" : uncertainImport?"请重试确认":"确认导入在途库存"}</button></div></section>}
+      {!preview && !statusPreview && !notice && <EmptyState title={transitAccess ? "未导入在途库存表格" : "无法导入在途库存"} />}
     </div>
   );
 }

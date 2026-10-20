@@ -7,7 +7,7 @@ import {spawn, execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import {pathToFileURL} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
-import {createInventoryDatabase, InventoryDatabase, migrateInventoryDatabaseToCurrent, ROLES} from '../inventory-db.mjs';
+import {createInventoryDatabase, InventoryDatabase, migrateInventoryDatabaseToCurrent, INVENTORY_SCHEMA_VERSION, ROLES} from '../inventory-db.mjs';
 import {freePort, createTestInstanceId, waitForOwnedServer} from './test-server-ownership.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -47,7 +47,11 @@ const route = (kind, row, action) => `/api/${kind}/${row.id}/${action}`;
 let batchIndex = 0;
 const batches = [];
 async function createAllocation(quantity = 100, batch = batches[batchIndex++], model = 'INK-APPROVAL') {
-  return (await api('/api/allocations', 'operation-1', {model, sourceBatchKey: batch.batchKey, plan: batch.plan, date: batch.date, version: batch.version, quantity, department: '一团', store: 'AUS', operator: '隔离墨盒审批', fnsku: '00001-INK', asin: 'BINKAPV036', operatorNote: '原申请备注', requestId: rid()})).record;
+  const row = (await api('/api/allocations', 'operation-1', {model, sourceBatchKey: batch.batchKey, plan: batch.plan, date: batch.date, version: batch.version, quantity, department: '一团', store: 'AUS', operator: '隔离墨盒审批', fnsku: '00001-INK', asin: 'BINKAPV036', operatorNote: '原申请备注', requestId: rid()})).record;
+  // This suite preserves the retained v36 purchasing chain. Fresh v37 behavior and
+  // genuine schema36 migration are covered by verify-ink-workflow-v37.mjs.
+  db.db.prepare('UPDATE allocation_documents SET ink_workflow_stage=NULL,alan_deadline_at=NULL WHERE id=?').run(row.id);
+  return db.getDocument(row.id);
 }
 async function createInquiry(model = 'INK-APPROVAL', quantity = 100) {
   return (await api('/api/inquiries', 'operation-1', {model, quantity, department: '一团', store: 'AUS', operator: '隔离墨盒询库', fnsku: '00002-INK', asin: 'BINKINQ036', operatorNote: '原申请备注', requestId: rid()})).record;
@@ -68,7 +72,7 @@ async function complete(kind, {alanQuantity = 70, supplierQuantity = 60, actor =
   return archive(kind, await reply(kind, row, supplierQuantity, actor), actor);
 }
 const current = (kind, row) => kind === 'allocations' ? db.getDocument(row.id) : db.getInquiry(row.id);
-function assertStage(kind, row, stage, text) {assert.equal(kind === 'allocations' ? row.procurementStatus : row.status, stage); assert.equal(row.statusText, text);}
+function assertStage(kind, row, stage, text) {assert.equal(kind === 'allocations' ? row.inkWorkflowStage ?? row.procurementStatus : row.status, stage); assert.equal(row.statusText, text);}
 function assertFinal(row, quantity, alanQuantity) {for (const field of ['quantity', 'requestedQuantity', 'approvedQuantity', 'supplierQuantity']) assert.equal(row[field], quantity, field); assert.equal(row.alanQuantity, alanQuantity);}
 function assertLock(row, locked, issued = 0) {const found = db.getDocument(row.id); assert.equal(found.lockedQuantity, locked); assert.equal(found.issuedQuantity, issued); quantities.push({id: row.id, stage: found.statusText, locked, issued, batch: db.getBalance(found.batchKey)});}
 function source(kind, row) {return db.getRelocationCandidates().find(item => item[kind === 'allocations' ? 'allocationId' : 'inquiryId'] === row.id);}
@@ -97,8 +101,8 @@ try {
   for (const row of imported.rows) await api(`/api/transit/${row.id}/on-shelf`, 'assistant-1', {...common(row), yes: 'YES'});
   batches.push(...(await api('/api/inventory/catalog', 'admin')).stockDetails['INK-APPROVAL']);
   db.db.prepare('INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at) VALUES(?,?,0,0,?)').run('TONER-APPROVAL', '硒鼓', new Date().toISOString());
-  assert.equal(db.db.prepare('PRAGMA user_version').get().user_version, 36);
-  check('schema36隔离服务及64个独立墨盒来源批次就绪，未使用正式数据');
+  assert.equal(db.db.prepare('PRAGMA user_version').get().user_version, INVENTORY_SCHEMA_VERSION);
+  check('当前schema隔离服务及64个明确legacy链墨盒来源批次就绪，未使用正式数据');
 
   let allocation = await createAllocation(); assertLock(allocation, 100);
   await crossCheckAllocation(allocation, 'entry', 'operation-1', 0, 100);
@@ -208,11 +212,11 @@ try {
   const toner = await review('inquiries', await createInquiry('TONER-APPROVAL'));
   assert.equal(toner.status, 'pending_purchasing'); await reject(route('inquiries', toner, 'alan-review'), 'alan', alanBody(toner), 409, 'invalid_inquiry_status');
   await reject(route('inquiries', toner, 'reply'), 'alan', replyBody('inquiries', toner), 403, 'alan_write_forbidden');
-  const tonerZero = await reply('inquiries', toner, 0); assert.equal(tonerZero.status, 'pending_assistant');
-  await reject(route('inquiries', tonerZero, 'archive'), 'purchasing', archiveBody('inquiries', tonerZero), 403);
-  const tonerDone = await archive('inquiries', tonerZero, 'assistant-1'); assert.equal(tonerDone.status, 'archived');
-  await reject(route('inquiries', tonerDone, 'recall'), 'business', common(tonerDone), 409);
-  check('Alan仅墨盒独立审核可写，旧最终回复接口403；后续阶段与旧版本不得覆写，助理不得完成新墨盒链，硒鼓0回复仍由助理归档');
+  const tonerZero = await reply('inquiries', toner, 0); assert.equal(tonerZero.status, 'rejected');
+  await reject(route('inquiries', tonerZero, 'archive'), 'purchasing', archiveBody('inquiries', tonerZero), 409);
+  await reject(route('inquiries', tonerZero, 'archive'), 'assistant-1', archiveBody('inquiries', tonerZero), 403);
+  await reject(route('inquiries', tonerZero, 'recall'), 'business', common(tonerZero), 409);
+  check('Alan仅墨盒独立审核可写，旧最终回复接口403；后续阶段与旧版本不得覆写，助理不得完成legacy墨盒采购链，硒鼓0回复直接拒绝');
 
   for (const kind of ['allocations', 'inquiries']) {
     const row = await ready(kind), pa = alanBody(row), pp = replyBody(kind, row, 60);
@@ -284,7 +288,7 @@ try {
     const captured = snapshot(); assert.equal((await worker('finish', {id: job.id, capture})).deduped, true); assert.deepEqual(snapshot(), captured);
     work = db.getRelocationWorkItem(work.id); const relocation = db.getUpgrade(work.upgradeId).relocations[0];
     const version = 'CHAIN-' + kind;
-    await api(`/api/upgrades/relocations/${relocation.id}/complete`, 'logistics', {...common(relocation), completedQuantity: 60, inProgressQuantity: 0, newVersion: version, targetWarehouse: 'SyntheticWarehouseA'});
+    await api(`/api/upgrades/relocations/${relocation.id}/complete`, 'logistics', {...common(relocation), completedQuantity: 60, inProgressQuantity: 0, ...(kind === 'inquiries' ? {packPerBox: '10'} : {}), newVersion: version, targetWarehouse: 'SyntheticWarehouseA'});
     const upgraded = (await api('/api/upgrades/direct', 'purchasing', {model: row.model, sourceVersion: version, requestId: rid()})).upgrade;
     assert.equal(upgraded.initialQuantity, 60);
     const blockers = kind === 'allocations' ? db.allocationDownstream(row.id) : db.inquiryDownstream(row.id);
@@ -305,7 +309,7 @@ try {
     const file = path.join(out, `inquiry-${label}.xlsx`); await fs.writeFile(file, Buffer.from(await response.arrayBuffer()));
     const read = JSON.parse(execFileSync(process.env.ASTER_TEST_PYTHON || 'python', [path.join(root, 'scripts/fixtures/read-inquiry-export.py'), file], {encoding: 'utf8', windowsHide: true}));
     assert.deepEqual(read.rows[0], headers); assert.equal(read.maxColumn, 13); if (label === 'empty') assert.equal(read.maxRow, 1);
-    else {assert(read.rows.some(row => row[2] === null && row[3] === null)); assert(read.rows.some(row => row[2] === 0 && row[3] === 'Alan独立备注\n第二行')); assert(read.rows.some(row => row[1] === 60 && row[2] === 70 && row[4] === 60)); assert(read.rows.some(row => row[10] === '00002-INK'));}
+    else {assert(read.rows.some(row => row[2] === null && row[3] === null)); assert(read.rows.some(row => row[2] === 0 && row[3] === 'Alan独立备注\n第二行')); assert(read.rows.some(row => row[1] === 80 && row[2] === 70 && row[4] === 60)); assert(read.rows.some(row => row[10] === '00002-INK'));}
     assert.deepEqual(snapshot(), before); downloads.push({file, columns: read.maxColumn, rows: read.maxRow - 1, reader: 'openpyxl', databaseUnchanged: true});
   }
   for (const role of ROLES.filter(role => !['admin', 'purchasing', 'logistics'].includes(role))) assert.equal((await fetch(base + '/api/approvals/inquiries/export', {headers: {'x-role': role}})).status, 403);
@@ -335,7 +339,7 @@ try {
   const oldInquiry = () => {const row = old.createInquiry({role: 'operation-1', model: 'SYNTH-INK-001', quantity: 100, department: '一团', store: 'AUS', operator: '旧询库', fnsku: '000OLDINQ', asin: 'BOLDINQ036', requestId: rid()}).record; return old.reviewInquiry({id: row.id, role: 'business', decision: 'approve', approvedQuantity: 80, businessNote: '旧商务80', ...common(row)}).record;};
   const oldInquiryPending = oldInquiry(), oldInquiryReplyBase = oldInquiry(), oldInquiryReply = old.replyInquiry({id: oldInquiryReplyBase.id, role: 'alan', supplierQuantity: 60, shippingWarehouse: 'CA', procurementNote: '旧Alan最终回复事实', ...common(oldInquiryReplyBase)}).record;
   const beforeMigration = snapshot(old.db), beforeLock = old.getBalance(oldBatch.batch_key), oldPendingEvents = old.history(oldPending.id).events; assert.equal(old.db.prepare('PRAGMA user_version').get().user_version, 35); old.close();
-  const migration = migrateInventoryDatabaseToCurrent({databasePath: legacyPath}); assert.equal(migration.fromVersion, 35); assert.equal(migration.toVersion, 36);
+  const migration = migrateInventoryDatabaseToCurrent({databasePath: legacyPath}); assert.equal(migration.fromVersion, 35); assert.equal(migration.toVersion, INVENTORY_SCHEMA_VERSION);
   const migrated = new InventoryDatabase(legacyState), pendingMigrated = migrated.getDocument(oldPending.id);
   assertStage('allocations', pendingMigrated, 'pending_alan', '待Alan审核'); assert.equal(pendingMigrated.alanQuantity, null); assert.equal(pendingMigrated.supplierQuantity, null); assert.equal(pendingMigrated.approvedQuantity, 80); assert.equal(pendingMigrated.businessNote, '迁移商务事实');
   assert.deepEqual(pendingMigrated.events, oldPendingEvents); assert.deepEqual(migrated.db.prepare('SELECT * FROM inventory_ledger').all(), beforeMigration.inventory_ledger); assert.deepEqual(migrated.getBalance(oldBatch.batch_key), beforeLock);
@@ -349,6 +353,6 @@ try {
 } catch (error) {failure = error.stack; throw error;}
 finally {
   await stop(); db?.close();
-  await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({version: execFileSync('git', ['rev-parse', 'HEAD'], {cwd: root, encoding: 'utf8'}).trim(), schemaVersion: 36, state, base, checks, rejectedRequests, quantities, downloads, migrationEvidence, downstreamEvidence, raceEvidence, crossModuleEvidence, failure: failure ?? null, productionWrites: 0, realLingxingRequests: 0}, null, 2));
+  await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({version: execFileSync('git', ['rev-parse', 'HEAD'], {cwd: root, encoding: 'utf8'}).trim(), schemaVersion: INVENTORY_SCHEMA_VERSION, allocationFixtureMode: 'retained-legacy-v36', state, base, checks, rejectedRequests, quantities, downloads, migrationEvidence, downstreamEvidence, raceEvidence, crossModuleEvidence, failure: failure ?? null, productionWrites: 0, realLingxingRequests: 0}, null, 2));
 }
 console.log(`INK_APPROVAL_V36_PASS ${checks.length} groups; ${rejectedRequests.length} rejected requests unchanged`);

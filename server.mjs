@@ -25,8 +25,24 @@ const maxUploadBytes = 8 * 1024 * 1024;
 /* 统一 SQLite 是库存业务数据的唯一权威来源。数据库缺失或版本不匹配时启动失败，
    禁止自动创建空库后继续运行。 */
 const inventory = new InventoryDatabase(stateRoot);
+inventory.advanceExpiredInkAllocations();
 inventory.refreshApprovalDisplay();
 const lingxingHost = new LingxingHost(inventory, { authorize: authorizeLingxingTarget });
+let alanDeadlineTimer;
+function scheduleAlanDeadline() {
+  clearTimeout(alanDeadlineTimer);
+  const deadline = inventory.nextAlanDeadline();
+  if (deadline) alanDeadlineTimer = setTimeout(advanceAlanDeadline, Math.max(0, Date.parse(deadline)-Date.now())).unref();
+}
+function advanceAlanDeadline() {
+  try {
+    inventory.advanceExpiredInkAllocations();
+    scheduleAlanDeadline();
+  } catch (error) {
+    console.error('Alan到期推进失败，1秒后重试', error.message);
+    alanDeadlineTimer = setTimeout(advanceAlanDeadline,1000).unref();
+  }
+}
 
 function fileSha256(filePath) {
   try {
@@ -201,6 +217,7 @@ function approvalResultForRole(result, role) {
     ...result,
     ...(result.record ? { record: approvalDocumentForRole(result.record, role) } : {}),
     ...(result.document ? { document: approvalDocumentForRole(result.document, role) } : {}),
+    ...(result.inquiry ? { inquiry: approvalDocumentForRole(result.inquiry, role) } : {}),
   };
 }
 
@@ -295,7 +312,7 @@ function requirePositiveInteger(value, label = "数量") {
 
 function requireNonNegativeInteger(value, label = "数量") {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) throw new BusinessError(400, "invalid_quantity", `${label}请填写 0 或正整数`);
+  if (value == null || String(value).trim() === "" || !Number.isInteger(parsed) || parsed < 0) throw new BusinessError(400, "invalid_quantity", `${label}请填写 0 或正整数`);
   return parsed;
 }
 
@@ -458,9 +475,23 @@ async function handleAllocationsApi(request, response, pathname) {
       fnsku: requireNonBlank(payload, "fnsku", "已贴 FNSKU"),
       asin: requireNonBlank(payload, "asin", "ASIN").toUpperCase(),
       operatorNote: String(payload.operatorNote ?? "").trim(),
+      zeroAvailableConfirmed: payload.zeroAvailableConfirmed,
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     });
     sendJson(response, 200, approvalResultForRole(result, role));
+    return true;
+  }
+
+  const conversionMatch = pathname.match(/^\/api\/allocations\/(\d+)\/(transfer-inquiry|conversion-decision)$/);
+  if (conversionMatch && request.method === 'POST') {
+    const id = Number(conversionMatch[1]), action = conversionMatch[2];
+    await getDocumentForRole(id,role);
+    const payload = await parseJsonRequest(request);
+    const common = {id,role,expectedRevision:Number(payload.expectedRevision),requestId:requireNonBlank(payload,'requestId','提交编号')};
+    const result = action === 'transfer-inquiry' ? inventory.transferAllocationToInquiry({...common,
+      approvedQuantity:requirePositiveInteger(payload.approvedQuantity,'商务审核数量'),businessNote:String(payload.businessNote ?? '').trim()})
+      : inventory.decideAllocationConversion({...common,decision:requireNonBlank(payload,'decision','是否接受转询库')});
+    sendJson(response,200,approvalResultForRole(result,role));
     return true;
   }
 
@@ -491,8 +522,8 @@ async function handleAllocationsApi(request, response, pathname) {
     const common = { id, role, expectedRevision: Number(payload.expectedRevision), requestId: requireNonBlank(payload, "requestId", "提交编号") };
     let result;
     if (action === "alan-review") {
-      if (payload.alanQuantity == null || String(payload.alanQuantity).trim() === "") throw new BusinessError(400, "missing_alan_quantity", "请填写Alan审核数量");
-      result = inventory.reviewAlanAllocation({ ...common, alanQuantity: requireNonNegativeInteger(payload.alanQuantity, "Alan审核数量"), alanNote: String(payload.alanNote ?? "").trim() });
+      if (payload.decision !== 'reject' && (payload.alanQuantity == null || String(payload.alanQuantity).trim() === "")) throw new BusinessError(400, "missing_alan_quantity", "请填写Alan审核数量");
+      result = inventory.reviewAlanAllocation({ ...common,decision:payload.decision, alanQuantity: payload.decision === 'reject' ? null : requireNonNegativeInteger(payload.alanQuantity, "Alan审核数量"), alanNote: String(payload.alanNote ?? "").trim() });
     } else if (action === "reply") {
       if (payload.supplierQuantity == null || String(payload.supplierQuantity).trim() === "") throw new BusinessError(400, "missing_supplier_quantity", "请填写供应商库存回复，有货填数量，无货填 0");
       result = inventory.replyAllocation({ ...common, supplierQuantity: requireNonNegativeInteger(payload.supplierQuantity, "供应商库存回复"), procurementNote: String(payload.procurementNote ?? "").trim() });
@@ -521,7 +552,9 @@ async function handleAllocationsApi(request, response, pathname) {
   const historyMatch = pathname.match(/^\/api\/allocations\/(\d+)\/history$/);
   if (historyMatch && request.method === "GET") {
     const id = Number(historyMatch[1]);
-    await getDocumentForRole(id, role, false);
+    const {category} = await getDocumentForRole(id, role, false);
+    const permission = await categoryPermissions(role,category);
+    if (!permission.summary || !permission.detail || !permission.expand) throw new BusinessError(403,'allocation_read_forbidden','当前角色无权查看此调拨记录');
     sendJson(response, 200, approvalResultForRole({ ok: true, ...inventory.history(id) }, role));
     return true;
   }
@@ -552,7 +585,8 @@ function filteredInquiryExport(visible, role, query) {
     .filter(item => (type === "all" || item.kind === type) && (category === "all" || item.record.category === category)
       && (progress === "all" || active(item))
       && (scope === "all" || ["purchasing", "logistics"].includes(role) && (item.kind === "inquiry"
-        ? item.record.status === "pending_purchasing" || item.record.category === "墨盒" && ["pending_alan", "pending_assistant"].includes(item.record.status)
+        ? item.record.category === "硒鼓" ? role === 'purchasing' && ['pending_purchasing','pending_assistant'].includes(item.record.status)
+          : item.record.status === "pending_purchasing" || ["pending_alan", "pending_assistant"].includes(item.record.status)
         : active(item) && item.record.category === "墨盒" && ["pending_alan", "pending_purchasing", "pending_archive"].includes(item.record.procurementStatus)))
       && (!keyword || [item.record.operator, item.record.model, item.record.asin, item.record.documentNo].some(value => value.toLocaleLowerCase().includes(keyword))));
   const groups = new Map();
@@ -565,9 +599,9 @@ function filteredInquiryExport(visible, role, query) {
 
 function inquiryExportWorkbook(records) {
   const headers = ["型号", "商务部审核数量", "Alan审核数量", "Alan备注", "供应商库存回复", "发货仓库", "采购备注", "调拨部门", "调拨店铺", "调拨运营", "已贴FNSKU", "提交时间", "状况"];
-  const rows = [headers, ...records.map(row => [row.model, row.approvedQuantity, row.alanQuantity, row.alanNote, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
+  const rows = [headers, ...records.map(row => [row.model, row.businessReviewedQuantity, row.alanQuantity, row.alanNote, row.supplierQuantity, row.shippingWarehouse, row.procurementNote,
     row.department, row.store, row.operator, row.fnsku, new Date(row.createdAt).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }),
-    row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "墨盒" && ["purchasing", "logistics"].includes(row.archivedByRole ?? "")) ? "已完成" : "" : row.statusText])];
+    row.status === "archived" ? (["assistant", "assistant-1", "assistant-2"].includes(row.archivedByRole ?? "") || row.category === "硒鼓" && row.archivedByRole === 'purchasing' || row.category === "墨盒" && ["purchasing", "logistics"].includes(row.archivedByRole ?? "")) ? "已完成" : "" : row.statusText])];
   const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("\r", "&#13;");
   const sheetRows = rows.map((row, r) => '<row r="' + (r + 1) + '" ht="' + Math.max(20, ...row.map(value => typeof value === "string" ? value.split(/\r\n|\r|\n/).length * 16 : 20)) + '" customHeight="1">' + row.map((value, c) => {
     const ref = String.fromCharCode(65 + c) + (r + 1), style = r === 0 ? ' s="1"' : '';
@@ -697,7 +731,7 @@ async function handleRelocationTemplate(request,response,pathname,role) {
         if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('RMA 不能为空或模板说明');
         const processed=processRelocationAddress(work.store,address);
         rows.push({sourceRow,record:{model:work.model,sourceVersion:work.sourceVersion,store:work.store,plan:work.plan,shipDate:work.shipDate},data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address,before:{rma:work.rma??'',relocationAddress:work.originalRelocationAddress??'',status:work.statusText},afterStatus:'待运营填写订单号'});
-      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message+'；本批未更新'}); }
+      } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message}); }
     }
 
     const fileSha256=hashBuffer(body),templateSha256=hashTemplate(RELOCATION_UPDATE_HEADERS);
@@ -733,7 +767,8 @@ async function handleApprovalsApi(request, response, pathname) {
   const exporting = pathname === "/api/approvals/inquiries/export";
   if ((pathname === "/api/approvals" || exporting) && request.method === "GET") {
     if (exporting && !["admin", "purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_export_forbidden", "仅管理员、采购和物流可导出询库明细");
-    const result = inventory.approvalView({ refreshDisplay: !exporting });
+    const includeHiddenCompletedAllocations = !exporting && new URL(request.url, "http://localhost").searchParams.get('includeHiddenCompletedAllocations') === '1';
+    const result = inventory.approvalView({ refreshDisplay: !exporting, includeHiddenCompletedAllocations });
     const sync = inventory.syncState();
     const visible = { allocations: [], inquiries: [] };
     for (const kind of ["allocations", "inquiries"]) {
@@ -753,7 +788,12 @@ async function handleApprovalsApi(request, response, pathname) {
       response.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "cache-control": "no-store",
         "content-disposition": "attachment; filename=inquiries.xlsx; filename*=UTF-8''" + encodeURIComponent("询库明细.xlsx") });
       response.end(content);
-    } else sendJson(response, 200, { ok: true, ...visible, sync });
+    } else {
+      const visibleAllocationIds = new Set(visible.allocations.map(record => record.id));
+      sendJson(response, 200, { ok: true, ...visible, sync,serverTime:new Date().toISOString(),
+        ...(includeHiddenCompletedAllocations ? { hiddenCompletedAllocationIds: result.hiddenCompletedAllocationIds.filter(id => visibleAllocationIds.has(id)) } : {}),
+      });
+    }
     return true;
   }
 
@@ -765,19 +805,28 @@ async function handleApprovalsApi(request, response, pathname) {
     const model = inventory.getModel(modelName);
     if (!model) throw new BusinessError(400, "unknown_model", `未知型号“${modelName}”`);
     await requireActions(role, model.category);
-    const department = requireNonBlank(payload, "department", "调拨部门");
-    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "调拨部门仅限一团 / 二团");
+    const department = requireNonBlank(payload, "department", "询库团队");
+    if (!allocationDepartments.includes(department)) throw new BusinessError(400, "invalid_department", "询库团队仅限一团 / 二团");
     ensureDocumentVisibility({ department }, role);
     sendJson(response, 200, approvalResultForRole(inventory.createInquiry({
       role, model: modelName, department,
       quantity: requirePositiveInteger(payload.quantity, "询库数量"),
       store: requireValidStoreCode(payload.store),
-      operator: requireNonBlank(payload, "operator", "调拨运营"),
+      operator: requireNonBlank(payload, "operator", "询库运营"),
       fnsku: requireNonBlank(payload, "fnsku", "已贴 FNSKU"),
       asin: requireNonBlank(payload, "asin", "ASIN").toUpperCase(),
       operatorNote: String(payload.operatorNote ?? "").trim(),
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     }), role));
+    return true;
+  }
+
+  const historyMatch = pathname.match(/^\/api\/inquiries\/(\d+)\/history$/);
+  if (historyMatch && request.method === 'GET') {
+    const document = await getInquiryForRole(Number(historyMatch[1]),role,false);
+    const permission = await categoryPermissions(role,document.category);
+    if (!permission.summary || !permission.detail || !permission.expand) throw new BusinessError(403,'inquiry_read_forbidden','当前角色无权查看此询库记录');
+    sendJson(response,200,approvalResultForRole({ok:true,document,events:document.events},role));
     return true;
   }
 
@@ -964,6 +1013,7 @@ async function handleUpgradesApi(request, response, pathname) {
       role,
       completedQuantity: requireNonNegativeInteger(payload.completedQuantity, "累计升级完数量"),
       inProgressQuantity: requireNonNegativeInteger(payload.inProgressQuantity, "升级中数量"),
+      packPerBox: payload.packPerBox,
       reversals: payload.reversals ?? [],
       newVersion: payload.newVersion,
       targetWarehouse: payload.targetWarehouse,
@@ -1410,7 +1460,7 @@ async function handleTransferUpdate(request,response,pathname,role,stage) {
       if(editable.every(c=>String(values[c]??'')===String(expected[c]??''))){unchangedCount++;continue;}
       const data={documentNo:no,revision:record.revision,stage,...Object.fromEntries(TRANSFER_EDITABLE[stage].map(k=>[k,String(values[fields.findIndex(([key])=>key===k)]??'')])),reversals:[]};
       const item={sourceRow,data},validated=inventory.validateTransferUpdate(item,stage,{preview:true});rows.push({...item,before:validated.before,after:validated.after,quantityDelta:validated.delta,receiptBatches:record.receiptBatches});
-    }catch(error){errors.push({sourceRow,message:(error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行：'+error.message)+'；本批未更新'});}
+    }catch(error){errors.push({sourceRow,message:(error.message.startsWith('工作表')?error.message:'工作表“转仓升级”第 '+sourceRow+' 行：'+error.message)});}
   }
   const fileSha256=hashBuffer(body),templateSha256=hashTemplate([stage,...headers]),proof=errors.length||!rows.length?null:inventory.createTransitPreviewToken({kind:'transfer_update',role,fileName,fileHash:fileSha256,templateHash:templateSha256,payload:{rows}});
   sendJson(response,200,{ok:true,fileName,stage,fileSha256,templateSha256,rows,errors,unchangedCount,previewToken:proof?.token});
@@ -1694,21 +1744,21 @@ async function authorizeLingxingTarget(role, target, requireActive) {
   const readable = async record => {
     const category = inventory.getModel(record.model).category;
     const permission = await categoryPermissions(role,category);
-    if (!permission.summary || !permission.detail || !permission.expand || !permission.actions) throw new BusinessError(403,'lingxing_scope_forbidden','当前岗位无权同步该类目单据');
+    if (!permission.summary || !permission.detail || !permission.expand || !permission.actions) throw new BusinessError(403,'lingxing_scope_forbidden','当前岗位无权同步该类目的领星信息');
     ensureDocumentVisibility(record,role);
   };
   if (target.action === 'metrics') {
     if (!['business','admin'].includes(role)) throw new BusinessError(403,'lingxing_sync_forbidden','仅商务或管理员可同步领星指标');
-    if (!Array.isArray(target.documents) || !target.documents.length) throw new BusinessError(400,'empty_sync_scope','当前筛选下没有可同步单据');
+    if (!Array.isArray(target.documents) || !target.documents.length) throw new BusinessError(400,'empty_sync_scope','当前筛选下没有可同步的调拨或询库记录');
     inventory.refreshApprovalDisplay();
     const documents = [], asins = new Set();
     for (const ref of target.documents) {
-      if (!['allocation','inquiry'].includes(ref.kind) || !Number.isInteger(ref.id) || ref.id<=0) throw new BusinessError(400,'invalid_sync_document','同步范围中的单据编号无效');
+      if (!['allocation','inquiry'].includes(ref.kind) || !Number.isInteger(ref.id) || ref.id<=0) throw new BusinessError(400,'invalid_sync_document','同步范围中的调拨或询库编号无效');
       const record = ref.kind==='allocation' ? inventory.getDocument(ref.id) : inventory.getInquiry(ref.id);
-      if (!record) throw new BusinessError(404,'sync_document_missing','同步单据不存在');
+      if (!record) throw new BusinessError(404,'sync_document_missing','对应调拨或询库记录不存在');
       await readable(record);
-      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_alan','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的单据已结束，请刷新后重新同步');
-      if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.model} · ${record.store} 的 ASIN“${record.asin}”不是10位有效格式，请核对原单据`);
+      if (requireActive && (ref.kind==='allocation' ? record.statusCode!=='pending' || record.approvalStatus==='rejected' : !['pending_business','pending_alan','pending_purchasing','pending_assistant'].includes(record.status))) throw new BusinessError(409,'sync_document_inactive','同步范围中的调拨或询库已结束，请刷新后重新同步');
+      if (!/^[A-Z0-9]{10}$/.test(record.asin)) throw new BusinessError(400,'invalid_sync_asin',`${record.model} · ${record.store} 的 ASIN“${record.asin}”不是10位有效格式，请核对原调拨或询库记录`);
       documents.push({kind:ref.kind,id:ref.id});asins.add(record.asin);
     }
     return {action:'metrics',documents,asins:[...asins].sort()};
@@ -1804,7 +1854,7 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       if (pathname !== "/api/audit") {
-        throw new BusinessError(404, "route_not_found", "库存流水接口未实现该路径");
+        throw new BusinessError(404, "route_not_found", "库存流水读取失败，请刷新后重试");
       }
       const search = new URL(request.url, "http://localhost").searchParams;
       const from = normalizeAuditBoundary(search.get("from"), "开始时间");
@@ -1958,10 +2008,13 @@ const server = http.createServer(async (request, response) => {
       ...(business && error.details !== undefined ? { details: approvalErrorDetailsForRole(error.details, requestRole(request)) } : {}),
       ...(business && error.requestNotApplied === true ? { requestNotApplied: true } : {}),
     });
+  } finally {
+    if (request.method === 'POST') scheduleAlanDeadline();
   }
 });
 
 server.listen(port, host, () => {
+  scheduleAlanDeadline();
   console.log(`Aster validation prototype: http://${host}:${port}/`);
 });
-server.on("close", () => inventory.close());
+server.on("close", () => {clearTimeout(alanDeadlineTimer);inventory.close();});

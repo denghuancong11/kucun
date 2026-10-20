@@ -10,6 +10,8 @@ import type {
   AuditPayload,
   AuditQuery,
   DocumentHistory,
+  InquiryHistory,
+  AuditDetailPayload,
   EffectivePermissions,
   InventoryCatalogPayload,
   InquiryExportFilters,
@@ -176,7 +178,7 @@ export async function downloadInquiryExport(role: Role, filters: InquiryExportFi
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
-    throw new Error("询库导出读取失败：" + (error instanceof Error ? error.message : "请检查网络后重试"));
+    throw new Error("询库明细导出失败：" + (error instanceof Error ? error.message : "请检查网络后重试"));
   }
 }
 
@@ -186,8 +188,8 @@ export function clearInquiryDisplay(role: Role, requestId: string): Promise<{ hi
   });
 }
 
-export function fetchApprovals(role: Role): Promise<ApprovalsPayload> {
-  return requestJson<ApprovalsPayload>("/api/approvals", role);
+export function fetchApprovals(role: Role, includeHiddenCompletedAllocations = false): Promise<ApprovalsPayload> {
+  return requestJson<ApprovalsPayload>("/api/approvals" + (includeHiddenCompletedAllocations ? "?includeHiddenCompletedAllocations=1" : ""), role);
 }
 
 export function reviewAllocation(role: Role, id: number, payload: ApprovalReview, context?: string): Promise<unknown> {
@@ -214,8 +216,20 @@ export function reviewInquiryByAlan(role: Role, id: number, payload: { alanQuant
   }, context);
 }
 
-export function reviewAllocationByAlan(role: Role, id: number, payload: { alanQuantity: number; alanNote: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+export function reviewAllocationByAlan(role: Role, id: number, payload: { alanQuantity?: number; alanNote: string; decision?: "reject"; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
   return requestJson(`/api/allocations/${id}/alan-review`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function transferAllocationToInquiry(role: Role, id: number, payload: { approvedQuantity: number; businessNote: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/transfer-inquiry`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function decideAllocationConversion(role: Role, id: number, payload: { decision: "accept" | "reject"; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/allocations/${id}/conversion-decision`, role, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   }, context);
 }
@@ -344,7 +358,7 @@ export function shipRelocationUpgrade(
 export function completeRelocationUpgrade(
   role: Role,
   id: number,
-  payload: { inProgressQuantity?: number; reversals?: {ledgerId:number;quantity:number}[]; sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  payload: { inProgressQuantity?: number; reversals?: {ledgerId:number;quantity:number}[]; sourceLineId?: number; completedQuantity: number; newVersion: string; targetWarehouse: string; packPerBox?: number; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
   return requestJson(`/api/upgrades/relocations/${id}/complete`, role, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -352,18 +366,18 @@ export function completeRelocationUpgrade(
   }, context);
 }
 
-async function requestUpload<T>(url: string, role: Role, file: File, options: { dateYear: number }): Promise<T> {
+async function requestUpload<T>(url: string, role: Role, file: File, options: { dateYear?: number } = {}): Promise<T> {
   return requestJson<T>(url, role, {
     method: "POST",
     headers: {
       "x-file-name": encodeURIComponent(file.name), "content-type": file.type || "application/octet-stream",
-      "x-date-year": String(options.dateYear),
+      ...(options.dateYear === undefined ? {} : { "x-date-year": String(options.dateYear) }),
     },
     body: file,
   });
 }
 
-export function previewTransitImport(role: Role, file: File, options: { dateYear: number }): Promise<TransitImportPreview> {
+export function previewTransitImport(role: Role, file: File, options: { dateYear?: number } = {}): Promise<TransitImportPreview> {
   return requestUpload<TransitImportPreview>("/api/transit/preview", role, file, options);
 }
 
@@ -382,7 +396,7 @@ export function fetchTransitImports(role: Role): Promise<TransitImportListPayloa
   return requestJson<TransitImportListPayload>("/api/transit/imports", role);
 }
 
-export function previewTransitStatus(role: Role, file: File, options: { dateYear: number }): Promise<TransitStatusPreview> {
+export function previewTransitStatus(role: Role, file: File, options: { dateYear?: number } = {}): Promise<TransitStatusPreview> {
   return requestUpload<TransitStatusPreview>("/api/transit/status/preview", role, file, options);
 }
 
@@ -408,9 +422,8 @@ export function markTransitOnShelf(
   }, context);
 }
 
-/** 录入并预锁定；成功或失败后调用方重新拉取整页数据保持口径一致。
-    requestId 为幂等键：同一表单填写周期内复用，双击 / 网络重试不会产生重复记录；
-    allowDuplicate 为复核弹窗确认“非重复录入”后的服务端警告豁免。 */
+/** 普通录入全量预锁；zeroAvailableConfirmed=true 仅登记零可用批次的需求，不新增预锁。
+    requestId 与完整原参数一起复用；确认、重试均由服务端按原请求意图办理。 */
 export function createAllocation(
   role: Role,
   batch: { key: string; model: string; plan: string; date: string; version: string },
@@ -434,6 +447,14 @@ export function confirmAllocation(role: Role, id: number, expectedRevision: numb
 
 export function fetchAllocationHistory(role: Role, id: number): Promise<DocumentHistory> {
   return requestJson<DocumentHistory>(`/api/allocations/${id}/history`, role);
+}
+
+export function fetchInquiryHistory(role: Role, id: number): Promise<InquiryHistory> {
+  return requestJson<InquiryHistory>(`/api/inquiries/${id}/history`, role);
+}
+
+export function fetchAuditDetail(role: Role, eventId: number): Promise<AuditDetailPayload> {
+  return requestJson<AuditDetailPayload>(`/api/audit/${eventId}`, role);
 }
 
 export function formatNumber(value: number): string {
@@ -474,7 +495,7 @@ export type RelocationFilters={model:string;version:string;source:string};
 export type TransferFilters={model:string;version:string;status:string};
 export async function downloadRelocationTemplate(role:Role,filters?:RelocationFilters) {
   const response=await fetch('/api/upgrades/relocation-update/template'+(filters?'?'+new URLSearchParams(filters):''),{cache:'no-store',headers:{'x-role':role}});
-  if(!response.ok)throw new Error((await response.json()).error || '更新模板读取失败');
+  if(!response.ok)throw new Error((await response.json()).error || '移仓升级更新模板读取失败');
   const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download='移仓升级-更新模板.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
@@ -484,7 +505,7 @@ export type TransferUpdatePreview = {unchangedCount:number;fileName:string;stage
 export function previewTransferUpdate(role:Role,stage:TransferStage,file:File):Promise<TransferUpdatePreview>{return requestJson('/api/transfer-upgrades/update/preview?stage='+stage,role,{method:'POST',headers:{'x-file-name':encodeURIComponent(file.name)},body:file});}
 export function importTransferUpdate(role:Role,stage:TransferStage,payload:unknown):Promise<unknown>{return requestJson('/api/transfer-upgrades/update/import?stage='+stage,role,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});}
 export async function downloadTransferUpdate(role:Role,stage:TransferStage,filters?:TransferFilters){
- const r=await fetch('/api/transfer-upgrades/update/template?'+new URLSearchParams({stage,...filters}),{cache:'no-store',headers:{'x-role':role}});if(!r.ok)throw new Error((await r.json()).error||'模板读取失败');
+ const r=await fetch('/api/transfer-upgrades/update/template?'+new URLSearchParams({stage,...filters}),{cache:'no-store',headers:{'x-role':role}});if(!r.ok)throw new Error((await r.json()).error||'转仓升级更新模板读取失败');
  const url=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=url;a.download='转仓升级-'+transferStageLabels[stage]+'更新模板.xlsx';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
@@ -505,7 +526,7 @@ export async function downloadRelocationWaybills(role:Role,filters:RelocationWay
  const response=await fetch('/api/upgrades/relocation-waybills/export?'+new URLSearchParams(filters),{method:'POST',cache:'no-store',signal:AbortSignal.timeout(30000),headers:{'x-role':role}});
  if(!response.ok)throw new Error((await response.json()).error||'运单文件生成失败');
  const countHeader=response.headers.get('x-waybill-count'),count=Number(countHeader),exportToken=response.headers.get('x-waybill-export-token');
- if(countHeader===null || (count>0&&!exportToken))throw new Error('导出响应缺少确认信息，本次未确认导出状态，请重新尝试');
+ if(countHeader===null || (count>0&&!exportToken))throw new Error('未能确认移仓运单文件，导出状态未更新，请重新导出。');
  // blob 完整接收后才触发下载；此前任何失败都不能进入导出确认。
  const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');
  try{link.href=url;link.download='移仓升级-运单号导出.xlsx';document.body.appendChild(link);link.click();}

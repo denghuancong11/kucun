@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {createInventoryDatabase,InventoryDatabase,ROLES} from '../inventory-db.mjs';
+import {createInventoryDatabase,InventoryDatabase,ROLES,INVENTORY_SCHEMA_VERSION} from '../inventory-db.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
-const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'.test-output/ink-inquiry'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-ink-flow-'));
+const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/ink-inquiry'),state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-ink-flow-'));
 await fs.mkdir(out,{recursive:true});createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite'),seedCatalogData:false});
 let db=new InventoryDatabase(state),child,failure;const port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('ink-flow'),checks=[],rid=()=>crypto.randomUUID();
 const check=n=>{checks.push(n);console.log('PASS '+n);};
@@ -26,6 +26,8 @@ async function completed(){return archive(await reply(await ready()));}
 async function reject(route,role,p,status,code){const before=snapshot(),r=await api(route,role,p,status);if(code)assert.equal(r.code,code);assert.equal(snapshot(),before);return r;}
 try{
  for(const [model,category]of [['INK-FLOW','墨盒'],['TONER-FLOW','硒鼓']])db.db.prepare('INSERT INTO catalog_models(model,category,base_in_stock,in_transit,updated_at) VALUES(?,?,0,0,?)').run(model,category,new Date().toISOString());
+ // A real zero-balance team source is sufficient; inquiries do not lock or add stock.
+ db.db.prepare("INSERT INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,pack_per_box,source_team,updated_at) VALUES('INK-FLOW-OWN-SOURCE','INK-FLOW','SYNTH-HISTORY','2026-10-19','V0','SOURCE',0,'4','一团','2026-10-19T00:00:00.000Z')").run();
  const config={'墨盒':Object.fromEntries(ROLES.filter(r=>r!=='alan').map(r=>[r,{summary:true,detail:true,expand:true,actions:true}]))};const permissionFile=path.join(state,'data/permissions.json');await fs.writeFile(permissionFile,JSON.stringify(config));await start();const initialStock=inventory();
  const oldConfig=await fs.readFile(permissionFile,'utf8');assert.deepEqual((await api('/api/permissions/effective','alan')).permissions,(await api('/api/permissions/effective','purchasing')).permissions);assert.equal(await fs.readFile(permissionFile,'utf8'),oldConfig);
  config['墨盒'].purchasing.detail=false;await fs.writeFile(permissionFile,JSON.stringify(config));assert.equal((await api('/api/permissions/effective','alan')).permissions['墨盒'].detail,false);config['墨盒'].purchasing.detail=true;await fs.writeFile(permissionFile,JSON.stringify(config));check('旧七角色权限配置无覆盖加载，Alan沿用采购权限及数据范围');
@@ -43,9 +45,9 @@ try{
   }
  }
  assert.equal(inventory(),initialStock);check('物流和采购跳过Alan各自正数/零回复，三项数量、CA/SC、备注、真实角色历史及去重一致；零直接结束，正数仅采购填三字段归档，不改库存');
- const toner=await ready('TONER-FLOW');await reject(`/api/inquiries/${toner.id}/reply`,'alan',replyBody(toner),403,'alan_write_forbidden');let tr=await reply(toner,'purchasing',0);await reject(`/api/inquiries/${tr.id}/archive`,'purchasing',archiveBody(tr),403);tr=(await api(`/api/inquiries/${tr.id}/archive`,'assistant-1',archiveBody(tr))).record;assert.equal(tr.status,'archived');assert.equal(tr.quantity,0);await reject(`/api/inquiries/${tr.id}/recall`,'business',common(tr),409,'inquiry_recall_unavailable');
+ const toner=await ready('TONER-FLOW');await reject(`/api/inquiries/${toner.id}/reply`,'alan',replyBody(toner),403,'alan_write_forbidden');const tr=await reply(toner,'purchasing',0);await reject(`/api/inquiries/${tr.id}/archive`,'purchasing',archiveBody(tr),409);await reject(`/api/inquiries/${tr.id}/archive`,'assistant-1',archiveBody(tr),403);assert.equal(tr.status,'rejected');assert.equal(tr.quantity,0);await reject(`/api/inquiries/${tr.id}/recall`,'business',common(tr),409);
  for(const route of ['/api/inquiries','/api/inquiries/1/review','/api/inquiries/1/recall','/api/upgrades/direct','/api/upgrades/relocation-work-items','/api/allocations','/api/transit/preview','/api/lingxing/jobs'])await reject(route,'alan',{requestId:rid()},403,'alan_write_forbidden');
- assert.equal((await fetch(base+'/api/approvals/inquiries/export',{headers:{'x-role':'alan'}})).status,403);for(const route of ['/api/approvals','/api/inventory/catalog','/api/upgrades','/api/audit','/api/transit/imports'])await api(route,'alan');check('Alan旧回复入口拒绝且不能导出，采购范围页面可读；硒鼓零回复和助理归档原规则不变');
+ assert.equal((await fetch(base+'/api/approvals/inquiries/export',{headers:{'x-role':'alan'}})).status,403);for(const route of ['/api/approvals','/api/inventory/catalog','/api/upgrades','/api/audit','/api/transit/imports'])await api(route,'alan');check('Alan旧回复入口拒绝且不能导出，采购范围页面可读；硒鼓零回复拒绝且助理不能归档');
  const race=await ready(),bodyA=replyBody(race,60),bodyP=replyBody(race,120),responses=await Promise.all([api(`/api/inquiries/${race.id}/reply`,'logistics',bodyA,null),api(`/api/inquiries/${race.id}/reply`,'purchasing',bodyP,null)]);assert.deepEqual(responses.map(r=>r.httpStatus).sort(),[200,409]);const winner=responses[0].httpStatus===200?0:1,role=winner===0?'logistics':'purchasing',payload=winner===0?bodyA:bodyP;const afterRace=snapshot();assert.equal((await api(`/api/inquiries/${race.id}/reply`,role,payload)).deduped,true);assert.equal(snapshot(),afterRace);assert.equal(db.getInquiry(race.id).events.filter(e=>e.type==='reply').length,1);check('物流/采购同版本并发只能一方成功，丢回执按原键重试无二次事件或覆盖');
  let record=await completed(),history=record.events,originalId=record.id;const archivedRevision=record.revision,recallPayload=common(record);for(const actor of ['admin','assistant-1','assistant-2','operation-1','operation-2','alan'])await reject(`/api/inquiries/${record.id}/recall`,actor,common(record),403);await reject(`/api/inquiries/${record.id}/recall`,'purchasing',{...common(record),expectedRevision:record.revision-1},409,'stale_revision');record=(await api(`/api/inquiries/${record.id}/recall`,'purchasing',recallPayload)).record;
  assert.equal(record.id,originalId);assert.equal(record.requestedQuantity,100);assert.equal(record.approvedQuantity,80);assert.equal(record.supplierQuantity,null);assert.equal(record.businessNote,'商务80');assert.equal(record.reviewedByRole,'business');assert.deepEqual(record.events.slice(0,-1),history);assert.equal(record.status,'pending_purchasing');
@@ -73,9 +75,9 @@ try{
  work=db.recordRelocationOperation({id:work.id,role:'operation-1',removalOrderNo:'REMOVE-INK',...common(work)}).workItem;
  work=db.syncRelocationLogistics({id:work.id,role:'purchasing',shipments:[{externalId:'INK-PKG',storeId:'S1',storeName:'A-US 美国',countryCode:'US',orderNo:'REMOVE-INK',fnsku:downstream.fnsku,carrier:'UPS',trackingNo:'TRACK-INK',shipDate:'2026-10-09',quantity:60}],capturedAt:new Date().toISOString(),requestId:rid()}).workItem;
  const relocation=db.getUpgrade(work.upgradeId).relocations[0];
- db.completeRelocationUpgrade({id:relocation.id,role:'purchasing',completedQuantity:60,inProgressQuantity:0,newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',...common(relocation)});
+ db.completeRelocationUpgrade({id:relocation.id,role:'purchasing',completedQuantity:60,inProgressQuantity:0,packPerBox:'4',newVersion:'V2',targetWarehouse:'SyntheticWarehouseA',...common(relocation)});
  const next=db.createDirectUpgrade({role:'purchasing',model:'INK-FLOW',sourceVersion:'V2',requestId:rid()}).upgrade;
  const linked=await reject(`/api/inquiries/${downstream.id}/recall`,'purchasing',common(downstream),409,'inquiry_has_downstream');assert(linked.details.blockers.some(b=>b.type==='升级入库'));assert(linked.details.blockers.some(b=>b.number===next.upgradeNo));check('真实移仓发货、升级入库及再次在库升级的直接/间接关联全部列出，拒绝不改业务');
- const saved=snapshot();await stop();db.close();db=new InventoryDatabase(state);await start();assert.equal(snapshot(),saved);assert((await api('/api/approvals','purchasing')).inquiries.some(r=>r.id===record.id&&r.approvedQuantity===90));db.assertInventoryInvariants();assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,36);check('刷新与数据库/服务器重启后数量、阶段、历史和关联不变；schema36保留询库流程');
+ const saved=snapshot();await stop();db.close();db=new InventoryDatabase(state);await start();assert.equal(snapshot(),saved);assert((await api('/api/approvals','purchasing')).inquiries.some(r=>r.id===record.id&&r.approvedQuantity===90));db.assertInventoryInvariants();assert.equal(db.db.prepare('PRAGMA user_version').get().user_version,INVENTORY_SCHEMA_VERSION);check('刷新与数据库/服务器重启后数量、阶段、历史和关联不变；当前schema保留询库流程');
 }catch(e){failure=e.stack;throw e;}finally{await fs.writeFile(path.join(out,'api-result.json'),JSON.stringify({state,base,checks,failure},null,2));await stop();db.close();}
 console.log(`INK_INQUIRY_API_PASS ${checks.length} groups`);

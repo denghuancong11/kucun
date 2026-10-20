@@ -21,6 +21,8 @@ await setTime('2026-09-21T12:00:00.000Z');
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite')});
 const db=new InventoryDatabase(state),port=await freePort(),base=`http://127.0.0.1:${port}`;
 db.db.prepare("UPDATE stock_batches SET pack_per_box='2' WHERE model='SYNTH-TONER-001'").run();
+// The ink inquiry below exercises permissions, not an unknown model without team sources.
+db.db.prepare("UPDATE stock_batches SET source_team='一团' WHERE model='SYNTH-INK-001'").run();
 const checks=[],metricsAuthorization=[],requestProof=[],rid=()=>crypto.randomUUID();let server;let failure=null;
 const check=name=>{checks.push(name);console.log('PASS '+name);};
 const meta=key=>db.db.prepare('SELECT value FROM system_meta WHERE key=?').get(key)?.value;
@@ -49,7 +51,7 @@ async function allocation(quantity,operator){return(await api('/api/allocations'
 async function inquiry(operator,model='SYNTH-TONER-001'){return(await api('/api/inquiries','operation-1',{model,quantity:10,department:'一团',store:'AUS',operator,fnsku:'XPENDING01',asin:'BPENDING01',requestId:rid()})).record;}
 async function review(r,kind='inquiries',decision='approve',quantity=10){return(await api(`/api/${kind}/${r.id}/review`,'business',{decision,approvedQuantity:quantity,businessNote:'隔离跨周期回归',expectedRevision:r.revision,requestId:rid()})).record;}
 async function reply(r,quantity){return(await api(`/api/inquiries/${r.id}/reply`,'purchasing',{supplierQuantity:quantity,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:rid()})).record;}
-async function archive(r){return(await api(`/api/inquiries/${r.id}/archive`,'assistant-1',{plan:'PENDING-PLAN',date:'2026-09-24',version:'V1',expectedRevision:r.revision,requestId:rid()})).record;}
+async function archive(r){return(await api(`/api/inquiries/${r.id}/archive`,'purchasing',{plan:'PENDING-PLAN',date:'2026-09-24',version:'V1',expectedRevision:r.revision,requestId:rid()})).record;}
 async function assertVisible(allocations,inquiries){const result=await view();assert.deepEqual(result.allocations.map(r=>r.id).sort((a,b)=>a-b),allocations.map(r=>r.id).sort((a,b)=>a-b));assert.deepEqual(result.inquiries.map(r=>r.id).sort((a,b)=>a-b),inquiries.map(r=>r.id).sort((a,b)=>a-b));return result;}
 try{
  await start();
@@ -127,8 +129,8 @@ try{
  waitingBusiness=await review(waitingBusiness,'allocations','approve',6);await review(toReject,'allocations','reject');assert.equal(balance().locked,14);
  const rejectionLedger=db.db.prepare('SELECT entry_type,on_hand_delta,locked_delta FROM inventory_ledger WHERE document_id=? ORDER BY id').all(toReject.id);assert.deepEqual(rejectionLedger.map(r=>[r.on_hand_delta,r.locked_delta]),[[0,4],[0,-4]]);
  qBusiness=await review(qBusiness);qPurchasing=await reply(qPurchasing,0);qAssistant=await archive(qAssistant);
- assert.equal(qPurchasing.status,'pending_assistant');assert.equal(qPurchasing.requestedQuantity,0);assert.equal(qAssistant.quantity,7);qPurchasing=await archive(qPurchasing);zero=await archive(zero);assert.equal(zero.quantity,0);
- check('旧调拨缩量/拒绝释放准确，旧询库商务/采购零回复/助理归档可继续');
+ assert.equal(qPurchasing.status,'rejected');assert.equal(qPurchasing.requestedQuantity,10);assert.equal(qAssistant.quantity,7);assert.equal(zero.quantity,0);
+ check('跨周期调拨缩量/拒绝释放准确；硒鼓采购零回复拒绝、正数采购归档可继续');
  await setTime('2026-09-24T13:00:00.000Z');const secondBefore=snapshot();await api('/api/sync');assert.deepEqual(snapshot(),secondBefore);await assertVisible([waitingBusiness,waitingAssistant],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
  await stop();await setTime('2026-10-01T14:00:00.000Z');await start();assert.equal(meta('approval_clear_before'),'2026-10-01T13:00:00.000Z');await assertVisible([waitingBusiness,waitingAssistant],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);
  check('周四和停机跨多次周期后未完成仍在，重启不丢状态或锁定');
@@ -148,7 +150,7 @@ try{
  assert.equal(db.db.prepare("SELECT COUNT(*) n FROM inventory_ledger WHERE document_id=? AND entry_type='issue'").get(waitingBusiness.id).n,1);assert.equal(balance().locked,0);assert.equal(balance().onHand,482);
  check('提交前异常全部回滚，相同/不同请求并发和回执丢失重试只出库一次；旧版本失败后可正常继续');
  const stockBefore=JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),ledgerBefore=JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all());
- qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,12);assert.equal(qBusiness.approvedQuantity,12);await archive(qBusiness);
+ qBusiness=await reply(qBusiness,12);assert.equal(qBusiness.requestedQuantity,10);assert.equal(qBusiness.approvedQuantity,10);await archive(qBusiness);
  assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM stock_balances ORDER BY batch_key').all()),stockBefore);assert.equal(JSON.stringify(db.db.prepare('SELECT * FROM inventory_ledger ORDER BY id').all()),ledgerBefore);
  await assertVisible([],[qBusiness,qPurchasing,qAssistant,zero,inkPending,rejected,qDone]);const candidates=(await api('/api/upgrades')).relocationCandidates;assert.ok(candidates.some(r=>r.inquiryId===qBusiness.id&&r.initialQuantity===12));
  check('采购最终量可以大于商务量且不增实际在库，完成后退出待办并保留可用询库来源');

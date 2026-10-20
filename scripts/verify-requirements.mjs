@@ -138,7 +138,7 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
   const relocation = upgrade.relocations[0];
   const catalogAfterShip = await call("GET", "/api/inventory/catalog", "admin");
   check(`${suffix} 移仓登记不重复扣减本地库存`, catalogAfterShip.models.find((row) => row.model === batch.model).inStock === modelBefore);
-  const completion = { completedQuantity: 25, inProgressQuantity:15, newVersion: "V31", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: requestId("complete") };
+  const completion = { completedQuantity: 25, inProgressQuantity:15,...(suffix==='inquiry'?{packPerBox:'1'}:{}), newVersion: "V31", targetWarehouse: "SyntheticWarehouseA", expectedRevision: relocation.revision, requestId: requestId("complete") };
   result = await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion);
   check(`${suffix} 升级完成 25，剩余 15 升级中`, result.upgrade.completedQuantity === 25 && result.upgrade.inProgressQuantity === 15);
   result = await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", completion);
@@ -148,7 +148,7 @@ async function upgradeRoundtrip(source, quantity, expected, suffix) {
   check(`${suffix} 仅完成的 25 进入在库并继承正确 FNSKU`, target?.quantity === 25 && target.fnsku === expected.fnsku
     && catalogAfterComplete.models.find((row) => row.model === batch.model).inStock === modelBefore + 25);
   const next=result.upgrade?.relocations?.[0] ?? (await call("GET","/api/upgrades","admin")).upgrades.find(j=>j.id===upgrade.id).relocations[0];
-  const final=await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", {completedQuantity:40,inProgressQuantity:0,newVersion:"V32",targetWarehouse:"SyntheticWarehouseA",expectedRevision:next.revision,requestId:requestId("complete-v32")});
+  const final=await call("POST", `/api/upgrades/relocations/${relocation.id}/complete`, "purchasing", {completedQuantity:40,inProgressQuantity:0,...(suffix==='inquiry'?{packPerBox:'1'}:{}),newVersion:"V32",targetWarehouse:"SyntheticWarehouseA",expectedRevision:next.revision,requestId:requestId("complete-v32")});
   check(`${suffix} 同移仓单两种新版本完整记账`, final.upgrade.relocations[0].completions.map(x=>`${x.version}:${x.quantity}`).join() === "V31:25,V32:15");
 
 }
@@ -258,18 +258,18 @@ try {
   check("询库批准 90 保留申请 150 并进入采购待办", inquiryApproved.status === "pending_purchasing" && inquiryApproved.requestedQuantity === 150 && inquiryApproved.approvedQuantity === 90);
   result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/reply`, "purchasing", { supplierQuantity: 60, shippingWarehouse:'CA', expectedRevision: result.record.revision, requestId: requestId("reply-60") });
   const inquiryReplied = result.record;
-  check("供应商回复 60 统一覆盖当前申请量和审核量 并进入助理待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 60
-    && inquiryReplied.approvedQuantity === 60 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA");
+  check("供应商回复60保留申请150与商务90并进入采购归档待办", inquiryReplied.status === "pending_assistant" && inquiryReplied.requestedQuantity === 150
+    && inquiryReplied.approvedQuantity === 90 && inquiryReplied.supplierQuantity === 60 && inquiryReplied.quantity === 60 && inquiryReplied.shippingWarehouse === "CA");
   check("采购回复保留最初申请事件及原始数量", inquiryReplied.events.find(event => event.type === "entry")?.payload.requestedQuantity === 150
     && inquiryReplied.events.find(event => event.type === "review")?.payload.approvedQuantity === 90
     && inquiryReplied.events.some(event => event.type === "reply" && event.payload.supplierQuantity === 60));
-  await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", { plan: "FBA-INQUIRY-PLAN", date: "", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive-missing-date") }, 400);
+  await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "purchasing", { plan: "FBA-INQUIRY-PLAN", date: "", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive-missing-date") }, 400);
   const archiveBody = { plan: "FBA-INQUIRY-PLAN", date: "2026-09-01", version: "V20", expectedRevision: inquiryReplied.revision, requestId: requestId("archive") };
-  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", archiveBody);
+  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "purchasing", archiveBody);
   const inquiryArchived = result.record;
-  check("助理归档登记计划、日期和原版本，最终执行量为 60", inquiryArchived.status === "archived" && inquiryArchived.plan === archiveBody.plan && inquiryArchived.date === archiveBody.date
+  check("采购确认全量发出并归档计划、日期和原版本，最终执行量为60", inquiryArchived.status === "archived" && inquiryArchived.plan === archiveBody.plan && inquiryArchived.date === archiveBody.date
     && inquiryArchived.version === "V20" && inquiryArchived.quantity === 60 && inquiryArchived.operatorNote === "请询供应商现货");
-  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "assistant-1", archiveBody);
+  result = await call("POST", `/api/inquiries/${inquirySubmitted.id}/archive`, "purchasing", archiveBody);
   check("询库归档重试只重放一次", result.deduped === true);
   check("询库申请、审批、采购回复、归档全程不计入在库或锁定", JSON.stringify(await balance()) === JSON.stringify(beforeInquiryBalance)
     && read("SELECT COALESCE(SUM(on_hand_delta), 0) AS delta FROM inventory_ledger")[0].delta === -90);
@@ -292,22 +292,21 @@ try {
     let r=(await call("POST","/api/inquiries","operation-1",{...allocationBody(150,`reply-${qty}`),model:batch.model})).record;
     r=(await call("POST",`/api/inquiries/${r.id}/review`,"business",reviewBody(r,90))).record;
     r=(await call("POST",`/api/inquiries/${r.id}/reply`,"purchasing",{supplierQuantity:qty,shippingWarehouse:'CA',expectedRevision:r.revision,requestId:requestId("supplier")})).record;
-    check(`供应商回复${qty}覆盖申请量并按最终量处理`,r.requestedQuantity===qty && r.quantity===qty && r.status==="pending_assistant" && r.archivedAt===null);
+    check(`供应商回复${qty}保留申请和商务数量并按最终量处理`,r.requestedQuantity===150 && r.approvedQuantity===90 && r.quantity===qty && r.status===(qty===0?'rejected':'pending_assistant') && r.archivedAt===null);
     if(qty===0) {
       const zeroBalance=await balance();
       const zeroLedger=read("SELECT * FROM inventory_ledger ORDER BY id");
       check("零回复保留采购回复事件，不冒充已归档", r.events.at(-1).type === "reply" && r.archivedByRole===null);
-      check("零回复在助理待办可见", (await call("GET", "/api/approvals", "assistant-1")).inquiries.some(item=>item.id===r.id && item.status==="pending_assistant"));
-      await call("POST",`/api/inquiries/${r.id}/archive`,"purchasing",{plan:"ZERO-PLAN",date:"2026-09-24",version:"V1",expectedRevision:r.revision,requestId:requestId("zero-denied")},403);
+      check("零回复显示已拒绝", (await call("GET", "/api/approvals", "purchasing")).inquiries.some(item=>item.id===r.id && item.status==="rejected"));
+      await call("POST",`/api/inquiries/${r.id}/archive`,"purchasing",{plan:"ZERO-PLAN",date:"2026-09-24",version:"V1",expectedRevision:r.revision,requestId:requestId("zero-denied")},409);
       const zeroArchive={plan:"ZERO-PLAN",date:"2026-09-24",version:"V1",expectedRevision:r.revision,requestId:requestId("zero-archive")};
       const zeroBeforeMissing=read("SELECT * FROM inquiry_documents WHERE id=?",r.id);
       const zeroEventsBeforeMissing=read("SELECT * FROM inquiry_events WHERE inquiry_id=? ORDER BY id",r.id);
-      for(const field of ["plan","date","version"]) await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",{...zeroArchive,[field]:"",requestId:requestId(`zero-missing-${field}`)},400);
-      check("零回复归档计划、日期、版本缺一均拒绝，单据与事件不变",JSON.stringify(read("SELECT * FROM inquiry_documents WHERE id=?",r.id))===JSON.stringify(zeroBeforeMissing)
+      for(const field of ["plan","date","version"]) await call("POST",`/api/inquiries/${r.id}/archive`,"purchasing",{...zeroArchive,[field]:"",requestId:requestId(`zero-missing-${field}`)},400);
+      check("零回复归档尝试均拒绝，单据与事件不变",JSON.stringify(read("SELECT * FROM inquiry_documents WHERE id=?",r.id))===JSON.stringify(zeroBeforeMissing)
         && JSON.stringify(read("SELECT * FROM inquiry_events WHERE inquiry_id=? ORDER BY id",r.id))===JSON.stringify(zeroEventsBeforeMissing));
-      r=(await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",zeroArchive)).record;
-      check("助理明确归档零回复并留下归档事件和人员",r.status==="archived" && r.quantity===0 && r.archivedByRole==="assistant-1" && r.events.at(-1).type==="archive" && r.events.at(-1).payload.quantity===0);
-      check("零回复归档重放不重复",(await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",zeroArchive)).deduped===true);
+      await call("POST",`/api/inquiries/${r.id}/archive`,"assistant-1",zeroArchive,403);
+      check("零回复不创建归档事件",r.status==="rejected" && r.quantity===0 && r.archivedByRole===null && !r.events.some(e=>e.type==='archive'));
       check("零回复全程不新增在库/锁定/调拨流水且不成为升级来源",JSON.stringify(await balance())===JSON.stringify(zeroBalance)
         && JSON.stringify(read("SELECT * FROM inventory_ledger ORDER BY id"))===JSON.stringify(zeroLedger)
         && !(await call("GET","/api/upgrades","assistant-1")).relocationCandidates.some(item=>item.inquiryId===r.id));
@@ -404,6 +403,8 @@ try {
   writeDb.prepare("UPDATE allocation_documents SET confirmed_at=? WHERE id=?").run(new Date(Date.now()-91*86400000).toISOString(),submitted.id); writeDb.close();
   check("90天外归档不作为新升级候选",!(await call("GET","/api/upgrades","assistant-1")).relocationCandidates.some(r=>r.allocationId===submitted.id));
   await call("POST","/api/upgrades/relocation-work-items","assistant-1",{allocationId:submitted.id,requestId:requestId("old-source")},409);
+  // Current inquiries require an actual own-team stock/transit source, even when testing visibility.
+  writeSql("UPDATE stock_batches SET source_team='一团' WHERE model='SYNTH-INK-001'");
   const ink = await call("POST","/api/inquiries","operation-1",{...allocationBody(10,"ink"),model:"SYNTH-INK-001",asin:"BINK000001"});
   check("墨盒询库仅向对应运营团队展示",!(await call("GET","/api/approvals","operation-2")).inquiries.some(r=>r.id===ink.record.id));
   let zeroWork=(await call("POST","/api/upgrades/relocation-work-items","assistant-1",{inquiryId:inquirySubmitted.id,requestId:requestId("zero-fba-start")})).workItem;

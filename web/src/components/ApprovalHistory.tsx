@@ -1,0 +1,16 @@
+import type { Category, DocumentEvent } from "../types";
+import { displayTime } from "./ui";
+import { preserveSummarySelection } from "../utils/rowExpansion";
+
+export function ApprovalHistory({ events, category }: { events: DocumentEvent[]; category?: Category }) {
+  const roles: Record<string, string> = { admin: "管理员", "operation-1": "运营一团", "operation-2": "运营二团", "assistant-1": "助理一团", "assistant-2": "助理二团", business: "商务", alan: "Alan", purchasing: "采购", logistics: "物流", system: "系统" };
+  const names: Record<string, string> = { entry: "提交申请", created: "提交申请", review: "商务审核", reject: "拒绝", alan_review: "Alan审核", alan_timeout: "5h 到期采用商务", transfer_inquiry: "商务转询库", conversion_accepted: "运营接受转询库", conversion_rejected: "运营不接受转询库", reply: "采购回复", archive: "确认发出并归档", confirm: "调拨完成", recall: "回撤", cancel: "取消", withdraw: "撤回" };
+  const approvalEvents = events.filter(event => names[event.type]);
+  return <details className="allocation-history"><summary onClick={preserveSummarySelection}>办理历史（{approvalEvents.length}）</summary><div className="table-wrap"><table className="data-table sub reconcile-table" aria-label="审批办理历史"><thead><tr>{["办理时间", "办理岗位", "办理结果", "申请数量", "商务部审核数量", "Alan审核数量", "供应商库存回复", "归档数量", "退库数量", "回撤后预锁数量", "发货仓库", "发货计划号", "发货时间", "原版本", "备注"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{approvalEvents.map(event => {
+    const p = event.payload;
+    const after = p.after as Record<string, unknown> | undefined;
+    const result = event.type === "archive" && category === "硒鼓" && ["assistant", "assistant-1", "assistant-2"].includes(event.role) ? "助理归档（历史记录）" : event.type === "archive" && category === "硒鼓" ? "采购确认实际发出并归档" : event.type === "reply" && category === "硒鼓" ? `采购审核${Number(p.supplierQuantity) === 0 ? "，已拒绝" : ""}` : event.type === "recall" ? `回撤至${p.target === "pending_business" ? "待商务审核" : "待采购回复"}` : event.type === "reply" ? `采购回复${p.skippedAlan ? "（跳过Alan审核）" : ""}${Number(p.supplierQuantity) === 0 ? "，已拒绝" : ""}` : event.type === "reject" ? `${roles[event.role] || event.role}拒绝` : event.type === "entry" && p.origin === "allocation_conversion" ? "调拨转询库" : event.type === "alan_timeout" ? `5h 到期采用商务 ${p.quantity} 件` : names[event.type];
+    const values = [event.type === "entry" || event.type === "created" ? p.requestedQuantity ?? p.quantity : event.type === "recall" ? after?.requestedQuantity : null, event.type === "review" || event.type === "transfer_inquiry" || event.type === "entry" && p.origin === "allocation_conversion" ? p.approvedQuantity : event.type === "recall" ? after?.approvedQuantity : null, event.type === "alan_review" || event.type === "reject" && event.role === "alan" ? p.alanQuantity : null, event.type === "reply" ? p.supplierQuantity : null, event.type === "archive" || event.type === "confirm" ? p.quantity : null, p.returnedQuantity, p.restoredLockedQuantity, p.shippingWarehouse, p.plan, p.date, p.version, p.alanNote ?? p.procurementNote ?? p.businessNote ?? p.operatorNote ?? event.reason];
+    return <tr key={event.id}><td>{displayTime(event.at, true)}</td><td>{roles[event.role] || event.role}</td><td>{result || "—"}</td>{values.map((value, index) => <td key={index}>{value == null || value === "" ? "—" : String(value)}</td>)}</tr>;
+  })}</tbody></table></div></details>;
+}

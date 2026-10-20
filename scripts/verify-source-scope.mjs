@@ -58,6 +58,8 @@ try{
    for(const r of publicRows)assert.ok(!('lingxing'in r)&&!('asin'in r)&&!('store'in r));
   }
   check(`${category} 完整记录/指标/毛利润按七角色过滤，公开摘要范围正确，存量响应重放受限`);
+  // Retain the old ink procurement-chain fixture; fresh v37 flow has its own suite.
+  if(category==='墨盒')for(const row of[d1,d2])db.db.prepare('UPDATE allocation_documents SET ink_workflow_stage=NULL,alan_deadline_at=NULL WHERE id=?').run(row.id);
   d1=(await api(`/api/allocations/${d1.id}/review`,'business',{decision:'approve',approvedQuantity:4,expectedRevision:d1.revision,requestId:rid()})).record;
   d2=(await api(`/api/allocations/${d2.id}/review`,'business',{decision:'approve',approvedQuantity:4,expectedRevision:d2.revision,requestId:rid()})).record;
   await rejectUnchanged(`/api/allocations/${d2.id}/confirm`,'assistant-1',{expectedRevision:d2.revision,requestId:rid()},403);

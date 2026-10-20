@@ -43,7 +43,7 @@ try{
   await fresh();const prefix=reject?'REJECT':'SUCCESS';await upload(prefix+'-A');await waitCache(prefix+'-A');const before=db.db.prepare('SELECT COUNT(*) n FROM transit_batches').get().n;
   let arrived;const ready=new Promise(r=>{arrived=r}),held=new Promise(r=>{release=r});releases.push(release);
   await page.route('**/api/transit/import',async route=>{const response=reject?null:await route.fetch();if(response)assert.equal(response.status(),200);arrived();await held;if(reject)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({ok:false,error:'隔离的明确拒绝回执',requestNotApplied:true})});return route.fulfill({response});});
-  await page.getByRole('button',{name:'确认导入',exact:true}).click();await ready;await nav('库存汇总');await nav('在途库存');await upload(prefix+'-B');await waitCache(prefix+'-B');await releaseAndSettle(release);
+  await page.getByRole('button',{name:'确认导入在途库存',exact:true}).click();await ready;await nav('库存汇总');await nav('在途库存');await upload(prefix+'-B');await waitCache(prefix+'-B');await releaseAndSettle(release);
   check((reject?'明确4xx':'成功')+'旧提交回执不覆盖新预览',await cache(),fileName(prefix+'-B'));await page.reload();await nav('在途库存');await waitCache(prefix+'-B');
   check((reject?'拒绝回执不写业务':'成功回执仅导入A一条'),db.db.prepare('SELECT COUNT(*) n FROM transit_batches').get().n,before+(reject?0:1));
   check((reject?'拒绝':'成功')+'确认完成后无残留待确认请求',await page.evaluate(()=>JSON.parse(sessionStorage.getItem('aster-pending-business-requests')||'[]').length),0);

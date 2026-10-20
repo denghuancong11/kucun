@@ -55,7 +55,7 @@ async function stopReport(active, message) {
 async function begin(state, job) {
   const tab=await ownedTab(state);
   if(!tab) {
-    const receipt=await api(state,'finish',{id:job.id,error:`领星执行页未打开，请重新打开 ${urls.metrics+marker} 后再次同步。`});
+    const receipt=await api(state,'finish',{id:job.id,error:`领星同步报表页未打开，请打开 ${urls.metrics+marker} 后重新同步。`});
     await complete(state,receipt.job);
     return;
   }
@@ -92,7 +92,7 @@ async function inspect(state) {
   if(job.state!=='running') {await complete(state,job);return;}
   const tab=await ownedTab(state);
   await recordTabState(state,active,tab);
-  if(!tab || tab.id!==active.tabId) active.payload={error:`领星执行页已关闭，本次同步未完成。请重新打开 ${urls.metrics+marker} 后再次同步。`};
+  if(!tab || tab.id!==active.tabId) active.payload={error:`领星同步报表页已关闭，本次同步未完成。请打开 ${urls.metrics+marker} 后重新同步。`};
   if(!active.payload && tab.status==='complete') {
     if((tab.url ?? '').split(/[?#]/)[0]!==urls[job.target.action]) active.payload={error:'领星尚未登录、登录已过期或需要验证，请在部署电脑的 Edge 主动登录后重新同步。'};
     else if(!active.started) {
@@ -148,9 +148,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
       const state=await chrome.storage.local.get(['port','enabled','connection','activeJob']);
       if(!state.enabled || state.activeJob?.tabId!==sender.tab?.id || state.activeJob.job.requestId!==message.key) return;
       if(message.type==='report-progress') {
-        const sample=state.activeJob.lastTabState;
-        const tabState=sample ? `${sample.value}；采样时间=${sample.at}` : '未采样';
-        const detail=`${message.text}（页面时间：${message.pageAt??'未记录'}；可见性：${message.pageVisibility??'未记录'}；标签状态：${tabState}）`;
+        const detail=message.text;
         await chrome.storage.local.set({connectionStatus:`#${state.activeJob.job.id} ${detail}`});
         await api(state,'progress',{id:state.activeJob.job.id,message:detail});
       } else await pulse();

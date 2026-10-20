@@ -145,7 +145,7 @@ export function InventoryTable({
                   </td>
                   <td className="num muted inventory-summary-batch-count">
                     {derivedUnknown && !hasBatches ? (
-                      <span className="unknown-cell" title={unknownTitle}>—</span>
+                      <span className="unknown-cell" title="暂时无法取得批次数量">—</span>
                     ) : (
                       batches.length
                     )}

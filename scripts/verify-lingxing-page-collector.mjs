@@ -225,7 +225,7 @@ try {
     document.querySelector('#currencyOptions').hidden = true;
   });
   const closedError = await backgroundDropdown.evaluate(() => asterLingxing.collectAsins(['BFIXTURE01']).catch(error => error.message));
-  check('未打开的菜单仍拒绝选择，不以取消入场动画绕过USD生效检查', closedError.includes('5秒内未找到可见选项'));
+  check('未打开的菜单仍拒绝选择，不以取消入场动画绕过USD生效检查', typeof closedError === 'string' && closedError.includes('未能在领星中选择“USD”') && closedError.includes('当前值为“原币种”'));
   await backgroundDropdown.close();
 
   const lateDropdownBackfill = await openFixture();
@@ -389,7 +389,7 @@ try {
   }
   const stale = await openFixture("no-refresh");
   const noRefresh = await stale.evaluate(() => asterLingxing.collectAsins(['BFIXTURE01']).catch(error=>error.message));
-  check("没有观察到查询刷新时拒绝读取既有表格", typeof noRefresh === "string" && noRefresh.includes("20秒内未完成刷新"));
+  check("没有观察到查询刷新时拒绝读取既有表格", typeof noRefresh === "string" && noRefresh.includes("20 秒内未完成刷新"));
   await stale.close();
   const cancelled = await openFixture();
   const cancellation = await cancelled.evaluate(async () => {

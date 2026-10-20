@@ -7,7 +7,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createInventoryDatabase,InventoryDatabase} from '../inventory-db.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
-const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'.test-output/allocation-pack');
+const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/allocation-pack');
 await fs.mkdir(out,{recursive:true});
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-allocation-pack-'));
 createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqlite'),seedCatalogData:false});

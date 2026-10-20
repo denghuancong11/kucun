@@ -13,7 +13,8 @@ export function restoreSchema35Fixture(db) {
       const columns = db.prepare(`PRAGMA table_info("${name}_v35_fixture")`).all().map(row => '"' + row.name + '"').join(',');
       db.exec(`INSERT INTO "${name}_v35_fixture" SELECT ${columns} FROM "${name}"; DROP TABLE "${name}"; ALTER TABLE "${name}_v35_fixture" RENAME TO "${name}"`);
     }
-    for (const row of dependents) db.exec(row.sql);
+    // The exact v35 tables intentionally omit these v37-only columns/indexes.
+    for (const row of dependents) if (!['uq_inquiry_source_allocation', 'idx_ink_alan_deadline'].includes(row.name)) db.exec(row.sql);
     db.exec('DELETE FROM schema_migrations WHERE version>35; PRAGMA user_version=35; COMMIT; PRAGMA foreign_keys=ON');
   } catch (error) {db.exec('ROLLBACK; PRAGMA foreign_keys=ON'); throw error;}
 }

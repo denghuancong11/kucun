@@ -38,7 +38,7 @@ function inquiry() {
 function archive(row) {
   row = db.reviewInquiry({ id: row.id, role: 'business', decision: 'approve', approvedQuantity: 100, ...common(row) }).record;
   row = db.replyInquiry({ id: row.id, role: 'purchasing', supplierQuantity: 100, shippingWarehouse: 'CA', ...common(row) }).record;
-  return db.archiveInquiry({ id: row.id, role: 'assistant-1', plan: 'STATE-INQUIRY-' + row.id, date: '2026-10-13',
+  return db.archiveInquiry({ id: row.id, role:'purchasing', plan: 'STATE-INQUIRY-' + row.id, date: '2026-10-13',
     version: 'VFBA-A', ...common(row) }).record;
 }
 const sourceRecord = (kind, id) => db.getRelocationCandidates().find(row => row.sourceKind === kind && row[

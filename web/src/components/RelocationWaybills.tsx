@@ -17,23 +17,23 @@ export function RelocationWaybills({role,filters:scope}:{role:Role;filters:Reloc
   const filters={...scope,status},client=useQueryClient();
   const query=useQuery({queryKey:['upgrades','waybills',role,filters],queryFn:()=>fetchRelocationWaybills(role,filters)});
   const action=useBusinessAction(()=>client.invalidateQueries({queryKey:['upgrades']}, {throwOnError:true}),message=>{setPending(null);setDoneScope(exportScope.current);setNotice(message);});
-  const confirm=(confirmation:NonNullable<typeof pending>)=>action.perform({execute:()=>confirmRelocationWaybills(role,{exportToken:confirmation.exportToken,requestId:confirmation.requestId}),message:'导出完成：已确认本次 '+confirmation.count+' 个运单已导出。'});
+  const confirm=(confirmation:NonNullable<typeof pending>)=>action.perform({execute:()=>confirmRelocationWaybills(role,{exportToken:confirmation.exportToken,requestId:confirmation.requestId}),message:'已导出 '+confirmation.count+' 个移仓运单。'});
   const download=async()=>{
     if(running.current||pending)return;
     exportScope.current=scopeKey;setDoneScope('');running.current=true;setDownloading(true);setNotice('');setDownloadError('');action.setError(null);
     try{
       const result=await downloadRelocationWaybills(role,filters);
       if(result.exportToken){const confirmation={exportToken:result.exportToken,count:result.count,requestId:createRequestId('waybill-export-confirm')};setPending(confirmation);await confirm(confirmation);}
-      else {setDoneScope(scopeKey);setNotice('导出完成：当前范围没有匹配运单。');}
+      else {setDoneScope(scopeKey);setNotice('当前筛选没有可导出的移仓运单。');}
     }catch(error){setDownloadError('运单文件未完成下载，未确认导出状态：'+(error as Error).message);}
     finally{running.current=false;setDownloading(false);}
   };
   const canExport=['admin','purchasing','logistics','assistant-1','assistant-2'].includes(role);
-  return <Panel title="移仓运单" actions={canExport?<button className="btn btn-ghost btn-sm" aria-label="运单号导出" disabled={downloading||!!pending||action.disabled} onClick={()=>void download()}>{pending?'下载已触发，待确认':downloading?'正在导出…':doneScope===scopeKey?'导出完成':'运单号导出'}</button>:undefined}>
+  return <Panel title="移仓运单" actions={canExport?<button className="btn btn-ghost btn-sm" aria-label="导出移仓运单" disabled={downloading||!!pending||action.disabled} onClick={()=>void download()}>{pending?'下载已发起，待确认导出状态':downloading?'正在导出…':doneScope===scopeKey?'导出完成':'导出移仓运单'}</button>:undefined}>
     <div className="transit-toolbar"><label className="field"><span>导出状态</span><select aria-label="运单导出状态" value={status} disabled={downloading} onChange={event=>setStatus(event.target.value as typeof status)}><option value="all">全部</option><option value="exported">已导出</option><option value="unexported">未导出</option></select></label></div>
     {notice&&doneScope===scopeKey&&<p role="status">{notice}</p>}{downloadError&&exportScope.current===scopeKey&&<p className="dialog-error" role="alert">{downloadError}</p>}
-    {pending&&<div className="callout"><p role="alert">文件已下载，导出状态尚未确认。{action.error}</p><button className="btn btn-primary" disabled={action.busy} onClick={()=>void confirm(pending)}>{action.busy?'正在确认…':'重试本次导出确认'}</button></div>}
+    {pending&&<div className="callout"><p role="alert">已发起文件下载，导出状态尚未确认。{action.error}</p><button className="btn btn-primary" disabled={action.busy} onClick={()=>void confirm(pending)}>{action.busy?'正在确认…':'重试本次导出确认'}</button></div>}
     {query.isError&&<p className="dialog-error" role="alert">运单读取失败：{query.error.message}</p>}
-    {query.isLoading?<p>加载中…</p>:query.data?.rows.length?<div className="table-wrap scroll-x"><table className="data-table reconcile-table" aria-label="移仓运单列表"><thead><tr><th>型号</th><th>FNSKU</th><th>店铺</th><th>订单号</th><th>承运商</th><th>运单号</th><th className="num">移仓-已发货数量</th><th>导出状态</th><th>首次导出时间（北京）</th></tr></thead><tbody>{query.data.rows.map(row=><tr key={JSON.stringify([row.workNo,row.trackingNo,row.model,row.fnsku])}><td>{row.model}</td><td className="reconcile-identifier">{row.fnsku||'—'}</td><td>{row.store||'—'}</td><td className="reconcile-identifier">{row.orderNo||'—'}</td><td>{row.carrier}</td><td className="mono">{row.trackingNo}</td><td className="num">{row.quantity}</td><td>{row.firstExportedAt?'已导出':'未导出'}</td><td>{row.firstExportedAt?new Date(row.firstExportedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}</td></tr>)}</tbody></table></div>:!query.isError&&<EmptyState title="当前范围暂无匹配运单"/>}
+    {query.isLoading?<p>加载中…</p>:query.data?.rows.length?<div className="table-wrap scroll-x"><table className="data-table reconcile-table" aria-label="移仓运单列表"><thead><tr><th>型号</th><th>FNSKU</th><th>店铺</th><th>移仓订单号</th><th>承运商</th><th>运单号</th><th className="num">移仓-已发货数量</th><th>导出状态</th><th>首次导出时间（北京时间）</th></tr></thead><tbody>{query.data.rows.map(row=><tr key={JSON.stringify([row.workNo,row.trackingNo,row.model,row.fnsku])}><td>{row.model}</td><td className="reconcile-identifier">{row.fnsku||'—'}</td><td>{row.store||'—'}</td><td className="reconcile-identifier">{row.orderNo||'—'}</td><td>{row.carrier}</td><td className="mono">{row.trackingNo}</td><td className="num">{row.quantity}</td><td>{row.firstExportedAt?'已导出':'未导出'}</td><td>{row.firstExportedAt?new Date(row.firstExportedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—'}</td></tr>)}</tbody></table></div>:!query.isError&&<EmptyState title="当前范围暂无匹配运单"/>}
   </Panel>;
 }

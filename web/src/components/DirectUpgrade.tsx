@@ -56,7 +56,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
   const draft = recovery ? { sourceLineId: recovery.sourceLineId, quantity: String(recovery.completedQuantity), version: recovery.newVersion, warehouse: recovery.targetWarehouse } : (completeId === null ? blankDraft : drafts[completeId] ?? blankDraft);
   const selectedLine = selectedJob?.lines.find(line => line.id === draft.sourceLineId);
   const quantity = Number(draft.quantity);
-  const quantityError = draft.quantity !== "" && (!Number.isInteger(quantity) || quantity <= 0) ? "请填写大于0的整数。" : selectedLine && quantity > selectedLine.inProgressQuantity ? `完成数量不能超过所选批次剩余 ${formatNumber(selectedLine.inProgressQuantity)} 件。` : "";
+  const quantityError = draft.quantity !== "" && (!Number.isInteger(quantity) || quantity <= 0) ? "本次完成数量须为大于 0 的整数。" : selectedLine && quantity > selectedLine.inProgressQuantity ? `完成数量不能超过所选批次剩余 ${formatNumber(selectedLine.inProgressQuantity)} 件。` : "";
   const versionError = draft.version.trim() && draft.version.trim() === selectedJob?.sourceVersion ? "升级完成版本必须与原版本不同。" : "";
   const batchUnavailable = draft.sourceLineId !== undefined && (!selectedLine || selectedLine.inProgressQuantity <= 0);
   const valid = !!selectedLine && selectedLine.inProgressQuantity > 0 && Number.isInteger(quantity) && quantity > 0 && quantity <= selectedLine.inProgressQuantity && !!draft.version.trim() && !versionError && warehouses.includes(draft.warehouse);
@@ -74,7 +74,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
       const error = failure as ApiError;
       const rejected = error.status !== undefined && error.status >= 400 && error.status < 500;
       if (rejected) setPendingStart(null);
-      setStartError(error.message + (rejected ? "" : " 本次发起结果待确认。"));
+      setStartError(error.message + (rejected ? "" : " 暂未确认是否已发起在库升级，请点击“重试确认”。"));
     } finally { running.current = false; setBusy(null); }
   };
 
@@ -96,12 +96,12 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
       const error = failure as ApiError;
       const rejected = error.status !== undefined && error.status >= 400 && error.status < 500;
       if (rejected) { restoreDraft(); setDrafts(current => ({ ...current, [job.id]: submittedDraft })); setPending(current => { const next = { ...current }; delete next[job.id]; return next; }); }
-      setErrors(current => ({ ...current, [job.id]: error.message + (rejected ? "" : " 本次完成结果待确认。") }));
+      setErrors(current => ({ ...current, [job.id]: error.message + (rejected ? "" : " 暂未确认升级完成登记是否已保存，请点击“重试确认”。") }));
     } finally { running.current = false; setBusy(null); }
   };
 
   return <section className="direct-upgrade" hidden={!active}>
-    <Panel title="在库升级记录" badge={<span className="muted">{visible.length} 条</span>} actions={canStart ? <button className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>发起在库升级</button> : undefined}>
+    <Panel title="在库升级记录" badge={<span className="muted">{visible.length} 条</span>} actions={canStart ? <button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>发起在库升级</button> : undefined}>
       {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
       {pendingStart && !startOpen && <div className="direct-pending" role="status"><span>{pendingStart.model} · {pendingStart.sourceVersion}：发起结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>重试确认</button></div>}
       {jobs.filter(job => pending[job.id] && completeId !== job.id).map(job => <div className="direct-pending" role="status" key={job.id}><span>{description(job)}：完成结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>重试确认</button></div>)}
@@ -110,11 +110,11 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
         <label className="field"><span>原版本</span><select aria-label="筛选原版本" value={version} onChange={event => setVersion(event.target.value)}><option value="">全部版本</option>{versions.map(item => <option key={item}>{item}</option>)}</select></label>
         <label className="field"><span>状况</span><select aria-label="筛选状况" value={status} onChange={event => setStatus(event.target.value)}><option value="">全部状况</option><option value="active">升级中，预锁定</option><option value="completed">升级完成</option><option value="cancelled">已撤销发起</option></select></label>
       </div>
-      <div className="table-wrap"><table className="data-table direct-task-table reconcile-table" aria-label="在库升级任务"><thead><tr><th>型号</th><th>原版本</th><th>发起时间</th><th>发起岗位</th><th className="num">初始锁定量</th><th className="num">升级完成量</th><th className="num">升级中锁定量</th><th>状况</th><th>操作</th></tr></thead>
+      <div className="table-wrap"><table className="data-table direct-task-table reconcile-table" aria-label="在库升级任务"><thead><tr><th>型号</th><th>原版本</th><th>发起时间</th><th>发起岗位</th><th className="num">初始锁定量</th><th className="num">升级完成量</th><th className="num">升级中锁定量</th><th>状况</th><th aria-label="操作"></th></tr></thead>
         <tbody>{visible.map(job => <Fragment key={job.id}>
           <tr data-upgrade-id={job.id} className={`expandable-row${expanded.includes(job.id) ? " row-expanded" : ""}`} {...expandableRowProps(expanded.includes(job.id), () => setExpanded(current => current.includes(job.id) ? current.filter(id => id !== job.id) : [...current, job.id]))}>
             <td className="mono"><strong>{job.model}</strong></td><td><span className="ver-chip">{job.sourceVersion}</span></td><td className="direct-time">{displayTime(job.initiatedAt, true)}</td><td>{roleNames[job.initiatedByRole]}</td><td className="num">{formatNumber(job.initialQuantity)}</td><td className="num">{formatNumber(job.completedQuantity)}</td><td className="num strong">{formatNumber(job.inProgressQuantity)}</td><td><Badge label={job.statusText} tone={job.status === "completed" ? "green" : job.status === "cancelled" ? "neutral" : "blue"} /></td>
-            <td>{canComplete && (pending[job.id] || (job.status === "active" && canAct(job.category))) && <button className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>{pending[job.id] ? "重试确认" : "登记完成"}</button>}</td>
+            <td>{canComplete && (pending[job.id] || (job.status === "active" && canAct(job.category))) && <button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>{pending[job.id] ? "重试确认" : "登记完成"}</button>}</td>
           </tr>
           {expanded.includes(job.id) && <tr className="direct-detail-row"><td colSpan={9}><div className="direct-batches" data-direct-batches={job.id}>
             <table className="data-table sub direct-batch-table reconcile-table" aria-label="来源批次明细"><thead><tr><th>发货计划号</th><th>发货时间</th><th>入库时间</th><th>FNSKU</th><th>来源仓库</th><th>来源团队</th><th className="num">初始锁定量</th><th className="num">升级完成量</th><th className="num">剩余升级量</th><th>升级完成版本</th><th>目标海外仓</th><th className="num">本次完成数量</th></tr></thead><tbody>{job.lines.map(line => <Fragment key={line.id}>
@@ -134,7 +134,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
         <label className="field"><span>原版本</span><select aria-label="发起原版本" value={startVersion} disabled={!startModel || !!pendingStart || busy !== null} onChange={event => { setStartVersion(event.target.value); setStartError(""); }}><option value="">请选择原版本</option>{startVersions.map(item => <option key={item}>{item}</option>)}</select></label>
       </div>{source && <dl className="direct-quantities">{[["在库", source.inStock], ["调拨锁定", source.allocationLocked], ["升级锁定", source.upgradeLocked], ["本次可锁数量", source.available]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{formatNumber(Number(value))}<small> 件</small></dd></div>)}</dl>}
         {!pendingStart && startVersion && (!source || source.available <= 0) && <p className="field-error">当前型号和原版本没有可锁定的可用库存。</p>}
-        {source && !canAct(source.category) && <p className="field-error">当前角色无权办理该类目。</p>}
+        {source && !canAct(source.category) && <p className="field-error">当前角色无权发起该类目的在库升级。</p>}
         {startError && <p className="dialog-error" role="alert">{startError}</p>}
       </div><footer className="dialog-actions"><button className="btn btn-ghost" type="button" disabled={busy !== null} onClick={() => setStartOpen(false)}>关闭</button><button className="btn btn-primary" disabled={busy !== null || (!pendingStart && (!source || source.available <= 0 || !canAct(source.category)))}>{busy === "start" ? "锁定中…" : pendingStart ? "重试确认" : source ? `锁定全部 ${formatNumber(source.available)} 件并发起升级` : "锁定全部可用库存并发起升级"}</button></footer>
     </form></DirectDialog>}
@@ -146,7 +146,7 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
             <div><dl>{[["发货计划号", line.plan || "—"], ["发货时间", line.shipDate || "—"], ["入库时间", line.receivedAt ? displayTime(line.receivedAt, true) : "—"], ["FNSKU", line.fnsku || "—"], ["来源仓库", line.warehouse || "—"], ["来源团队", line.sourceTeam || "—"], ["初始锁定量", `${formatNumber(line.initialQuantity)} 件`], ["升级完成量", `${formatNumber(line.completedQuantity)} 件`], ["剩余升级量", `${formatNumber(line.inProgressQuantity)} 件`]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></div>
           </label>)}
         </fieldset>
-        {!recovery && batchUnavailable && <p className="field-error" role="alert">所选批次已由其他操作完成，请重新选择实际来源批次。</p>}
+        {!recovery && batchUnavailable && <p className="field-error" role="alert">所选来源批次已无剩余升级量或不再可用，请刷新后重新选择。</p>}
         <div className="direct-complete-fields">
           <label className="field"><span>本次完成数量</span><input aria-label="本次完成数量" inputMode="numeric" value={draft.quantity} disabled={!draftCache.ready || !!recovery || busy !== null} aria-invalid={!!quantityError && !recovery} onChange={event => updateDraft({ quantity: event.target.value })} />{quantityError && !recovery && <span className="field-error">{quantityError}</span>}</label>
           <label className="field"><span>升级完成版本</span><input aria-label="升级完成版本" value={draft.version} disabled={!draftCache.ready || !!recovery || busy !== null} aria-invalid={!!versionError && !recovery} onChange={event => updateDraft({ version: event.target.value })} />{versionError && !recovery && <span className="field-error">{versionError}</span>}</label>

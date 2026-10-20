@@ -6,7 +6,7 @@
 function collectLingxingRemoval({ orderNo, fnsku }, pageOnly = false) {
   const url = 'https://erp.lingxing.com/erp/msupply/removeInbound';
   if (location.origin + location.pathname !== url) throw new Error('未打开领星移除入库单，请在部署电脑检查领星页面');
-  if (!orderNo || !fnsku) throw new Error('请提供移除单号和 FNSKU');
+  if (!orderNo || !fnsku) throw new Error('请提供移除订单号和 FNSKU。');
   const visible = el => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
   const clean = value => String(value).replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim();
   const inputs = [...document.querySelectorAll('input')].filter(visible);

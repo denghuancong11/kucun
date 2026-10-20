@@ -32,7 +32,7 @@ function inquiry(plan,model='SYNTH-TONER-001',version='V1'){
   let row=db.createInquiry({role:'operation-1',model,quantity:100,department:'一团',store:'AUS',operator:'隔离工具栏',fnsku:'000'+plan,asin:'BTOOLBAR01',requestId:rid()}).record;
   row=db.reviewInquiry({id:row.id,role:'business',decision:'approve',approvedQuantity:100,...common(row)}).record;
   row=db.replyInquiry({id:row.id,role:'purchasing',supplierQuantity:100,shippingWarehouse:'CA',...common(row)}).record;
-  return db.archiveInquiry({id:row.id,role:'assistant-1',plan,date:'2026-10-13',version,...common(row)}).record;
+  return db.archiveInquiry({id:row.id,role:'purchasing',plan,date:'2026-10-13',version,...common(row)}).record;
 }
 function move(row){return db.initiateRelocationUpgrade({inquiryId:row.id,sourceRevision:row.revision,role:'admin',requestId:rid()}).workItem;}
 async function nav(role,tab='移仓升级'){
@@ -108,13 +108,13 @@ async function uploadAgain(kind,file,{stage,failFirst=false}={}){
   await page.route('**'+previewPath,async route=>{await gate;await route.continue();},{times:1});
   await input.setInputFiles(file);await panel(kind).locator('label').filter({hasText:'正在预览…'}).waitFor();assert(await input.isDisabled());release();
   await dialog().getByText(/尚未保存/).waitFor();assert.equal(await input.inputValue(),'');
-  await close();await panel(kind).getByRole('button',{name:'查看更新预览',exact:true}).click();await dialog().getByText(/尚未保存/).waitFor();await close();
+  await close();await panel(kind).getByRole('button',{name:kind==='relocation'?'查看 RMA 与地址更新预览':'查看'+labelFor(stage)+'更新预览',exact:true}).click();await dialog().getByText(/尚未保存/).waitFor();await close();
   const responsePromise=page.waitForResponse(response=>response.url().endsWith(previewPath)&&response.request().method()==='POST');
   await input.setInputFiles(file);assert.equal((await responsePromise).status(),200);await dialog().getByText(/尚未保存/).waitFor();assert.equal(await input.count(),1);
 }
 async function saveWithRecovery(kind,stage,assertSaved,{rejectFirst=false}={}){
   const endpoint=kind==='relocation'?'/api/upgrades/relocation-update/import':'/api/transfer-upgrades/update/import?stage='+stage;
-  const confirm=kind==='relocation'?'确认更新移仓资料':'确认更新转仓升级',sent=[];
+  const confirm=kind==='relocation'?'确认更新 RMA 与地址':stage==='rma'?'确认更新 RMA':'确认更新'+labelFor(stage),sent=[];
   if(rejectFirst){
     await page.route('**'+endpoint,route=>route.fulfill({status:422,contentType:'application/json',body:JSON.stringify({error:'隔离验证：本次未保存'})}),{times:1});
     await dialog().getByRole('button',{name:confirm,exact:true}).click();await dialog().getByRole('alert').filter({hasText:'隔离验证：本次未保存'}).waitFor();
@@ -133,9 +133,9 @@ async function saveWithRecovery(kind,stage,assertSaved,{rejectFirst=false}={}){
   else {await page.getByLabel('转仓筛选型号').selectOption('SYNTH-TONER-002');assert(await page.getByLabel('转仓办理阶段').isDisabled());}
   await page.getByRole('tab',{name:kind==='relocation'?'转仓升级':'移仓升级',exact:true}).click();
   await page.getByRole('tab',{name:kind==='relocation'?'移仓升级':'转仓升级',exact:true}).click();
-  await panel(kind).getByRole('button',{name:'查看更新预览',exact:true}).click();await dialog().getByRole('button',{name:'重试确认',exact:true}).waitFor();await close();
+  await panel(kind).getByRole('button',{name:kind==='relocation'?'查看 RMA 与地址更新预览':'查看'+labelFor(stage)+'更新预览',exact:true}).click();await dialog().getByRole('button',{name:'重试确认',exact:true}).waitFor();await close();
   await panel(kind).getByRole('button',{name:'重试确认',exact:true}).click();
-  await panel(kind).getByRole('status').filter({hasText:kind==='relocation'?'已更新 1 单':'已保存 1 条转仓升级更新'}).waitFor();
+  await panel(kind).getByRole('status').filter({hasText:kind==='relocation'?'已更新 1 条移仓记录':'已保存 1 条转仓升级更新'}).waitFor();
   assert.equal(await panel(kind).getByRole('button',{name:'重试确认',exact:true}).count(),0);
   assert.equal(sent.length,2);assert.deepEqual(sent[1],sent[0]);await assertSaved();await page.unroute('**'+endpoint);
   retryEvidence.push({kind,stage,requestId:sent[0].requestId,attempts:sent.length,samePayload:true});
@@ -154,18 +154,18 @@ try{
     await nav(role);const canExport=['admin','purchasing','logistics'].includes(role),logistics=role==='logistics',firstImport=['admin','assistant-1','assistant-2','purchasing','logistics'].includes(role);
     assert.equal(await panel('relocation').getByRole('button',{name:'导出移仓升级',exact:true}).count(),Number(canExport));
     assert.equal(await board('relocation').getByRole('button',{name:'下载移仓更新模板',exact:true}).count(),Number(logistics));assert.equal(await page.locator('#relocation-update-file').count(),Number(logistics));
-    if(logistics)await toolbarOrder('relocation',['导出移仓升级','下载移仓更新模板','导入更新RMA和地址']);
+    if(logistics)await toolbarOrder('relocation',['导出移仓升级','下载移仓更新模板','上传 RMA 与地址更新表格']);
     await page.getByRole('tab',{name:'转仓升级',exact:true}).click();await panel('transfer').waitFor();
     assert.equal(await panel('transfer').getByRole('button',{name:'导出转仓升级',exact:true}).count(),Number(canExport));assert.equal(await page.locator('#transfer-update-file').count(),Number(logistics));
     assert.equal(await page.getByLabel('转仓办理阶段').count(),Number(logistics));assert.equal(await page.locator('#transfer-upgrade-file').count(),Number(firstImport));assert.equal(await panel('transfer').getByRole('button',{name:'刷新',exact:true}).count(),1);
-    if(logistics)await toolbarOrder('transfer',['导出转仓升级','下载RMA更新模板','导入RMA更新','导入转仓升级表格','刷新']);
+    if(logistics)await toolbarOrder('transfer',['导出转仓升级','下载RMA更新模板','上传 RMA 更新表格','上传转仓升级表格','刷新']);
     roleEvidence.push({role,canExport,logistics,firstImport,refresh:true});
   }
   check('九角色仅管理员/采购/物流导出，仅物流更新；首次导入五角色、刷新保留，按钮无重复',{roles:roleEvidence});
   await nav('logistics','转仓升级');
   const imported=[['000T-A','SYNTH-TONER-001','V1'],['000T-B','SYNTH-TONER-001','V1'],['000T-C','SYNTH-TONER-001','V2'],['000T-D','SYNTH-TONER-002','V1']].map(([plan,model,version])=>{const row=[...transferSample];row[0]=model;row[2]=plan;row[4]=version;row[6]=100;return row;});
   await page.locator('#transfer-upgrade-file').setInputFiles({name:'隔离首次转仓.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:transferWorkbook(imported)});
-  await dialog().getByText(/尚未导入/).waitFor();await close();await panel('transfer').getByRole('button',{name:'查看首次导入预览',exact:true}).click();await dialog().getByRole('button',{name:'确认导入转仓升级',exact:true}).click();await dialog().waitFor({state:'hidden'});assert.equal(db.getTransferUpgrades().length,4);
+  await dialog().getByText(/将新增/).waitFor();await close();await panel('transfer').getByRole('button',{name:'查看转仓升级导入预览',exact:true}).click();await dialog().getByRole('button',{name:'确认新增转仓升级记录',exact:true}).click();await dialog().waitFor({state:'hidden'});assert.equal(db.getTransferUpgrades().length,4);
   await seedTransfer('rma',{'000T-B':{11:'000RMA-B'},'000T-C':{11:'000RMA-C'}});await seedTransfer('count',{'000T-C':{12:80}});await panel('transfer').getByRole('button',{name:'刷新',exact:true}).click();
   check('移动后的首次导入入口仍有独立预览、关闭重开与确认，隔离库新增四条记录');
   await layout('transfer',1440,'transfer-toolbar-before-download');
@@ -187,7 +187,7 @@ try{
   await selectTransfer('SYNTH-TONER-001','V1','待确认实际清点数量');
   for(const stage of ['rma','count','progress']){
     await page.getByLabel('转仓办理阶段').selectOption(stage);assert.equal(await page.getByLabel('转仓筛选状况').inputValue(),'待确认实际清点数量');
-    await toolbarOrder('transfer',['导出转仓升级','下载'+labelFor(stage)+'更新模板','导入'+labelFor(stage)+'更新','导入转仓升级表格','刷新']);
+    await toolbarOrder('transfer',['导出转仓升级','下载'+labelFor(stage)+'更新模板',stage==='rma'?'上传 RMA 更新表格':'上传'+labelFor(stage)+'更新表格','上传转仓升级表格','刷新']);
     await download('transfer','下载'+labelFor(stage)+'更新模板',{path:'/api/transfer-upgrades/update/template',params:{stage,model:'SYNTH-TONER-001',version:'V1',status:'待确认实际清点数量'},plans:stage==='progress'?[]:['000T-B']});
   }
   await page.getByLabel('转仓筛选状况').selectOption('已在第三方海外仓');assert.equal(await page.getByLabel('转仓办理阶段').inputValue(),'progress');

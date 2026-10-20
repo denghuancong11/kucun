@@ -64,14 +64,14 @@ try {
    assert.equal(publicRows.length,restricted?(team==='二团'?1:0):1);
    if(!restricted) {
     assert.deepEqual(publicRows.map(row=>row.department),['二团']);
-    assert.deepEqual(Object.keys(publicRows[0]).sort(),['id','documentNo','operator','department','requestedQuantity','approvedQuantity','lockedQuantity','issuedQuantity','status'].sort());
+    assert.deepEqual(Object.keys(publicRows[0]).sort(),['id','documentNo','operator','department','requestedQuantity','approvedQuantity','originalRequestedQuantity','businessReviewedQuantity','finalQuantity','finalQuantitySource','workflowMode','inkWorkflowStage','tonerConversionStatus','isVirtual','convertedInquiryId','convertedInquiryNo','zeroAvailableConfirmed','lockedQuantity','issuedQuantity','status'].sort());
    }
    assert.equal(privateRows.length,team==='二团'?1:0);
    assert.ok(privateRows.every(row=>row.department===team));
   }
   if(!restricted){
    assert.equal(publicSecond[0].operator,'二团运营');assert.equal(publicSecond[0].lockedQuantity,100);
-   assert.deepEqual(Object.keys(publicSecond[0]).sort(),['id','documentNo','operator','department','requestedQuantity','approvedQuantity','lockedQuantity','issuedQuantity','status'].sort());
+   assert.deepEqual(Object.keys(publicSecond[0]).sort(),['id','documentNo','operator','department','requestedQuantity','approvedQuantity','originalRequestedQuantity','businessReviewedQuantity','finalQuantity','finalQuantitySource','workflowMode','inkWorkflowStage','tonerConversionStatus','isVirtual','convertedInquiryId','convertedInquiryNo','zeroAvailableConfirmed','lockedQuantity','issuedQuantity','status'].sort());
   }
   assert.deepEqual(Object.values(firstView.totals).map(b=>[b.onHand,b.locked,b.available]),restricted?[[500,0,500]]:[[500,100,400]]);
   const catalog=(await api('/api/inventory/catalog','operation-1')).models.find(m=>m.model===model);assert.deepEqual([catalog.inStock,catalog.locked,catalog.available],restricted?[500,0,500]:[500,100,400]);
@@ -90,12 +90,14 @@ try {
   for(const [role,team] of [['operation-1','一团'],['operation-2','二团']]) {
    const approvals=await api('/api/approvals',role);for(const r of [...approvals.allocations,...approvals.inquiries])assert.equal(r.department,team);
   }
+  // Explicitly retain the legacy procurement-chain fixture; fresh v37 flow has separate coverage.
+  if(category==='墨盒')db.db.prepare('UPDATE allocation_documents SET ink_workflow_stage=NULL WHERE id=?').run(second.id);
   second=(await api(`/api/allocations/${second.id}/review`,'business',{decision:'approve',approvedQuantity:100,expectedRevision:second.revision,requestId:rid()})).record;
   if(category==='墨盒')second=(await api(`/api/allocations/${second.id}/reply`,'purchasing',{supplierQuantity:100,expectedRevision:second.revision,requestId:rid()})).record;
   second=(await api(`/api/allocations/${second.id}/${category==='墨盒'?'archive':'confirm'}`,category==='墨盒'?'purchasing':'assistant-2',{expectedRevision:second.revision,requestId:rid()})).record;
   inquiry=(await api(`/api/inquiries/${inquiry.id}/review`,'business',{decision:'approve',approvedQuantity:20,expectedRevision:inquiry.revision,requestId:rid()})).record;
   inquiry=(await api(`/api/inquiries/${inquiry.id}/reply`,'purchasing',{supplierQuantity:20,shippingWarehouse:'CA',expectedRevision:inquiry.revision,requestId:rid()})).record;
-  inquiry=(await api(`/api/inquiries/${inquiry.id}/archive`,category==='墨盒'?'purchasing':'assistant-2',{plan:'ARCHIVE-'+model,date:'2026-09-10',version:'V1',expectedRevision:inquiry.revision,requestId:rid()})).record;
+  inquiry=(await api(`/api/inquiries/${inquiry.id}/archive`,'purchasing',{plan:'ARCHIVE-'+model,date:'2026-09-10',version:'V1',expectedRevision:inquiry.revision,requestId:rid()})).record;
   for(const source of [{allocationId:second.id},{inquiryId:inquiry.id,...(category==='墨盒'?{sourceRevision:inquiry.revision}:{})}]) {
    await api('/api/upgrades/relocation-work-items','operation-1',{...source,requestId:rid()},403);
    let work=(await api('/api/upgrades/relocation-work-items','operation-2',{...source,requestId:rid()})).workItem;

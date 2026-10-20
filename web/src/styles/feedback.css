@@ -268,6 +268,14 @@
 }
 
 /* 确认框内容 */
+.allocation-confirm-dialog {
+  max-width: calc(100vw - 40px);
+  margin: auto;
+}
+.allocation-confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.allocation-confirm-dialog > header { justify-content: space-between; }
+.allocation-confirm-dialog h3 { margin: 0; font-size: var(--fs-h2); }
+
 .dialog-title {
   display: flex;
   align-items: center;

@@ -5,7 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { accountStore, relocationAccounts, processRelocationAddress, lingxingStore } from './relocation-address.mjs';
 
-export const INVENTORY_SCHEMA_VERSION = 36;
+export const INVENTORY_SCHEMA_VERSION = 38;
+const ALAN_WAIT_MS = 5 * 60 * 60 * 1000;
 function loadLocalRuntimeConfig() {
   const configPath = path.resolve(process.env.ASTER_RUNTIME_CONFIG
     || path.join(import.meta.dirname, ".local-private", "runtime-config.local.json"));
@@ -122,7 +123,7 @@ export function transitCategoryFromFileName(fileName) {
   const hasToner = name.includes("硒鼓");
   const hasInk = name.includes("墨盒");
   if (hasToner === hasInk) {
-    throw new BusinessError(422, "transit_category_unrecognized", "文件名无法唯一识别类目（硒鼓或墨盒）");
+    throw new BusinessError(422, "transit_category_unrecognized", "文件名须包含“硒鼓”或“墨盒”，且不能同时包含两者，请修改文件名后上传。");
   }
   return hasToner ? "硒鼓" : "墨盒";
 }
@@ -1629,6 +1630,8 @@ function createSchema(db, databaseId, createdAt) {
   migrateTransferWorkflowV34(db, createdAt);
   migrateWaybillExportsV35(db, createdAt);
   migrateInkApprovalV36(db, createdAt);
+  migrateInkWorkflowV37(db, createdAt);
+  migrateTonerWorkflowV38(db, createdAt);
   const insertMeta = db.prepare("INSERT INTO system_meta(key, value) VALUES (?, ?)");
   insertMeta.run("database_id", databaseId);
   insertMeta.run("data_version", "0");
@@ -2976,6 +2979,50 @@ function migrateInkApprovalV36(db, at) {
     .run(at, '墨盒独立Alan审核、采购接管归档及可追溯回撤；已商务批准调拨保留预锁、未采购回复询库进入Alan节点，已有采购回复继续归档');
 }
 
+function migrateInkWorkflowV37(db, at) {
+  db.exec(`ALTER TABLE allocation_documents ADD COLUMN ink_workflow_stage TEXT CHECK (ink_workflow_stage IN
+    ('pending_business','pending_alan','pending_assistant','pending_conversion_confirmation','completed','rejected','converted'));
+    ALTER TABLE allocation_documents ADD COLUMN alan_deadline_at TEXT;
+    ALTER TABLE inquiry_documents ADD COLUMN source_allocation_id INTEGER REFERENCES allocation_documents(id);
+    CREATE UNIQUE INDEX uq_inquiry_source_allocation ON inquiry_documents(source_allocation_id) WHERE source_allocation_id IS NOT NULL;
+    CREATE INDEX idx_ink_alan_deadline ON allocation_documents(alan_deadline_at) WHERE ink_workflow_stage='pending_alan';`);
+  db.prepare(`UPDATE allocation_documents SET ink_workflow_stage='pending_business'
+    WHERE status='pending' AND approval_status='pending' AND model IN (SELECT model FROM catalog_models WHERE category='墨盒')`).run();
+  db.prepare(`UPDATE allocation_documents SET ink_workflow_stage='pending_alan',alan_deadline_at=?,procurement_status=NULL
+    WHERE status='pending' AND approval_status='approved' AND procurement_status='pending_alan'
+      AND model IN (SELECT model FROM catalog_models WHERE category='墨盒')`).run(new Date(Date.parse(at) + ALAN_WAIT_MS).toISOString());
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(37,?,?)')
+    .run(at, '墨盒调拨独立助理完成链、连续5h与商务转询库；保留已办理旧链及原库存事实');
+}
+
+function migrateTonerWorkflowV38(db, at) {
+  db.exec(`ALTER TABLE allocation_documents ADD COLUMN toner_conversion_status TEXT
+    CHECK (toner_conversion_status IN ('pending_confirmation','accepted','rejected'));`);
+  // Historical terminal facts are projected once, not replayed as new business actions.
+  const terminalEvents = db.prepare(`SELECT e.*, d.model, d.document_no, d.department, d.store_name,
+      d.operator_name, d.requested_quantity FROM inquiry_events e
+    JOIN inquiry_documents d ON d.id=e.inquiry_id JOIN catalog_models m ON m.model=d.model
+    WHERE m.category='硒鼓' AND e.event_type IN ('archive','reject') ORDER BY e.id`).all();
+  const projected = db.prepare(`SELECT 1 FROM document_events WHERE event_type IN ('inquiry_completed','inquiry_rejected')
+    AND json_extract(payload_json,'$.sourceInquiryEventId')=?`);
+  const insert = db.prepare(`INSERT INTO document_events(document_id,event_type,role,occurred_at,reason,payload_json)
+    VALUES(NULL,?,?,?,?,?)`);
+  for (const event of terminalEvents) {
+    if (projected.get(event.id)) continue;
+    const payload = JSON.parse(event.payload_json);
+    const entry = db.prepare("SELECT payload_json FROM inquiry_events WHERE inquiry_id=? AND event_type='entry' AND id<=? ORDER BY id LIMIT 1")
+      .get(event.inquiry_id, event.id);
+    const quantity = Number(event.event_type === 'archive' ? payload.quantity : payload.quantity
+      ?? (entry ? JSON.parse(entry.payload_json).requestedQuantity : event.requested_quantity));
+    insert.run(event.event_type === 'archive' ? 'inquiry_completed' : 'inquiry_rejected',event.role,event.occurred_at,
+      payload.businessNote ?? payload.procurementNote ?? null,JSON.stringify({inquiryId:Number(event.inquiry_id),
+        sourceInquiryEventId:Number(event.id),model:event.model,category:'硒鼓',department:event.department,team:event.department,
+        store:event.store_name,operator:event.operator_name,businessNo:event.document_no,quantity,onHandDelta:0,lockedDelta:0}));
+  }
+  db.prepare('INSERT INTO schema_migrations(version,applied_at,description) VALUES(38,?,?)')
+    .run(at,'硒鼓调拨转询库、采购独立确认归档及历史询库终结流水投影；在办状态和库存事实不重放');
+}
+
 export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = new Date().toISOString(), bumpDataVersion = true }) {
   if (!fs.existsSync(databasePath)) throw new Error(`找不到待迁移数据库：${databasePath}`);
   const db = new DatabaseSync(databasePath);
@@ -2985,9 +3032,9 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     db.close();
     return { changed: false, fromVersion, toVersion: INVENTORY_SCHEMA_VERSION, migratedCorrections: 0 };
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].includes(fromVersion)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(fromVersion)) {
     db.close();
-    throw new Error(`只支持从数据库 v1 至 v35 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
+    throw new Error(`只支持从数据库 v1 至 v37 迁移到 v${INVENTORY_SCHEMA_VERSION}，实际版本为 v${fromVersion}`);
   }
   let verifiedPackImports;
   try {
@@ -3108,6 +3155,8 @@ export function migrateInventoryDatabaseToCurrent({ databasePath, appliedAt = ne
     if (version === 33) { migrateTransferWorkflowV34(db, appliedAt); version = 34; }
     if (version === 34) { migrateWaybillExportsV35(db, appliedAt); version = 35; }
     if (version === 35) { migrateInkApprovalV36(db, appliedAt); version = 36; }
+    if (version === 36) { migrateInkWorkflowV37(db, appliedAt); version = 37; }
+    if (version === 37) { migrateTonerWorkflowV38(db, appliedAt); version = 38; }
     db.exec(`PRAGMA user_version = ${version}`);
     if (bumpDataVersion) {
       db.prepare("UPDATE system_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_version'").run();
@@ -3333,6 +3382,7 @@ function rowToDocument(row, lingxing = null) {
 }
 
 const AUDIT_OPERATIONS = [
+  'alan_timeout','transfer_inquiry','conversion_accepted','conversion_rejected','inquiry_completed','inquiry_rejected',
   "entry", "review", "reject", "alan_review", "reply", "archive", "recall", "confirm", "cancel", "withdraw", "import_stage", "legacy_import", "transfer_upgrade_import", "transfer_upgrade_update",
   "transit_import", "transit_import_revert", "transit_status", "transit_on_shelf",
   "transit_merge", "transit_delete", "transit_manual", "transit_team_corrected", "legacy_placeholder_removed",
@@ -3344,6 +3394,7 @@ const AUDIT_OPERATIONS = [
 const AUDIT_OPERATIONS_EXTRA = "transit_off_shelf";
 const AUDIT_OPERATION_SET = new Set([...AUDIT_OPERATIONS, AUDIT_OPERATIONS_EXTRA, 'business_correction']);
 const AUDIT_LEDGER_TYPES = {
+  transfer_inquiry: ['release_reservation'],
   entry: ["reserve"],
   review: ["review_adjustment"],
   alan_review: ["review_adjustment"],
@@ -3376,6 +3427,18 @@ function rowToDocumentEvent(row) {
   };
 }
 
+function originalApprovalFacts(events, row) {
+  const entry = events.find(event => event.type === 'entry');
+  const reset = events.findLast(event => event.type === 'recall' && event.payload.target === 'pending_business');
+  const business = events.findLast(event => (!reset || event.id > reset.id)
+    && (event.type === 'review' || event.type === 'transfer_inquiry'
+      || event.type === 'entry' && event.payload.origin === 'allocation_conversion'));
+  return {
+    originalRequestedQuantity: !entry && row.approval_status === 'legacy' ? null : Number(entry?.payload.requestedQuantity ?? entry?.payload.quantity ?? row.requested_quantity),
+    businessReviewedQuantity: business?.payload.approvedQuantity == null ? null : Number(business.payload.approvedQuantity),
+  };
+}
+
 function rowToLedgerEntry(row) {
   return {
     id: Number(row.id),
@@ -3403,16 +3466,22 @@ function rowToUpgradeLedgerEntry(row) {
   };
 }
 
-function auditResult(operation, payload = {}) {
+function auditResult(operation, payload = {}, role) {
   if (operation === "review") return "商务已批准";
-  if (operation === 'alan_review') return 'Alan已审核，待采购回复';
+  if (operation === 'alan_review') return payload.target === 'pending_assistant' ? 'Alan已审核，待助理确认' : 'Alan已审核，待采购回复';
+  if (operation === 'alan_timeout') return 'Alan 审核超时 5 小时，已取用商务审核数量，等待助理确认';
+  if (operation === 'transfer_inquiry') return '已转询库，待本团运营确认';
+  if (operation === 'conversion_accepted') return '运营已接受，已转询库，待采购确认';
+  if (operation === 'conversion_rejected') return '运营不接受转询库，已拒绝，库存未变';
+  if (operation === 'inquiry_completed') return '询库已完成，现有在库库存未变';
+  if (operation === 'inquiry_rejected') return `${role === 'business' ? '商务' : payload.category === '硒鼓' ? '采购' : '采购/物流'}已拒绝询库，现有在库库存未变`;
   if (operation === 'reply') return payload.supplierQuantity === 0 ? '供应商回复0，已拒绝' : '供应商已回复，待采购归档';
   if (operation === 'archive') return '采购归档完成，已调出';
   if (operation === 'recall') return payload.target === 'pending_business' ? '已退库并恢复预锁，待商务审核' : '已退库并恢复预锁，待采购回复';
-  if (operation === "reject") return "商务已拒绝";
+  if (operation === "reject") return role === 'alan' ? 'Alan已拒绝' : '商务已拒绝';
   if (operation === "import_stage") return "已暂存";
   if (operation === "transfer_upgrade_update") return `转仓${({rma:"RMA",count:"清点数量",progress:"升级进度"})[payload.stage]}已更新，${payload.after.status}`;
-  if (operation === "transfer_upgrade_import") return `转仓升级已导入 ${payload.rowCount} 行，普通库存不变`;
+  if (operation === "transfer_upgrade_import") return `已导入 ${payload.rowCount} 行转仓升级记录，在库与预锁定数量不变。`;
   if (operation === "transit_import") return "在途已入账";
   if (operation === "transit_import_revert") return "在途导入已撤销";
   if (operation === "transit_status") return "物流状态已更新";
@@ -3423,7 +3492,7 @@ function auditResult(operation, payload = {}) {
   if (operation === "transit_team_corrected") return "已修正团队归属，库存数量不变";
   if (operation === "transit_manual") return "单条在途录入";
   if (operation === "legacy_placeholder_removed") return "历史占位批次已清理";
-  if (operation === "upgrade_direct_start") return "在库库存已预锁定升级";
+  if (operation === "upgrade_direct_start") return "已预锁定在库库存，等待升级。";
   if (operation === "upgrade_direct_complete") return "在库库存已完成版本转换";
   if (operation === "upgrade_relocation_created") return "已登记移仓发货";
   if (operation === "upgrade_relocation_complete") return payload.onHandDelta<0 ? "移仓累计完成量减少，指定入库批次已扣回" : payload.onHandDelta===0 ? "移仓升级数量已更新，库存未变" : "移仓库存已完成升级入库";
@@ -3483,6 +3552,111 @@ export class InventoryDatabase {
 
   close() {
     this.db.close();
+  }
+
+  nextAlanDeadline() {
+    return this.db.prepare("SELECT MIN(alan_deadline_at) AS deadline FROM allocation_documents WHERE ink_workflow_stage='pending_alan'").get().deadline;
+  }
+
+  advanceExpiredInkAllocations(at = new Date().toISOString()) {
+    return this.transaction(() => {
+      const rows = this.db.prepare("SELECT * FROM allocation_documents WHERE ink_workflow_stage='pending_alan' AND alan_deadline_at<=? ORDER BY alan_deadline_at,id").all(at);
+      for (const row of rows) {
+        this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='pending_assistant',quantity=approved_quantity,revision=revision+1,updated_at=? WHERE id=?")
+          .run(at, row.id);
+        this.addEvent(row.id, 'alan_timeout', 'system', at, null, {quantity:Number(row.approved_quantity),finalQuantitySource:'business',
+          deadlineAt:row.alan_deadline_at,onHandDelta:0,lockedDelta:0});
+      }
+      if (rows.length) this.bumpVersion(at);
+      return { advancedCount: rows.length };
+    });
+  }
+
+  newInkAllocationForUpdate(id, expectedRevision, stages) {
+    const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+    if (!row) throw new BusinessError(404,'not_found','找不到调拨记录');
+    this.requireRevision(row, expectedRevision);
+    if (!stages.includes(row.ink_workflow_stage)) throw new BusinessError(409,'invalid_approval_status','当前不能办理此调拨操作，请刷新查看进度。');
+    return row;
+  }
+
+  releaseInkAllocation(row, role, at) {
+    const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS locked FROM inventory_ledger WHERE document_id=?').get(row.id).locked);
+    const ledger = this.addLedger(row.id,row.batch_key,'release_reservation',0,-locked,role,at);
+    return { lockedDelta:-locked, ledgerIds:[Number(ledger.lastInsertRowid)] };
+  }
+
+  transferAllocationToInquiry({id,role,approvedQuantity,businessNote,expectedRevision,requestId}) {
+    if (role !== BUSINESS_ROLE) throw new BusinessError(403,'review_forbidden','仅商务可转询库');
+    const quantity = Number(approvedQuantity), note = String(businessNote ?? '').trim();
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new BusinessError(400,'invalid_quantity','商务审核数量请填写大于0的整数');
+    return this.idempotent(`allocation:transfer-inquiry:${id}`,requestId,{id,role,approvedQuantity:quantity,businessNote:note,expectedRevision},() => {
+      const current = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+      if (current && this.getModel(current.model).category === '硒鼓') {
+        this.requireRevision(current,expectedRevision);
+        if (current.status !== 'pending' || current.approval_status !== 'pending' || current.toner_conversion_status !== null) {
+          throw new BusinessError(409,'invalid_approval_status','仅待商务审核的硒鼓调拨可转询库');
+        }
+        const at = new Date().toISOString();
+        const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS locked FROM inventory_ledger WHERE document_id=?').get(id).locked);
+        const release = this.addLedger(id,current.batch_key,'release_reservation',0,-locked,role,at);
+        this.db.prepare(`UPDATE allocation_documents SET toner_conversion_status='pending_confirmation',approval_status='approved',
+          approved_quantity=?,business_note=?,reviewed_by_role=?,reviewed_at=?,revision=revision+1,updated_at=? WHERE id=?`)
+          .run(quantity,note,role,at,at,id);
+        this.addEvent(id,'transfer_inquiry',role,at,note,{approvedQuantity:quantity,quantity,onHandDelta:0,
+          lockedDelta:-locked,ledgerIds:[Number(release.lastInsertRowid)]});
+        return {ok:true,record:this.getDocument(id),totals:this.batchTotals(current.model)};
+      }
+      const row = this.newInkAllocationForUpdate(id,expectedRevision,['pending_business']);
+      const at = new Date().toISOString(), released = this.releaseInkAllocation(row,role,at);
+      this.db.prepare(`UPDATE allocation_documents SET ink_workflow_stage='pending_conversion_confirmation',approved_quantity=?,business_note=?,
+        reviewed_by_role=?,reviewed_at=?,alan_deadline_at=NULL,revision=revision+1,updated_at=? WHERE id=?`).run(quantity,note,role,at,at,id);
+      this.addEvent(id,'transfer_inquiry',role,at,note,{approvedQuantity:quantity,quantity,onHandDelta:0,...released});
+      return {ok:true,record:this.getDocument(id),totals:this.batchTotals(row.model)};
+    });
+  }
+
+  decideAllocationConversion({id,role,decision,expectedRevision,requestId}) {
+    if (!['operation-1','operation-2'].includes(role)) throw new BusinessError(403,'conversion_decision_forbidden','仅本团运营可确认转询库');
+    if (!['accept','reject'].includes(decision)) throw new BusinessError(400,'invalid_conversion_decision','请选择接受或不接受');
+    return this.idempotent(`allocation:conversion-decision:${id}`,requestId,{id,role,decision,expectedRevision},() => {
+      const current = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
+      const toner = current && this.getModel(current.model).category === '硒鼓';
+      const row = toner ? current : this.newInkAllocationForUpdate(id,expectedRevision,['pending_conversion_confirmation']);
+      if (toner) {
+        this.requireRevision(row,expectedRevision);
+        if (row.status !== 'pending' || row.toner_conversion_status !== 'pending_confirmation') {
+          throw new BusinessError(409,'invalid_approval_status','当前硒鼓调拨不在待运营确认转询库阶段');
+        }
+      }
+      requireDepartment(role,row.department);
+      const at = new Date().toISOString();
+      if (decision === 'reject') {
+        if (toner) this.db.prepare(`UPDATE allocation_documents SET status='cancelled',approval_status='rejected',toner_conversion_status='rejected',
+          cancelled_by_role=?,cancelled_at=?,revision=revision+1,updated_at=? WHERE id=?`).run(role,at,at,id);
+        else this.db.prepare(`UPDATE allocation_documents SET status='cancelled',approval_status='rejected',ink_workflow_stage='rejected',
+          cancelled_by_role=?,cancelled_at=?,revision=revision+1,updated_at=? WHERE id=?`).run(role,at,at,id);
+        this.addEvent(id,'conversion_rejected',role,at,null,{quantity:Number(row.approved_quantity),onHandDelta:0,lockedDelta:0});
+        return {ok:true,record:this.getDocument(id)};
+      }
+      const conversion = this.db.prepare("SELECT id FROM document_events WHERE document_id=? AND event_type='transfer_inquiry' ORDER BY id DESC LIMIT 1").get(id);
+      const inserted = this.db.prepare(`INSERT INTO inquiry_documents(document_no,model,asin,fnsku,requested_quantity,approved_quantity,
+        department,store_name,operator_name,operator_note,business_note,status,created_by_role,created_at,updated_at,source_allocation_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_purchasing',?,?,?,?)`).run(`PENDING-${crypto.randomUUID()}`,row.model,row.asin,row.fnsku,
+          row.approved_quantity,row.approved_quantity,row.department,row.store_name,row.operator_name,row.operator_note,row.business_note,role,at,at,id);
+      const inquiryId = Number(inserted.lastInsertRowid);
+      this.db.prepare('UPDATE inquiry_documents SET document_no=? WHERE id=?').run(`XK-${String(inquiryId).padStart(6,'0')}`,inquiryId);
+      if (toner) this.db.prepare('UPDATE inquiry_documents SET reviewed_by_role=?,reviewed_at=? WHERE id=?')
+        .run(row.reviewed_by_role,row.reviewed_at,inquiryId);
+      this.addInquiryEvent(inquiryId,'entry',role,at,{origin:'allocation_conversion',sourceAllocationId:id,sourceConversionEventId:Number(conversion.id),
+        requestedQuantity:Number(row.approved_quantity),approvedQuantity:Number(row.approved_quantity),businessNote:row.business_note,
+        businessReviewedByRole:row.reviewed_by_role,businessReviewedAt:row.reviewed_at,operatorNote:row.operator_note,asin:row.asin,
+        ...(toner ? {sourceOriginalRequestedQuantity:this.getDocument(id).originalRequestedQuantity} : {})});
+      if (toner) this.db.prepare("UPDATE allocation_documents SET status='cancelled',toner_conversion_status='accepted',revision=revision+1,updated_at=? WHERE id=?").run(at,id);
+      else this.db.prepare("UPDATE allocation_documents SET status='cancelled',ink_workflow_stage='converted',revision=revision+1,updated_at=? WHERE id=?").run(at,id);
+      this.addEvent(id,'conversion_accepted',role,at,null,{inquiryId,quantity:Number(row.approved_quantity),onHandDelta:0,lockedDelta:0});
+      return {ok:true,record:this.getDocument(id),inquiry:this.getInquiry(inquiryId)};
+    });
   }
 
   transaction(task) {
@@ -3742,16 +3916,22 @@ export class InventoryDatabase {
     const publicRecords = {};
     for (const row of rows) {
       if (visibleBatchKeys && !visibleBatchKeys.has(row.batch_key)) continue;
-      (records[row.batch_key] ??= []).push(this.documentRecord(row));
+      const record = this.documentRecord(row);
+      (records[row.batch_key] ??= []).push(record);
       if (row.status === 'draft') continue;
       // 公开摘要只投影已确认可跨团查看的字段；占用和调出直接取调拨账本，不混入升级账本。
       (publicRecords[row.batch_key] ??= []).push({
         id: Number(row.id), documentNo: row.document_no, operator: row.operator_name, department: row.department,
         requestedQuantity: row.approval_status === 'legacy' || row.requested_quantity == null ? null : Number(row.requested_quantity),
         approvedQuantity: row.approval_status === 'legacy' || row.approved_quantity == null ? null : Number(row.approved_quantity),
+        originalRequestedQuantity:record.originalRequestedQuantity,businessReviewedQuantity:record.businessReviewedQuantity,
+        finalQuantity:record.finalQuantity,finalQuantitySource:record.finalQuantitySource,
+        workflowMode:record.workflowMode,inkWorkflowStage:record.inkWorkflowStage,tonerConversionStatus:record.tonerConversionStatus,isVirtual:record.isVirtual,
+        convertedInquiryId:record.convertedInquiryId,convertedInquiryNo:record.convertedInquiryNo,
+        zeroAvailableConfirmed:record.zeroAvailableConfirmed,
         lockedQuantity: row.current_locked == null ? null : Number(row.current_locked),
         issuedQuantity: row.actual_issued == null ? null : Number(row.actual_issued),
-        status: this.allocationStatusText(row),
+        status: record.statusText,
       });
     }
     const allTotals = this.batchTotals(model);
@@ -3777,30 +3957,54 @@ export class InventoryDatabase {
 
   documentRecord(row) {
     if (!row) return null;
-    const batch = this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key);
+    const batch = this.db.prepare("SELECT pack_per_box,warehouse,shipping_method FROM stock_batches WHERE batch_key = ?").get(row.batch_key);
     const quantities = this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS locked, COALESCE(-SUM(on_hand_delta),0) AS issued FROM inventory_ledger WHERE document_id=?').get(row.id);
-    return { ...rowToDocument(row, this.lingxingForDocument(row)), packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box),
-      statusText: this.allocationStatusText(row), lockedQuantity: Number(quantities.locked), issuedQuantity: Number(quantities.issued),
+    const events = this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(row.id).map(rowToDocumentEvent);
+    const sourceSnapshot = events.find(event => event.type === 'entry')?.payload.sourceBatchSnapshot;
+    const sourceBatchInfo = sourceSnapshot && typeof sourceSnapshot === 'object' && !Array.isArray(sourceSnapshot)
+      ? { warehouse: String(sourceSnapshot.warehouse ?? ''), shippingMethod: String(sourceSnapshot.shippingMethod ?? ''), origin: 'snapshot' }
+      : { warehouse: String(batch?.warehouse ?? ''), shippingMethod: String(batch?.shipping_method ?? ''), origin: batch ? 'current_batch' : 'unrecorded' };
+    const zeroAvailableConfirmed = events.find(event => event.type === 'entry')?.payload.zeroAvailableConfirmed === true;
+    const stage = row.ink_workflow_stage;
+    const converted = this.db.prepare('SELECT id,document_no FROM inquiry_documents WHERE source_allocation_id=?').get(row.id);
+    const tonerApproved = this.getModel(row.model).category === '硒鼓' && row.toner_conversion_status === null
+      && row.status === 'pending' && row.approval_status === 'approved';
+    const finalQuantity = stage ? ['pending_assistant','completed'].includes(stage) ? Number(row.quantity) : stage === 'rejected' ? 0 : null
+      : tonerApproved ? Number(row.quantity) : row.supplier_quantity ?? (row.status === 'confirmed' ? Number(row.quantity) : null);
+    return { ...rowToDocument(row, this.lingxingForDocument(row)), category:this.getModel(row.model).category, ...originalApprovalFacts(events, row),
+      inkWorkflowStage: stage, alanDeadlineAt: row.alan_deadline_at, workflowMode: stage == null ? 'legacy' : 'ink-v2',
+      tonerConversionStatus:row.toner_conversion_status,
+      isVirtual: row.toner_conversion_status != null || ['pending_conversion_confirmation','converted'].includes(stage),
+      convertedInquiryId: converted?.id ?? null, convertedInquiryNo:converted?.document_no ?? null,
+      finalQuantity, finalQuantitySource: finalQuantity == null || stage === 'rejected' ? null : stage ? row.alan_quantity == null ? 'business' : 'alan' : row.supplier_quantity == null ? 'business' : 'purchasing',
+      packPerBox: batch?.pack_per_box == null ? null : String(batch.pack_per_box),
+      zeroAvailableConfirmed, sourceBatchInfo,
+      statusText: this.allocationStatusText(row, zeroAvailableConfirmed, Number(quantities.locked)), lockedQuantity: Number(quantities.locked), issuedQuantity: Number(quantities.issued),
       recallInfo: this.allocationRecallInfo(row.id),
-      events: this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(row.id).map(rowToDocumentEvent),
+      events,
     };
   }
 
-  allocationStatusText(row) {
+  allocationStatusText(row, zeroAvailableConfirmed = false, lockedQuantity = null) {
+    if (row.toner_conversion_status) return {pending_confirmation:'转询库，待运营确认',accepted:'已转询库',rejected:'已拒绝'}[row.toner_conversion_status];
+    if (zeroAvailableConfirmed && lockedQuantity === 0 && row.status === 'pending' && row.approval_status === 'pending') return '待商务分配（未预锁）';
+    if (row.ink_workflow_stage) return {pending_business:'待商务审核',pending_alan:'待Alan审核',pending_assistant:'待助理确认',
+      pending_conversion_confirmation:'转询库，待运营确认',completed:'已完成',rejected:'已拒绝',converted:'已转询库'}[row.ink_workflow_stage];
     if (row.approval_status === 'rejected') return '已拒绝';
     if (row.status === 'confirmed') return '已完成';
     if (row.status !== 'pending') return STATUS_TEXT[row.status] ?? row.status;
     if (row.approval_status !== 'approved') return '待商务审核';
-    if (this.getModel(row.model).category !== '墨盒') return '待助理完成';
+    if (this.getModel(row.model).category !== '墨盒') return '待助理确认';
     return { pending_alan: '待Alan审核', pending_purchasing: '待采购回复', pending_archive: '待采购归档' }[row.procurement_status];
   }
 
-  approvalView({ refreshDisplay = true } = {}) {
+  approvalView({ refreshDisplay = true, includeHiddenCompletedAllocations = false } = {}) {
     const cutoff = this.refreshApprovalDisplay(undefined, { readOnly: !refreshDisplay });
+    const allocationRows = this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (status = 'pending' OR ? IS NULL OR created_at >= ? OR (? = 1 AND status = 'confirmed')) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff, includeHiddenCompletedAllocations ? 1 : 0);
     return {
-      allocations: this.db.prepare("SELECT * FROM allocation_documents WHERE status <> 'draft' AND (status = 'pending' OR ? IS NULL OR created_at >= ?) ORDER BY updated_at DESC, id DESC").all(cutoff, cutoff)
-        .map((row) => this.documentRecord(row)),
+      allocations: allocationRows.map((row) => this.documentRecord(row)),
       inquiries: this.db.prepare("SELECT * FROM inquiry_documents WHERE approval_hidden = 0 ORDER BY updated_at DESC, id DESC").all().map((row) => this.inquiryRecord(row)),
+      ...(includeHiddenCompletedAllocations ? { hiddenCompletedAllocationIds: allocationRows.filter(row => row.status === 'confirmed' && cutoff != null && row.created_at < cutoff).map(row => Number(row.id)) } : {}),
     };
   }
 
@@ -3812,6 +4016,7 @@ export class InventoryDatabase {
         WHERE approval_hidden = 0 AND model IN (SELECT model FROM catalog_models WHERE category IN ('硒鼓', '墨盒'))
           AND (status = 'rejected' OR (status = 'archived' AND
             (archived_by_role IN ('assistant', 'assistant-1', 'assistant-2') OR
+              (archived_by_role='purchasing' AND model IN (SELECT model FROM catalog_models WHERE category='硒鼓')) OR
               (archived_by_role IN ('purchasing', 'logistics') AND model IN (SELECT model FROM catalog_models WHERE category = '墨盒')))))`).run();
       return { ok: true, hiddenCount: Number(result.changes) };
     });
@@ -3824,9 +4029,25 @@ export class InventoryDatabase {
     const lingxing = this.lingxingForDocument(row);
     const shipments = this.inquiryShipments(Number(row.id));
     const shippedQuantity = shipments.reduce((total, shipment) => total + shipment.quantity, 0);
+    const events = this.db.prepare('SELECT * FROM inquiry_events WHERE inquiry_id=? ORDER BY id').all(row.id).map(event => ({
+      id:Number(event.id),type:event.event_type,role:event.role,at:event.occurred_at,payload:parseEventPayload(event.payload_json),
+    }));
+    let sourceOriginalRequestedQuantity = events.find(event=>event.type==='entry')?.payload.sourceOriginalRequestedQuantity ?? null;
+    if (sourceOriginalRequestedQuantity == null && row.source_allocation_id != null) {
+      const source = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(row.source_allocation_id);
+      if (source) {
+        const sourceEvents = this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(source.id).map(rowToDocumentEvent);
+        sourceOriginalRequestedQuantity = originalApprovalFacts(sourceEvents, source).originalRequestedQuantity;
+      }
+    }
     return {
-      id: Number(row.id), documentNo: row.document_no, model: row.model, asin: row.asin, fnsku: row.fnsku,
-      quantity, requestedQuantity: Number(row.requested_quantity),
+      id: Number(row.id), documentNo: row.document_no, model: row.model, category:this.getModel(row.model).category, asin: row.asin, fnsku: row.fnsku,
+      quantity, requestedQuantity: Number(row.requested_quantity), ...originalApprovalFacts(events, row),
+      sourceAllocationId: row.source_allocation_id, isVirtual: true,
+      sourceAllocationNo:row.source_allocation_id == null ? null : this.db.prepare('SELECT document_no FROM allocation_documents WHERE id=?').get(row.source_allocation_id)?.document_no ?? null,
+      sourceOriginalRequestedQuantity,
+      finalQuantity: row.supplier_quantity == null ? null : Number(row.supplier_quantity),
+      finalQuantitySource: row.supplier_quantity == null ? null : 'purchasing',
       approvedQuantity: row.approved_quantity == null ? null : Number(row.approved_quantity),
       alanQuantity: row.alan_quantity == null ? null : Number(row.alan_quantity),
       alanNote: row.alan_note, alanReviewedByRole: row.alan_reviewed_by_role, alanReviewedAt: row.alan_reviewed_at,
@@ -3836,7 +4057,7 @@ export class InventoryDatabase {
       plan: row.plan, date: row.ship_date, version: row.version,
       status: row.status, statusCode: row.status,
       // pending_assistant 是既有归档阶段存储码；办理岗位按类目确定。
-      statusText: { pending_business: "待商务审核", pending_alan: "待Alan审核", pending_purchasing: "待采购回复", pending_assistant: ink ? "待采购归档" : "待助理归档", archived: ink ? "已完成" : "已归档", rejected: "已拒绝", cancelled: "已取消" }[row.status],
+      statusText: { pending_business: "待商务审核", pending_alan: "待Alan审核", pending_purchasing: ink ? "待采购回复" : "待采购确认", pending_assistant: "待采购归档", archived: "已完成", rejected: "已拒绝", cancelled: "已取消" }[row.status],
       approvalStatus: row.status === "rejected" ? "rejected" : row.approved_quantity == null ? "pending" : "approved",
       createdByRole: row.created_by_role, createdAt: row.created_at, updatedAt: row.updated_at,
       reviewedByRole: row.reviewed_by_role, reviewedAt: row.reviewed_at,
@@ -3846,9 +4067,7 @@ export class InventoryDatabase {
       fbaShippedAt: row.fba_shipped_at, fbaConfirmedByRole: row.fba_confirmed_by_role,
       shipments,
       revision: Number(row.revision), lingxing, ...lingxingCoverage(lingxing, quantity),
-      events: this.db.prepare("SELECT * FROM inquiry_events WHERE inquiry_id = ? ORDER BY id").all(row.id).map((event) => ({
-        id: Number(event.id), type: event.event_type, role: event.role, at: event.occurred_at, payload: JSON.parse(event.payload_json),
-      })),
+      events,
     };
   }
 
@@ -3865,17 +4084,24 @@ export class InventoryDatabase {
   inquiryForUpdate(id, expectedRevision, statuses) {
     const row = this.db.prepare("SELECT * FROM inquiry_documents WHERE id = ?").get(id);
     if (!row) throw new BusinessError(404, "inquiry_not_found", "找不到询库记录");
-    if (!Number.isInteger(expectedRevision)) throw new BusinessError(400, "missing_revision", "当前记录信息不完整，请重新加载后操作");
+    if (!Number.isInteger(expectedRevision)) throw new BusinessError(400, "missing_revision", "询库记录信息不完整，请重新加载后重试");
     if (Number(row.revision) !== expectedRevision) throw new BusinessError(409, "stale_revision", "询库单已被其他同事更新，请刷新后重试", { current: this.inquiryRecord(row) });
-    if (!statuses.includes(row.status)) throw new BusinessError(409, "invalid_inquiry_status", "当前询库单不在本步骤，请刷新查看进度");
+    if (!statuses.includes(row.status)) throw new BusinessError(409, "invalid_inquiry_status", "当前不能办理此询库操作，请刷新查看进度。");
     return row;
   }
 
   addInquiryEvent(id, type, role, at, payload) {
-    this.db.prepare("INSERT INTO inquiry_events(inquiry_id, event_type, role, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?)")
+    const event = this.db.prepare("INSERT INTO inquiry_events(inquiry_id, event_type, role, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?)")
       .run(id, type, role, at, JSON.stringify(payload));
     this.db.prepare(`UPDATE catalog_models SET revision = revision + 1, updated_at = ?
       WHERE model = (SELECT model FROM inquiry_documents WHERE id = ?)`).run(at, id);
+    if (type === 'archive' || type === 'reject' || type === 'reply' && payload.supplierQuantity === 0) {
+      const row = this.db.prepare('SELECT * FROM inquiry_documents WHERE id=?').get(id);
+      this.addEvent(null,type === 'archive' ? 'inquiry_completed' : 'inquiry_rejected',role,at,
+        payload.businessNote ?? payload.procurementNote ?? null,{inquiryId:id,sourceInquiryEventId:Number(event.lastInsertRowid),
+          model:row.model,category:this.getModel(row.model).category,department:row.department,team:row.department,store:row.store_name,operator:row.operator_name,businessNo:row.document_no,
+          quantity:Number(row.supplier_quantity ?? row.approved_quantity ?? row.requested_quantity),onHandDelta:0,lockedDelta:0});
+    }
   }
 
   createInquiry({ role, model, quantity, department, store, operator, fnsku, asin, operatorNote, requestId }) {
@@ -3886,7 +4112,13 @@ export class InventoryDatabase {
     const note = String(operatorNote ?? "").trim();
     if (!Number.isInteger(quantity) || quantity <= 0) throw new BusinessError(400, "invalid_quantity", "询库数量请填写大于 0 的整数");
     return this.idempotent("inquiry:create", requestId, { role, model, quantity, department, store, operator, fnsku, asin: asinValue, operatorNote: note }, () => {
-      if (!this.getModel(model)) throw new BusinessError(400, "unknown_model", `未知型号“${model}”`);
+      const catalog = this.getModel(model);
+      if (!catalog) throw new BusinessError(400, "unknown_model", `未知型号“${model}”`);
+      const group = OPERATION_GROUPS[role];
+      const visibleKeys = this.visibleStockBatchKeys(model, catalog.category, group);
+      if (visibleKeys && visibleKeys.size === 0 && !this.db.prepare('SELECT 1 FROM transit_batches WHERE model=? AND team=? AND voided_at IS NULL LIMIT 1').get(model, group)) {
+        throw new BusinessError(403, "inquiry_source_team_forbidden", "当前团队没有此墨盒型号的在库或在途来源，不能提交询库");
+      }
       const at = new Date().toISOString();
       const inserted = this.db.prepare(`INSERT INTO inquiry_documents(document_no, model, asin, fnsku, requested_quantity,
         department, store_name, operator_name, operator_note, status, created_by_role, created_at, updated_at)
@@ -3944,29 +4176,35 @@ export class InventoryDatabase {
     return this.idempotent(`inquiry:reply:${id}`, requestId, { id, role, supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_alan", "pending_purchasing"]);
       const ink = this.getModel(row.model).category === "墨盒";
+      if (!ink && role !== 'purchasing') throw new BusinessError(403,'inquiry_reply_forbidden','硒鼓询库仅采购可审核');
       const at = new Date().toISOString();
-      this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = ?,
+      if (ink) this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity = ?, requested_quantity = ?, approved_quantity = ?, shipping_warehouse = ?, procurement_note = ?, status = ?,
         replied_by_role = ?, replied_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(quantity, quantity, quantity, warehouse, note, ink && quantity === 0 ? "rejected" : "pending_assistant", role, at, at, id);
+        .run(quantity, quantity, quantity, warehouse, note, quantity === 0 ? "rejected" : "pending_assistant", role, at, at, id);
+      else this.db.prepare(`UPDATE inquiry_documents SET supplier_quantity=?,shipping_warehouse=?,procurement_note=?,status=?,
+        replied_by_role=?,replied_at=?,revision=revision+1,updated_at=? WHERE id=?`)
+        .run(quantity,warehouse,note,quantity === 0 ? 'rejected' : 'pending_assistant',role,at,at,id);
       this.addInquiryEvent(id, "reply", role, at, { supplierQuantity: quantity, shippingWarehouse: warehouse, procurementNote: note,
-        ...(ink ? { skippedAlan: row.alan_reviewed_at == null, before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity } } : {}) });
+        ...(ink ? { skippedAlan: row.status === 'pending_alan', before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity } } : {}) });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
 
   archiveInquiry({ id, role, plan, date, version, expectedRevision, requestId }) {
-    if (!ASSISTANT_ROLE_SET.has(role) && !["purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购或物流归档，硒鼓询库由助理归档");
+    if (!["purchasing", "logistics"].includes(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "硒鼓询库仅采购确认发出并归档，墨盒由采购或物流归档");
     const fields = { plan: String(plan ?? "").trim(), date: inquiryShipDate(date), version: String(version ?? "").trim() };
     if (!fields.plan || !fields.version) throw new BusinessError(400, "missing_inquiry_archive_fields", "请填写发货计划号、发货日期和原版本");
     return this.idempotent(`inquiry:archive:${id}`, requestId, { id, role, ...fields, expectedRevision }, () => {
       const row = this.inquiryForUpdate(id, expectedRevision, ["pending_assistant"]);
       const ink = this.getModel(row.model).category === "墨盒";
-      if (ink ? !["purchasing", "logistics"].includes(role) : !ASSISTANT_ROLE_SET.has(role)) throw new BusinessError(403, "inquiry_archive_forbidden", "墨盒询库由采购或物流归档，硒鼓询库由助理归档");
+      if (!ink && role !== 'purchasing') throw new BusinessError(403, "inquiry_archive_forbidden", "硒鼓询库仅采购可确认发出并归档");
+      if (!ink && Number(row.supplier_quantity) <= 0) throw new BusinessError(409,'inquiry_no_shipment','采购最终量须大于0才能确认全量发出');
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET plan = ?, ship_date = ?, version = ?, status = 'archived',
         archived_by_role = ?, archived_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
         .run(fields.plan, fields.date, fields.version, role, at, JSON.stringify(this.lingxingForDocument(row)), at, id);
-      this.addInquiryEvent(id, "archive", role, at, { ...fields, quantity: Number(row.supplier_quantity) });
+      this.addInquiryEvent(id, "archive", role, at, { ...fields, quantity: Number(row.supplier_quantity),
+        ...(!ink ? {shipmentConfirmed:true} : {}) });
       return { ok: true, record: this.getInquiry(id) };
     });
   }
@@ -4047,17 +4285,24 @@ export class InventoryDatabase {
   allocationRecallInfo(id) {
     if (id == null) return null;
     const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
-    if (!row || row.status !== 'confirmed' || this.getModel(row.model).category !== '墨盒') return null;
-    return { revision: Number(row.revision), blockers: this.allocationDownstream(id) };
+    if (!row || row.status !== 'confirmed') return null;
+    const toner = this.getModel(row.model).category === '硒鼓';
+    if (toner && row.toner_conversion_status != null) return null;
+    return { revision: Number(row.revision), blockers: this.allocationDownstream(id),workflowMode:toner ? 'toner' : row.ink_workflow_stage ? 'ink-v2' : 'legacy',
+      inkWorkflowStage:row.ink_workflow_stage,canRecallByRole:toner || row.ink_workflow_stage ? ['business'] : ['business','purchasing','logistics'] };
   }
 
   recallAllocation({ id, role, expectedRevision, requestId }) {
+    const current = this.db.prepare('SELECT model,ink_workflow_stage FROM allocation_documents WHERE id=?').get(id);
+    if (current && this.getModel(current.model).category === '硒鼓' && role !== BUSINESS_ROLE) throw new BusinessError(403,'allocation_recall_forbidden','硒鼓调拨仅商务可回撤。');
+    if (current?.ink_workflow_stage && role !== BUSINESS_ROLE) throw new BusinessError(403,'allocation_recall_forbidden','此调拨仅商务可回撤。');
     if (!['purchasing','logistics','business'].includes(role)) throw new BusinessError(403, 'allocation_recall_forbidden', '仅采购、物流或商务可回撤已完成的墨盒调拨');
     return this.idempotent(`allocation:recall:${id}`, requestId, { id, role, expectedRevision }, () => {
       const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
       if (!row) throw new BusinessError(404, 'not_found', '找不到调拨记录');
       this.requireRevision(row, expectedRevision);
-      if (row.status !== 'confirmed' || this.getModel(row.model).category !== '墨盒') throw new BusinessError(409, 'allocation_recall_unavailable', '仅已完成的墨盒调拨可回撤');
+      const toner = this.getModel(row.model).category === '硒鼓';
+      if (row.status !== 'confirmed' || toner && row.toner_conversion_status != null) throw new BusinessError(409, 'allocation_recall_unavailable', '仅已完成的真实调拨可回撤');
       const blockers = this.allocationDownstream(id);
       if (blockers.length) throw new BusinessError(409, 'allocation_has_downstream', '不能回撤，已产生下游关联：'+blockers.map(item=>`${item.type} ${item.description}（${item.status}）`).join('；'), { blockers });
       const events = this.db.prepare('SELECT * FROM document_events WHERE document_id=? ORDER BY id').all(id).map(rowToDocumentEvent);
@@ -4075,7 +4320,7 @@ export class InventoryDatabase {
       if (difference > balance.available + issued) throw new BusinessError(409, 'insufficient_available', `退回 ${issued} 件后可用库存 ${balance.available + issued} 件，不足以恢复预锁 ${restoreLock} 件，未回撤`);
       const at = new Date().toISOString();
       const target = purchasing ? 'pending_purchasing' : 'pending_business';
-      const reversal = this.addLedger(id,row.batch_key,'reverse_issue',issued,0,role,at,null,null,{ requestId, reason: '墨盒调拨回撤' });
+      const reversal = this.addLedger(id,row.batch_key,'reverse_issue',issued,0,role,at,null,null,{ requestId, reason: toner ? '硒鼓调拨回撤' : '墨盒调拨回撤' });
       const relock = this.addLedger(id,row.batch_key,'review_adjustment',0,difference,role,at,null,null,{ requestId, restoredLockedQuantity: restoreLock });
       this.db.prepare(`UPDATE allocation_documents SET status='pending',quantity=?,requested_quantity=?,approved_quantity=?,business_note=?,approval_status=?,
         reviewed_by_role=?,reviewed_at=?,alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,procurement_status=?,
@@ -4091,6 +4336,7 @@ export class InventoryDatabase {
         before:{ requestedQuantity:row.requested_quantity,approvedQuantity:row.approved_quantity,alanQuantity:row.alan_quantity,alanNote:row.alan_note,
           supplierQuantity:row.supplier_quantity,businessNote:row.business_note,procurementNote:row.procurement_note,status:row.status },
         after:{ requestedQuantity:requested,approvedQuantity:purchasing ? approved : null,alanQuantity:purchasing ? row.alan_quantity : null,supplierQuantity:null,status:target } });
+      if (row.ink_workflow_stage) this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='pending_business',alan_deadline_at=NULL WHERE id=?").run(id);
       return { ok:true,record:this.getDocument(id),totals:this.batchTotals(row.model) };
     });
   }
@@ -4105,11 +4351,13 @@ export class InventoryDatabase {
       const events = this.getInquiry(id).events;
       const entry = events.find(event => event.type === 'entry');
       const review = events.findLast(event => event.type === 'review');
-      if (!entry || !review) throw new BusinessError(409, "inquiry_history_missing", "原申请或商务审核历史缺失，无法恢复数量，请核对该单历史");
+      const conversion = row.source_allocation_id != null && entry?.payload.origin === 'allocation_conversion' ? entry : null;
+      const businessFact = review ?? conversion;
+      if (!entry || !businessFact) throw new BusinessError(409, "inquiry_history_missing", "原申请或商务审核历史缺失，无法恢复数量，请核对该单历史");
       const target = ['purchasing', 'logistics'].includes(role) ? 'pending_purchasing' : 'pending_business';
       const requested = entry.payload.requestedQuantity;
-      const approved = ['purchasing', 'logistics'].includes(role) ? review.payload.approvedQuantity : null;
-      if (!Number.isSafeInteger(requested) || requested <= 0 || !Number.isSafeInteger(review.payload.approvedQuantity) || review.payload.approvedQuantity <= 0) throw new BusinessError(409, 'inquiry_history_missing', '原申请或商务审核历史数量不完整，无法恢复，请核对该单历史');
+      const approved = ['purchasing', 'logistics'].includes(role) ? businessFact.payload.approvedQuantity : null;
+      if (!Number.isSafeInteger(requested) || requested <= 0 || !Number.isSafeInteger(businessFact.payload.approvedQuantity) || businessFact.payload.approvedQuantity <= 0) throw new BusinessError(409, 'inquiry_history_missing', '原申请或商务审核历史数量不完整，无法恢复，请核对该单历史');
       const purchasing = ['purchasing', 'logistics'].includes(role);
       const at = new Date().toISOString();
       this.db.prepare(`UPDATE inquiry_documents SET requested_quantity = ?, approved_quantity = ?, business_note = ?, reviewed_by_role = ?, reviewed_at = ?,
@@ -4117,10 +4365,10 @@ export class InventoryDatabase {
         plan = '', ship_date = '', version = '', archived_by_role = NULL, archived_at = NULL, lingxing_snapshot_json = NULL,
         fba_shipped_at = NULL, fba_confirmed_by_role = NULL, approval_hidden = 0,
         alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,status = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
-        .run(requested, approved, ['purchasing', 'logistics'].includes(role) ? review.payload.businessNote : '', ['purchasing', 'logistics'].includes(role) ? review.role : null,
-          ['purchasing', 'logistics'].includes(role) ? review.at : null,
+        .run(requested, approved, ['purchasing', 'logistics'].includes(role) ? businessFact.payload.businessNote : '', ['purchasing', 'logistics'].includes(role) ? review?.role ?? businessFact.payload.businessReviewedByRole : null,
+          ['purchasing', 'logistics'].includes(role) ? review?.at ?? businessFact.payload.businessReviewedAt : null,
           purchasing ? row.alan_quantity : null, purchasing ? row.alan_note : null, purchasing ? row.alan_reviewed_by_role : null, purchasing ? row.alan_reviewed_at : null, target, at, id);
-      this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review.id,
+      this.addInquiryEvent(id, 'recall', role, at, { target, originalEntryEventId: entry.id, reviewEventId: review?.id ?? null,sourceConversionEventId:review ? null : conversion.payload.sourceConversionEventId,
         before: { requestedQuantity: row.requested_quantity, approvedQuantity: row.approved_quantity, supplierQuantity: row.supplier_quantity,
           businessNote: row.business_note, alanQuantity: row.alan_quantity, alanNote: row.alan_note, alanReviewedByRole: row.alan_reviewed_by_role, alanReviewedAt: row.alan_reviewed_at,
           shippingWarehouse: row.shipping_warehouse, procurementNote: row.procurement_note,
@@ -4493,7 +4741,7 @@ export class InventoryDatabase {
         row[field] = String(item?.[field] ?? "").trim();
       }
       if (!["externalId", "storeId", "orderNo", "fnsku"].every((field) => row[field])) throw new BusinessError(400, "missing_external_shipment_identity", "领星包裹缺少商品记录编号、店铺编号、移除订单号或 FNSKU，请在部署电脑核对报表");
-      if (typeof item?.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity < 0) throw new BusinessError(400, "invalid_external_shipment_quantity", "领星包裹数量请填写 0 或正整数");
+      if (typeof item?.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity < 0) throw new BusinessError(400, "invalid_external_shipment_quantity", "领星包裹数量须为 0 或正整数，请在领星核对后重新同步。");
       row.quantity = item.quantity;
       return row;
     });
@@ -4536,7 +4784,7 @@ export class InventoryDatabase {
         const other=this.db.prepare('SELECT j.model,j.source_version,r.removal_order_no,r.created_at FROM upgrade_relocation_external_items i JOIN upgrade_relocations r ON r.id=i.relocation_id JOIN upgrade_jobs j ON j.id=r.upgrade_id WHERE i.line_id=? AND i.relocation_id<>? LIMIT 1').get(line.lineId,work.relocation_id??0);
         if(other) throw new BusinessError(409,'shipment_already_used','包裹 '+row.trackingNo+' 已被移仓记录 '+[other.model,other.source_version,other.removal_order_no,other.created_at].join(' / ')+' 使用，请核对');
         const used=work.relocation_id ? this.relocationExternalItems(work.relocation_id).find(item=>item.lineId===line.lineId)?.quantity??0 : 0;
-        if(row.quantity<used) throw new BusinessError(409,'shipment_quantity_decreased','已记账包裹数量减少，请核对；本次不自动改写已发货事实');
+        if(row.quantity<used) throw new BusinessError(409,'shipment_quantity_decreased','领星包裹数量少于登记发货数量，本次未更新请核对包裹记录');
         const quantity=row.quantity-used;
         if(quantity>0) {
           if(!row.carrier || !row.trackingNo) throw new BusinessError(422,'missing_logistics','匹配包裹缺少承运商或运单号');
@@ -4951,18 +5199,18 @@ export class InventoryDatabase {
       || (fbaSourceId != null && (!Number.isInteger(fbaSourceId) || fbaSourceId <= 0))
       || (documentId != null && (!Number.isInteger(documentId) || documentId <= 0))
       || (inquirySourceId != null && (!Number.isInteger(inquirySourceId) || inquirySourceId <= 0))) {
-      throw new BusinessError(400, "invalid_allocation", "请选择一条已归档的调拨、询库或直发FBA记录");
+      throw new BusinessError(400, "invalid_allocation", "请选择一条已完成的调拨或询库，或已归档的直发FBA记录");
     }
     return this.idempotent("upgrade:relocation:initiate", requestId, { role, allocationId: documentId, inquiryId: inquirySourceId, fbaArchiveId: fbaSourceId, ...(account == null ? {} : { account }), ...(sourceRevision == null ? {} : { sourceRevision }) }, () => {
       const document = this.relocationSource(documentId, inquirySourceId, fbaSourceId);
-      if (!document || !["confirmed", "archived"].includes(document.status)) throw new BusinessError(409, "allocation_not_confirmed", "仅可选择已归档的调拨、询库或直发FBA记录");
+      if (!document || !["confirmed", "archived"].includes(document.status)) throw new BusinessError(409, "allocation_not_confirmed", "仅可选择已完成的调拨或询库，或已归档的直发FBA记录");
       if (inquirySourceId != null && this.getModel(document.model).category === "墨盒") this.inquiryForUpdate(inquirySourceId, sourceRevision, ["archived"]);
       const store = fbaSourceId == null ? document.store_name : accountStore(account);
       if (fbaSourceId != null && !relocationAccounts().some(item => accountStore(item.account) === store)) throw new BusinessError(422, "missing_fba_account", "请为本次直发FBA移仓选择账号");
       const shipmentId = null;
       const confirmedAt = Date.parse(document.confirmed_at ?? "");
       if (document.source_kind === "allocation" && (!Number.isFinite(confirmedAt) || confirmedAt < Date.now() - 90 * 24 * 60 * 60 * 1000)) {
-        throw new BusinessError(409, "allocation_outside_90_days", "该来源记录归档已超过 90 天");
+        throw new BusinessError(409, "allocation_outside_90_days", "该调拨完成已超过 90 天");
       }
       const existing = this.db.prepare(`
         SELECT id, initiated_at, removal_order_no FROM upgrade_relocation_work_items
@@ -4970,7 +5218,7 @@ export class InventoryDatabase {
       `).get(documentId, inquirySourceId, fbaSourceId);
       if (existing) throw new BusinessError(409, "relocation_work_active", `该来源已有待处理移仓流程：${[document.model,document.version,store,document.plan,existing.removal_order_no,existing.initiated_at].filter(Boolean).join(' / ')}`);
       const sourceBefore = this.relocationSourceQuantity(documentId, inquirySourceId, shipmentId, fbaSourceId);
-      if (sourceBefore <= 0) throw new BusinessError(409, "no_fba_remaining", "该归档来源没有剩余可移仓量");
+      if (sourceBefore <= 0) throw new BusinessError(409, "no_fba_remaining", "该来源没有剩余可移仓量");
       const at = new Date().toISOString();
       const inserted = this.db.prepare(`
         INSERT INTO upgrade_relocation_work_items(
@@ -5178,21 +5426,21 @@ export class InventoryDatabase {
 
 
   relocationReceiptBatches(id) {
-    return this.db.prepare("SELECT l.*,b.version,b.warehouse,b.relocation_receipt_key FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key WHERE l.source_type='relocation' AND l.source_id=? AND l.entry_type='relocation_receipt' ORDER BY l.id").all(id).map(row => {
+    return this.db.prepare("SELECT l.*,b.version,b.warehouse,b.pack_per_box,b.relocation_receipt_key FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key WHERE l.source_type='relocation' AND l.source_id=? AND l.entry_type='relocation_receipt' ORDER BY l.id").all(id).map(row => {
       const reversed=Number(this.db.prepare("SELECT COALESCE(SUM(on_hand_delta),0) quantity FROM upgrade_inventory_ledger WHERE related_ledger_id=? AND entry_type='relocation_completion_reverse'").get(row.id).quantity);
       const quantity=Number(row.on_hand_delta)+reversed, balance=this.getBalance(row.batch_key);
-      const issue=!row.relocation_receipt_key ? '历史入库批次可能与其他入库合并，无法可靠归属占用，须先核对' : balance.locked>0 || balance.onHand!==quantity ? '该次入库当前仍有锁定或下游占用' : '';
-      return {ledgerId:Number(row.id),batchKey:row.batch_key,at:row.created_at,version:row.version,warehouse:row.warehouse,quantity,originalQuantity:Number(row.on_hand_delta),locked:balance.locked,onHand:balance.onHand,issue};
+      const issue=!row.relocation_receipt_key ? '此历史入库批次可能已与其他入库合并，当前无法确认可扣回数量，请先核对。' : balance.locked>0 || balance.onHand!==quantity ? '此入库批次存在预锁定或后续库存变动，当前不能扣回。' : '';
+      return {ledgerId:Number(row.id),batchKey:row.batch_key,at:row.created_at,version:row.version,warehouse:row.warehouse,packPerBox:row.pack_per_box == null ? null : String(row.pack_per_box),quantity,originalQuantity:Number(row.on_hand_delta),locked:balance.locked,onHand:balance.onHand,issue};
     });
   }
 
-  completeRelocationUpgrade({ id, role, completedQuantity, inProgressQuantity, newVersion, targetWarehouse, reversals = [], expectedRevision, requestId }) {
+  completeRelocationUpgrade({ id, role, completedQuantity, inProgressQuantity, newVersion, targetWarehouse, packPerBox, reversals = [], expectedRevision, requestId }) {
     const relocationId=Number(id), quantity=Number(completedQuantity), progressing=Number(inProgressQuantity);
     const targetVersion=String(newVersion??'').trim();
     this.requirePurchasingUpgradeRole(role);
     if (completedQuantity==null || String(completedQuantity).trim()==='' || inProgressQuantity==null || String(inProgressQuantity).trim()==='' || !Number.isInteger(quantity) || quantity<0 || !Number.isInteger(progressing) || progressing<0) throw new BusinessError(422,'invalid_quantity','升级中数量与累计升级完数量须为非负整数');
     if (!Array.isArray(reversals)) throw new BusinessError(422,'invalid_reversals','请选择本次扣回的入库批次与数量');
-    return this.idempotent('upgrade:relocation:complete:'+relocationId,requestId,{id:relocationId,role,completedQuantity:quantity,inProgressQuantity:progressing,newVersion:targetVersion,targetWarehouse,reversals,expectedRevision},()=>{
+    return this.idempotent('upgrade:relocation:complete:'+relocationId,requestId,{id:relocationId,role,completedQuantity:quantity,inProgressQuantity:progressing,newVersion:targetVersion,targetWarehouse,...(packPerBox === undefined ? {} : {packPerBox}),reversals,expectedRevision},()=>{
       const row = this.db.prepare(`
         SELECT r.*, j.upgrade_no, j.model, j.source_version, j.new_version AS job_new_version,
                j.status AS job_status, d.batch_key, d.plan, COALESCE(s.ship_date, d.ship_date) AS ship_date, d.fnsku, d.department,
@@ -5213,6 +5461,13 @@ export class InventoryDatabase {
       const delta=quantity-Number(row.completed_quantity);
       if (delta>0 && !OVERSEAS_WAREHOUSES.includes(targetWarehouse)) throw new BusinessError(422,'invalid_target_warehouse','请选择本次新增入库的实际海外仓');
       if (delta>0 && (!targetVersion || targetVersion===row.source_version)) throw new BusinessError(422,'invalid_upgrade_version','请填写不同于原版本的升级完版本号');
+      let receiptPackPerBox = row.source_pack_per_box;
+      if (delta>0 && row.inquiry_id != null) {
+        const validPackType = typeof packPerBox === 'number' || typeof packPerBox === 'string';
+        const pack = validPackType ? Number(packPerBox) : NaN;
+        if (!validPackType || String(packPerBox).trim()==='' || !Number.isSafeInteger(pack) || pack<=0) throw new BusinessError(422,'invalid_pack_per_box','请填写本次实际入库批次的套/箱（正整数）');
+        receiptPackPerBox = String(pack);
+      }
       const receipts=new Map(this.relocationReceiptBatches(relocationId).map(item=>[item.ledgerId,item]));
       if (delta<0) {
         if (new Set(reversals.map(item=>Number(item.ledgerId))).size!==reversals.length || reversals.some(item=>!Number.isInteger(item.quantity)||item.quantity<=0) || reversals.reduce((sum,item)=>sum+item.quantity,0)!==-delta) throw new BusinessError(422,'reversal_quantity_mismatch','指定批次的扣回数量合计必须等于减少量 '+(-delta));
@@ -5223,14 +5478,14 @@ export class InventoryDatabase {
         }
       } else if (reversals.length) throw new BusinessError(422,'unexpected_reversals','累计完成量未减少，不应指定扣回批次');
       const at=new Date().toISOString(),catalog=this.getModel(row.model);
-      const eventId=this.addEvent(row.allocation_document_id,'upgrade_relocation_complete',role,at,null,{inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,upgradeId:Number(row.upgrade_id),upgradeNo:row.upgrade_no,relocationId,model:row.model,category:catalog.category,department:row.department,team:row.department,before:{completedQuantity:Number(row.completed_quantity),inProgressQuantity:Number(row.in_progress_quantity)},after:{completedQuantity:quantity,inProgressQuantity:progressing},newVersion:targetVersion,targetWarehouse,quantity:Math.abs(delta),onHandDelta:delta,lockedDelta:0,reversals,requestId});
+      const eventId=this.addEvent(row.allocation_document_id,'upgrade_relocation_complete',role,at,null,{inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,upgradeId:Number(row.upgrade_id),upgradeNo:row.upgrade_no,relocationId,model:row.model,category:catalog.category,department:row.department,team:row.department,before:{completedQuantity:Number(row.completed_quantity),inProgressQuantity:Number(row.in_progress_quantity)},after:{completedQuantity:quantity,inProgressQuantity:progressing},newVersion:targetVersion,targetWarehouse,...(delta>0 ? {packPerBox:receiptPackPerBox == null ? null : String(receiptPackPerBox)} : {}),quantity:Math.abs(delta),onHandDelta:delta,lockedDelta:0,reversals,requestId});
       const operationId=delta===0 ? null : this.addUpgradeOperation({upgradeId:Number(row.upgrade_id),relocationId,type:'relocation_complete',quantity:Math.abs(delta),newVersion:delta>0?targetVersion:row.new_version,eventId,requestId,role,at,metadata:{targetWarehouse,delta,reversals}});
       if (delta>0) {
         const receiptKey='relocation:'+relocationId+':'+operationId;
         const key='UPGRADE-RECEIPT:'+operationId;
         const team=row.batch_key ? this.db.prepare('SELECT source_team FROM stock_batches WHERE batch_key=?').get(row.batch_key).source_team : row.department;
-        this.db.prepare("INSERT INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,revision,is_legacy_placeholder,warehouse,pack_per_box,source_team,relocation_receipt_key,shipping_method) VALUES(?,?,?,?,?,?,0,?,1,0,?,?,?,?,?)").run(key,row.model,row.plan,row.ship_date,targetVersion,row.fnsku,at,targetWarehouse,row.source_pack_per_box,team,receiptKey,'Aster海外仓-升级后库存');
-        this.addUpgradeLedger(Number(row.upgrade_id),'relocation',relocationId,key,'relocation_receipt',delta,0,role,at,requestId,{allocationId:row.allocation_document_id,inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,sourceBatchKey:row.batch_key,sourceVersion:row.source_version},operationId);
+        this.db.prepare("INSERT INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,revision,is_legacy_placeholder,warehouse,pack_per_box,source_team,relocation_receipt_key,shipping_method) VALUES(?,?,?,?,?,?,0,?,1,0,?,?,?,?,?)").run(key,row.model,row.plan,row.ship_date,targetVersion,row.fnsku,at,targetWarehouse,receiptPackPerBox,team,receiptKey,'Aster海外仓-升级后库存');
+        this.addUpgradeLedger(Number(row.upgrade_id),'relocation',relocationId,key,'relocation_receipt',delta,0,role,at,requestId,{allocationId:row.allocation_document_id,inquiryId:row.inquiry_id,fbaArchiveId:row.fba_archive_id,sourceBatchKey:row.batch_key,sourceVersion:row.source_version,packPerBox:receiptPackPerBox == null ? null : String(receiptPackPerBox)},operationId);
       } else if (delta<0) {
         for(const item of reversals) this.addUpgradeLedger(Number(row.upgrade_id),'relocation',relocationId,receipts.get(Number(item.ledgerId)).batchKey,'relocation_completion_reverse',-item.quantity,0,role,at,requestId,{cumulativeBefore:Number(row.completed_quantity),cumulativeAfter:quantity},operationId,Number(item.ledgerId),requestId);
       }
@@ -5287,7 +5542,17 @@ export class InventoryDatabase {
           if (existing.request_hash !== requestHash) {
             throw new BusinessError(409, "idempotency_conflict", "本次提交的内容与上次不同，未保存新内容。请先查看上次结果，再重新填写", { requestId: key });
           }
-          return this.inventoryResultForRole({ ...JSON.parse(existing.response_json), deduped: true }, payload.role);
+          const replay = { ...JSON.parse(existing.response_json), deduped: true };
+          if (scope.startsWith('allocation:')) {
+            for (const field of ['record', 'document']) {
+              const document = replay[field];
+              if (document?.id != null && !Object.hasOwn(document, 'sourceBatchInfo')) {
+                replay[field] = { ...document, sourceBatchInfo: this.getDocument(document.id)?.sourceBatchInfo
+                  ?? { warehouse: '', shippingMethod: '', origin: 'unrecorded' } };
+              }
+            }
+          }
+          return this.inventoryResultForRole(replay, payload.role);
         }
         cacheMiss = true;
         const result = operation();
@@ -5354,13 +5619,15 @@ export class InventoryDatabase {
     return Number(result.lastInsertRowid);
   }
 
-  createAllocation({ role, model, plan, date, version, sourceBatchKey, quantity, department, store, operator, fnsku, asin, operatorNote, requestId }) {
+  createAllocation({ role, model, plan, date, version, sourceBatchKey, quantity, department, store, operator, fnsku, asin, operatorNote, zeroAvailableConfirmed, requestId }) {
     requireDepartment(role, department);
     store = requireValidStoreCode(store);
     const asinValue = normalizeAsin(asin);
     const note = String(operatorNote ?? "").trim();
-    const payload = { role, model, plan, date, version, ...(sourceBatchKey ? { sourceBatchKey } : {}), quantity, department, store, operator, fnsku, asin: asinValue, operatorNote: note };
+    const payload = { role, model, plan, date, version, ...(sourceBatchKey ? { sourceBatchKey } : {}), quantity, department, store, operator, fnsku, asin: asinValue, operatorNote: note,
+      ...(zeroAvailableConfirmed === undefined || zeroAvailableConfirmed === false ? {} : { zeroAvailableConfirmed }) };
     return this.idempotent("allocation:create", requestId, payload, () => {
+      if (zeroAvailableConfirmed !== undefined && typeof zeroAvailableConfirmed !== 'boolean') throw new BusinessError(400, 'invalid_zero_available_confirmation', '请重新确认本次零可用调拨需求');
       const batches = this.db.prepare(`SELECT * FROM stock_batches WHERE model = ? AND plan = ? AND ship_date = ? AND version = ?
         AND (? IS NULL OR batch_key = ?)`)
         .all(model, plan, date, version, sourceBatchKey ?? null, sourceBatchKey ?? null);
@@ -5375,22 +5642,28 @@ export class InventoryDatabase {
       if (quantity % packPerBox !== 0) throw new BusinessError(400, "allocation_quantity_multiple", `当前批次套/箱为 ${packPerBox}，调拨数量须为 ${packPerBox} 的整数倍。`);
       const key = batch.batch_key;
       const balance = this.getBalance(key);
-      if (quantity > balance.available) throw new BusinessError(409, "insufficient_available", `超出可用库存（当前可用 ${balance.available}）`);
+      if (zeroAvailableConfirmed === true) {
+        if (balance.available !== 0 || balance.locked <= 0) throw new BusinessError(409, 'zero_available_condition_changed', '库存状态已变化，当前不符合零可用调拨需求条件。请返回表单重新核对后提交。');
+        if (quantity > balance.onHand) throw new BusinessError(409, 'zero_available_condition_changed', `需求数量超出当前在库数量（当前在库 ${balance.onHand}）。请返回表单重新核对。`);
+      } else if (quantity > balance.available) throw new BusinessError(409, "insufficient_available", `超出可用库存（当前可用 ${balance.available}）`);
       const at = new Date().toISOString();
       const row = this.insertDocument({
         model, batchKey: key, plan, date, version, fnsku, quantity, department, store, operator, asin: asinValue, operatorNote: note,
         time: at, status: "pending", role, at, submittedByRole: role, submittedAt: at,
       });
-      this.addLedger(Number(row.id), key, "reserve", 0, quantity, role, at, null, null, { requestId });
-      this.addEvent(Number(row.id), "entry", role, at, null, { quantity, department, store, operator, fnsku, asin: asinValue, operatorNote: note, requestId });
-      return { ok: true, record: this.documentRecord(row), totals: this.batchTotals(model) };
+      if (this.getModel(model).category === '墨盒') this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='pending_business' WHERE id=?").run(row.id);
+      this.addLedger(Number(row.id), key, "reserve", 0, zeroAvailableConfirmed === true ? 0 : quantity, role, at, null, null, { requestId });
+      this.addEvent(Number(row.id), "entry", role, at, null, { quantity, department, store, operator, fnsku, asin: asinValue, operatorNote: note, requestId,
+        sourceBatchSnapshot: { warehouse: batch.warehouse, shippingMethod: batch.shipping_method },
+        ...(zeroAvailableConfirmed === true ? { zeroAvailableConfirmed: true } : {}) });
+      return { ok: true, record: this.getDocument(Number(row.id)), totals: this.batchTotals(model) };
     });
   }
 
   requireRevision(row, expectedRevision) {
-    if (!Number.isInteger(expectedRevision)) throw new BusinessError(400, "missing_revision", "当前记录信息不完整，请重新加载后操作");
+    if (!Number.isInteger(expectedRevision)) throw new BusinessError(400, "missing_revision", "调拨记录信息不完整，请重新加载后重试");
     if (Number(row.revision) !== expectedRevision) {
-      throw new BusinessError(409, "stale_revision", `单据已被其他同事更新，请重新加载后核对`, { current: this.documentRecord(row) });
+      throw new BusinessError(409, "stale_revision", `调拨记录已被其他同事更新，请重新加载后核对`, { current: this.documentRecord(row) });
     }
   }
 
@@ -5404,15 +5677,18 @@ export class InventoryDatabase {
       const row = this.db.prepare("SELECT * FROM allocation_documents WHERE id = ?").get(id);
       if (!row) throw new BusinessError(404, "not_found", "找不到调拨记录");
       this.requireRevision(row, expectedRevision);
+      if (row.toner_conversion_status != null) throw new BusinessError(409,'invalid_approval_status','转询库调拨不能再办理商务审核');
       if (row.status !== "pending" || row.approval_status !== "pending") throw new BusinessError(409, "invalid_approval_status", "仅待商务审核的调拨可审核");
+      if (row.ink_workflow_stage && row.ink_workflow_stage !== 'pending_business') throw new BusinessError(409,'invalid_approval_status','当前调拨不在待商务审核阶段');
       normalizeAsin(row.asin);
       const at = new Date().toISOString();
       const reserve = this.db.prepare("SELECT id FROM inventory_ledger WHERE document_id = ? AND entry_type = 'reserve'").get(id);
+      const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS quantity FROM inventory_ledger WHERE document_id=?').get(id).quantity);
       if (decision === "approve") {
         const packPerBox = Number(this.db.prepare("SELECT pack_per_box FROM stock_batches WHERE batch_key = ?").get(row.batch_key)?.pack_per_box);
         if (!Number.isInteger(packPerBox) || packPerBox <= 0) throw new BusinessError(400, "invalid_pack_per_box", "来源批次套/箱数据异常（须为有效正整数），无法批准调拨，请核对批次数据。");
         if (approved % packPerBox !== 0) throw new BusinessError(400, "allocation_quantity_multiple", `来源批次套/箱为 ${packPerBox}，审核数量须为 ${packPerBox} 的整数倍。`);
-        const difference = approved - Number(row.quantity);
+        const difference = approved - locked;
         const balance = this.getBalance(row.batch_key);
         if (difference > balance.available) throw new BusinessError(409, "insufficient_available", `增批 ${difference} 件超出可用库存（当前可用 ${balance.available}）`);
         this.db.prepare(`UPDATE allocation_documents SET quantity = ?, approved_quantity = ?, business_note = ?,
@@ -5420,13 +5696,16 @@ export class InventoryDatabase {
           .run(approved, approved, note, this.getModel(row.model).category === '墨盒' ? 'pending_alan' : null, at, role, at, id);
         this.addLedger(id, row.batch_key, "review_adjustment", 0, difference, role, at, reserve.id, null, { requestedQuantity: Number(row.requested_quantity), approvedQuantity: approved });
         this.addEvent(id, "review", role, at, note, { quantity: approved, requestedQuantity: Number(row.requested_quantity), approvedQuantity: approved, businessNote: note, lockedDelta: difference });
+        if (row.ink_workflow_stage) this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='pending_alan',procurement_status=NULL,alan_deadline_at=? WHERE id=?")
+          .run(new Date(Date.parse(at)+ALAN_WAIT_MS).toISOString(),id);
       } else {
         this.db.prepare(`UPDATE allocation_documents SET status = 'cancelled', approval_status = 'rejected', business_note = ?,
           reviewed_at = ?, reviewed_by_role = ?, cancelled_at = ?, cancelled_by_role = ?, cancel_reason = ?,
           lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?`)
           .run(note, at, role, at, role, note, JSON.stringify(this.lingxingForDocument(row)), at, id);
-        this.addLedger(id, row.batch_key, "release_reservation", 0, -Number(row.quantity), role, at, reserve.id);
+        this.addLedger(id, row.batch_key, "release_reservation", 0, -locked, role, at, reserve.id);
         this.addEvent(id, "reject", role, at, note, { quantity: Number(row.quantity), requestedQuantity: Number(row.requested_quantity) });
+        if (row.ink_workflow_stage) this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='rejected',alan_deadline_at=NULL WHERE id=?").run(id);
       }
       return { ok: true, record: this.getDocument(id), totals: this.batchTotals(row.model) };
     });
@@ -5436,8 +5715,9 @@ export class InventoryDatabase {
     const row = this.db.prepare('SELECT * FROM allocation_documents WHERE id=?').get(id);
     if (!row) throw new BusinessError(404, 'not_found', '找不到调拨记录');
     this.requireRevision(row, expectedRevision);
+    if (row.ink_workflow_stage) throw new BusinessError(403,'new_ink_procurement_forbidden','此调拨由 Alan 审核、本团助理确认，无需采购回复或归档。');
     if (this.getModel(row.model).category !== '墨盒') throw new BusinessError(403, 'ink_allocation_required', '本步骤仅适用于墨盒调拨');
-    if (row.status !== 'pending' || row.approval_status !== 'approved' || !stages.includes(row.procurement_status)) throw new BusinessError(409, 'invalid_approval_status', '当前调拨单不在本步骤，请刷新查看进度');
+    if (row.status !== 'pending' || row.approval_status !== 'approved' || !stages.includes(row.procurement_status)) throw new BusinessError(409, 'invalid_approval_status', '当前不能办理此调拨操作，请刷新查看进度。');
     return row;
   }
 
@@ -5455,7 +5735,43 @@ export class InventoryDatabase {
     return { difference, ledgerId: Number(ledger.lastInsertRowid) };
   }
 
-  reviewAlanAllocation({ id, role, alanQuantity, alanNote, expectedRevision, requestId }) {
+  reviewNewInkAllocationByAlan({id,role,alanQuantity,alanNote,decision='approve',expectedRevision,requestId}) {
+    if (role !== 'alan') throw new BusinessError(403,'alan_review_forbidden','仅Alan可提交Alan审核');
+    if (!['approve','reject'].includes(decision)) throw new BusinessError(400,'invalid_review_decision','请选择审核或拒绝');
+    const quantity = decision === 'reject' ? null : Number(alanQuantity), note = String(alanNote ?? '').trim();
+    if (decision !== 'reject' && (alanQuantity == null || String(alanQuantity).trim()==='' || !Number.isSafeInteger(quantity) || quantity<0)) {
+      throw new BusinessError(400,'invalid_quantity','Alan审核数量请填写0或正整数');
+    }
+    // 到期推进先独立提交；不能随本次过期审核的409一起回滚。
+    this.advanceExpiredInkAllocations();
+    try {
+      return this.idempotent(`allocation:alan-review-v2:${id}`,requestId,{id,role,decision,alanQuantity:quantity,alanNote:note,expectedRevision},() => {
+        const row = this.newInkAllocationForUpdate(id,expectedRevision,['pending_alan']), at = new Date().toISOString();
+        if (at >= row.alan_deadline_at) throw new BusinessError(409,'alan_deadline_passed','Alan审核已到期，已采用商务数量');
+        if (decision === 'reject' || quantity === 0) {
+          const released = this.releaseInkAllocation(row,role,at);
+          this.db.prepare(`UPDATE allocation_documents SET status='cancelled',approval_status='rejected',ink_workflow_stage='rejected',quantity=0,
+            alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,cancelled_by_role=?,cancelled_at=?,cancel_reason=?,
+            revision=revision+1,updated_at=? WHERE id=?`).run(quantity,note,role,at,role,at,note,at,id);
+          this.addEvent(id,'reject',role,at,note,{quantity:0,alanQuantity:quantity,alanNote:note,decision:'reject',onHandDelta:0,...released});
+        } else {
+          const adjusted = this.adjustInkAllocationLock(row,quantity,role,at,{alanQuantity:quantity,requestId});
+          this.db.prepare(`UPDATE allocation_documents SET quantity=?,alan_quantity=?,alan_note=?,alan_reviewed_by_role=?,alan_reviewed_at=?,
+            ink_workflow_stage='pending_assistant',revision=revision+1,updated_at=? WHERE id=?`).run(quantity,quantity,note,role,at,at,id);
+          this.addEvent(id,'alan_review',role,at,note,{quantity,alanQuantity:quantity,alanNote:note,target:'pending_assistant',lockedDelta:adjusted.difference,ledgerIds:[adjusted.ledgerId]});
+        }
+        return {ok:true,record:this.getDocument(id),totals:this.batchTotals(row.model)};
+      });
+    } catch (error) {
+      if (error.code === 'alan_deadline_passed') this.advanceExpiredInkAllocations();
+      throw error;
+    }
+  }
+
+  reviewAlanAllocation({ id, role, alanQuantity, alanNote, decision, expectedRevision, requestId }) {
+    if (this.db.prepare('SELECT ink_workflow_stage FROM allocation_documents WHERE id=?').get(id)?.ink_workflow_stage) {
+      return this.reviewNewInkAllocationByAlan({id,role,alanQuantity,alanNote,decision,expectedRevision,requestId});
+    }
     if (role !== 'alan') throw new BusinessError(403, 'alan_review_forbidden', '仅Alan可提交Alan审核');
     const quantity = Number(alanQuantity);
     if (alanQuantity == null || String(alanQuantity).trim() === '' || !Number.isSafeInteger(quantity) || quantity < 0) throw new BusinessError(400, 'invalid_quantity', 'Alan审核数量请填写0或正整数');
@@ -5519,9 +5835,15 @@ export class InventoryDatabase {
       const row = this.db.prepare("SELECT * FROM allocation_documents WHERE id = ?").get(id);
       if (!row) throw new BusinessError(404, "not_found", "找不到调拨记录");
       this.requireRevision(row, expectedRevision);
-      if (this.getModel(row.model).category === '墨盒') throw new BusinessError(403, 'confirm_forbidden', '墨盒调拨由采购或物流归档完成');
+      if (row.toner_conversion_status != null) throw new BusinessError(409,'invalid_approval_status','转询库调拨不能确认发出');
+      if (row.ink_workflow_stage) {
+        requireDepartment(role,row.department);
+        if (row.ink_workflow_stage !== 'pending_assistant') throw new BusinessError(409,'invalid_approval_status','当前调拨尚不在待助理确认阶段');
+      } else if (this.getModel(row.model).category === '墨盒') throw new BusinessError(403, 'confirm_forbidden', '旧墨盒调拨由采购或物流归档完成');
       if (row.status !== "pending") throw new BusinessError(409, "invalid_status", `当前状态“${STATUS_TEXT[row.status]}”不能确认`);
       if (row.approval_status !== "approved") throw new BusinessError(409, "approval_required", "调拨须先由商务审核通过，助理才能确认完成");
+      const locked = Number(this.db.prepare('SELECT COALESCE(SUM(locked_delta),0) AS locked FROM inventory_ledger WHERE document_id=?').get(id).locked);
+      if (locked !== Number(row.quantity)) throw new BusinessError(409,'allocation_lock_mismatch','本次调拨的最终数量与预锁定数量不一致，无法确认发出。');
       const balance = this.getBalance(row.batch_key);
       if (balance.onHand < Number(row.quantity)) throw new BusinessError(409, "insufficient_stock", "在库数量不足，无法确认调出");
       const at = new Date().toISOString();
@@ -5530,11 +5852,12 @@ export class InventoryDatabase {
         SET status = 'confirmed', confirmed_by_role = ?, confirmed_at = ?, lingxing_snapshot_json = ?, revision = revision + 1, updated_at = ?
         WHERE id = ? AND revision = ? AND status = 'pending'
       `).run(role, at, JSON.stringify(this.lingxingForDocument(row)), at, id, expectedRevision);
-      if (Number(result.changes) !== 1) throw new BusinessError(409, "concurrent_update", "单据已被其他同事处理，请刷新");
+      if (Number(result.changes) !== 1) throw new BusinessError(409, "concurrent_update", "调拨记录已被其他同事处理，请刷新后核对");
       const reserve = this.db.prepare("SELECT id FROM inventory_ledger WHERE document_id = ? AND entry_type = 'reserve'").get(id);
       this.addLedger(id, row.batch_key, "release_reservation", 0, -Number(row.quantity), role, at, reserve?.id ?? null);
       this.addLedger(id, row.batch_key, "issue", -Number(row.quantity), 0, role, at);
       this.addEvent(id, "confirm", role, at, null, { quantity: Number(row.quantity) });
+      if (row.ink_workflow_stage) this.db.prepare("UPDATE allocation_documents SET ink_workflow_stage='completed' WHERE id=?").run(id);
       if (process.env.ASTER_TEST_FAILPOINT === "confirm-before-commit") throw new Error("test failpoint: confirm-before-commit");
       const updated = this.db.prepare("SELECT * FROM allocation_documents WHERE id = ?").get(id);
       return { ok: true, record: this.documentRecord(updated), totals: this.batchTotals(row.model) };
@@ -5585,7 +5908,7 @@ export class InventoryDatabase {
       FROM document_events e
       LEFT JOIN allocation_documents d ON d.id = e.document_id
       WHERE e.id = ?
-        AND e.event_type IN ('entry', 'review', 'reject', 'alan_review', 'reply', 'archive', 'recall', 'confirm', 'cancel', 'withdraw', 'import_stage', 'legacy_import', 'transfer_upgrade_import', 'transfer_upgrade_update', 'transit_import', 'transit_import_revert', 'transit_status', 'transit_on_shelf', 'transit_off_shelf', 'transit_merge', 'transit_delete', 'transit_manual', 'transit_team_corrected', 'legacy_placeholder_removed', 'upgrade_direct_start', 'upgrade_direct_complete', 'upgrade_relocation_started', 'upgrade_relocation_procurement', 'upgrade_relocation_operation', 'upgrade_relocation_corrected', 'upgrade_relocation_cancelled', 'upgrade_relocation_created', 'upgrade_relocation_complete', 'upgrade_direct_start_withdraw', 'upgrade_direct_complete_withdraw', 'upgrade_relocation_shipment_withdraw', 'upgrade_relocation_complete_withdraw')
+        AND e.event_type IN (${[...AUDIT_OPERATION_SET].map(type => `'${type}'`).join(',')})
     `).get(eventId) ?? null;
   }
 
@@ -5703,7 +6026,15 @@ export class InventoryDatabase {
     let effectKnown = false;
     let onHandDelta = null;
     let lockedDelta = null;
-    if (operation === "import_stage" && payload.inventoryApplied === false) {
+    if (['alan_timeout','conversion_accepted','conversion_rejected','inquiry_completed','inquiry_rejected'].includes(operation)) {
+      effectKnown = true;
+      onHandDelta = 0;
+      lockedDelta = 0;
+    } else if (operation === 'transfer_inquiry') {
+      effectKnown = matchingLedger.length > 0;
+      onHandDelta = 0;
+      lockedDelta = matchingLedger.reduce((total, entry) => total + Number(entry.locked_delta), 0);
+    } else if (operation === "import_stage" && payload.inventoryApplied === false) {
       effectKnown = true;
       onHandDelta = 0;
       lockedDelta = 0;
@@ -5739,7 +6070,7 @@ export class InventoryDatabase {
     const category = model ? (this.getModel(model)?.category ?? payload.category ?? null) : (payload.category ?? null);
     const payloadTeams = Array.isArray(payload.teams) ? payload.teams.map((value) => String(value).trim()).filter(Boolean) : [];
     const team = String(row.currentTeam ?? row.department ?? payload.team ?? (payloadTeams.length === 1 ? payloadTeams[0] : payload.department ?? "")).trim() || undefined;
-    const businessNo = operation === "upgrade_relocation_cancelled" ? payload.workNo : payload.transferNo ?? payload.upgradeNo ?? row.document_no ?? null;
+    const businessNo = operation === "upgrade_relocation_cancelled" ? payload.workNo : payload.businessNo ?? payload.transferNo ?? payload.upgradeNo ?? row.document_no ?? null;
     const documentId = sourceAvailable ? Number(row.document_id) : null;
 
     return {
@@ -5747,6 +6078,8 @@ export class InventoryDatabase {
       eventType: row.event_type,
       eventId: Number(row.id),
       documentId,
+      inquiryId: payload.inquiryId ?? null,
+      sourceInquiryEventId: payload.sourceInquiryEventId ?? null,
       businessNo,
       model,
       category,
@@ -5756,7 +6089,7 @@ export class InventoryDatabase {
       inTransitDelta,
       availableDelta: effectKnown ? onHandDelta - lockedDelta : null,
       effectKnown,
-      result: auditResult(operation, payload),
+      result: auditResult(operation, payload, row.role),
       ...(operation === "upgrade_relocation_corrected" ? {correction: {workNo:payload.workNo, before:payload.beforeLabel, after:payload.afterLabel}} : {}),
       role: row.role,
       at: row.occurred_at,
@@ -5764,7 +6097,7 @@ export class InventoryDatabase {
       ledgerIds,
       relatedLedgerIds,
       reversalGroup: reversalGroups[0] ?? null,
-      sourceAvailable,
+      sourceAvailable: sourceAvailable || ['inquiry_completed','inquiry_rejected'].includes(operation) && payload.inquiryId != null && this.getInquiry(payload.inquiryId) != null,
       /* 兼容旧库存流水页面与既有 API 调用方。 */
       action: operation,
       recordId: documentId ?? (row.legacy_record_id == null ? undefined : Number(row.legacy_record_id)),
@@ -5794,7 +6127,7 @@ export class InventoryDatabase {
     }
     const businessNo = String(options.businessNo ?? "").trim();
     if (businessNo) {
-      clauses.push("d.document_no LIKE ? ESCAPE '\\'");
+      clauses.push("COALESCE(d.document_no,json_extract(e.payload_json,'$.businessNo')) LIKE ? ESCAPE '\\'");
       parameters.push(`%${escapeLike(businessNo)}%`);
     }
     const model = String(options.model ?? "").trim();
@@ -5837,7 +6170,7 @@ export class InventoryDatabase {
       FROM document_events e
       LEFT JOIN allocation_documents d ON d.id = e.document_id
       WHERE ${clauses.join(" AND ")}
-      ORDER BY e.id DESC
+      ORDER BY e.occurred_at DESC, e.id DESC
     `).all(...parameters).map(row => this.scopeAuditRow(row, visibleGroup, scope)).filter(Boolean)
       .filter(row => !model || [this.auditRecord(row).model, ...((parseEventPayload(row.payload_json).models) ?? [])].some(value => String(value ?? "").toLowerCase().includes(model.toLowerCase())))
       .slice(0, limit).map(row => this.auditRecord(row));
@@ -5859,6 +6192,10 @@ export class InventoryDatabase {
     const upgradeLedger = rawUpgradeLedger.map(rowToUpgradeLedgerEntry);
     const relatedUpgrade = payload.upgradeId == null ? null : this.getUpgrades({ visibleGroup, scopeDirectByTeam })
       .find(item => item.id === Number(payload.upgradeId)) ?? null;
+    if (['inquiry_completed','inquiry_rejected'].includes(row.event_type)) {
+      const inquiry = this.getInquiry(payload.inquiryId);
+      return {record,sourceAvailable:inquiry != null,document:inquiry,inquiry,events:inquiry?.events ?? [],ledger:[],upgrade:null,sync:this.syncState()};
+    }
     if (record.sourceAvailable) {
       const history = this.history(record.documentId);
       return {
@@ -5997,7 +6334,7 @@ export class InventoryDatabase {
     return this.db.prepare("SELECT l.*,b.version,b.warehouse FROM upgrade_inventory_ledger l JOIN stock_batches b ON b.batch_key=l.batch_key WHERE l.source_type='transfer' AND l.source_id=? AND l.entry_type='transfer_receipt' ORDER BY l.id").all(id).map(row=>{
       const reversed=Number(this.db.prepare("SELECT COALESCE(SUM(on_hand_delta),0) n FROM upgrade_inventory_ledger WHERE related_ledger_id=? AND entry_type='transfer_completion_reverse'").get(row.id).n);
       const quantity=Number(row.on_hand_delta)+reversed,balance=this.getBalance(row.batch_key);
-      return {ledgerId:Number(row.id),batchKey:row.batch_key,at:row.created_at,version:row.version,warehouse:row.warehouse,originalQuantity:Number(row.on_hand_delta),quantity,locked:balance.locked,onHand:balance.onHand,issue:balance.locked>0||balance.onHand!==quantity?'该次入库当前仍有锁定或下游占用':''};
+      return {ledgerId:Number(row.id),batchKey:row.batch_key,at:row.created_at,version:row.version,warehouse:row.warehouse,originalQuantity:Number(row.on_hand_delta),quantity,locked:balance.locked,onHand:balance.onHand,issue:balance.locked>0||balance.onHand!==quantity?'此入库批次存在预锁定或后续库存变动，当前不能扣回。':''};
     });
   }
 
@@ -6026,7 +6363,7 @@ export class InventoryDatabase {
     if(stage!=='progress' && reversals.length)fail('扣回数量','仅升级进度步骤可指定扣回');
     if(delta>0) {
       const version=String(input.completedVersion??'').trim();if(!version||/^xxx$/i.test(version)||version.includes('填写项'))fail('升级完，版本号','新增入库必须填写真实版本');after.completedVersion=version;
-      const model=this.getModel(before.model);if(!model||!['硒鼓','墨盒'].includes(model.category))fail('型号','型号 '+before.model+' 的库存目录或类目未确定，请先核对，不能自动猜测或新建');
+      const model=this.getModel(before.model);if(!model||!['硒鼓','墨盒'].includes(model.category))fail('型号','型号不在库存目录或类目非硒鼓墨盒，请核对库存目录');
     }
     const receipts=new Map(this.transferReceiptBatches(row.id).map(x=>[x.batchKey,x]));
     if(delta<0 && !preview) {

@@ -7,7 +7,7 @@ type DraftInstance = { token: symbol; databaseId: () => string | null; recover: 
 const latestDraftInstances = new Map<string, DraftInstance>();
 
 // 草稿只在当前浏览器会话、原数据库和原角色内恢复，不作为业务提交结果。
-export function useSessionDraft<T>(role: Role, name: string, initialValue: T) {
+export function useSessionDraft<T>(role: Role, name: string, initialValue: T, recoveryErrorMessage = "未保存内容无法恢复，请重新核对并填写。") {
   const key = `aster-draft:${role}:${name}`;
   const initial = useRef(initialValue);
   const instance = useRef({ key, token: Symbol(key) });
@@ -67,15 +67,15 @@ export function useSessionDraft<T>(role: Role, name: string, initialValue: T) {
             setValue(saved.value);
           }
         } catch {
-          setStorageError("未保存内容无法恢复，请重新核对并填写。");
+          setStorageError(recoveryErrorMessage);
         }
       }
     }).catch(() => {
-      if (!cancelled) setStorageError("无法核对原数据库，暂未恢复未保存内容。请恢复连接后刷新页面。");
+      if (!cancelled) setStorageError("暂时无法核对草稿来源，未恢复未保存内容。请恢复连接后刷新页面。");
     }).finally(() => { if (!cancelled) setReady(true); });
     // 离页后仍可保存原响应；同一草稿重新挂载后，只允许新实例保存。
     return () => { cancelled = true; };
-  }, [key, role, save, token, ownsDraft]);
+  }, [key, role, save, token, ownsDraft, recoveryErrorMessage]);
   const setDraft = useCallback((next: SetStateAction<T>) => {
     if (!ownsDraft()) return;
     const updated = typeof next === "function" ? (next as (value: T) => T)(current.current) : next;
@@ -104,9 +104,9 @@ export function useSessionDraft<T>(role: Role, name: string, initialValue: T) {
         sessionStorage.setItem(key, JSON.stringify({ databaseId: id, value: previous, writeId: createRequestId("draft") }));
         latest?.recover(previous, id);
       } catch {
-        latestDraftInstances.get(key)?.reportError("未保存内容无法恢复，请重新核对并填写。");
+        latestDraftInstances.get(key)?.reportError(recoveryErrorMessage);
       }
     };
-  }, [key, save, ownsDraft]);
+  }, [key, save, ownsDraft, recoveryErrorMessage]);
   return [value, setDraft, { ready, storageError, persist }] as const;
 }

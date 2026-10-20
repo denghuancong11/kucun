@@ -297,7 +297,7 @@ export function Requirement1View({
           <div>
             <strong>权限信息加载失败</strong>
             <p>
-              暂时无法查看明细或提交调拨。
+              暂时无法查看库存明细，无法提交调拨、询库或确认入库。
               <FeedbackButton label="重新加载权限" pendingLabel="正在刷新…" doneLabel="刷新完成" className="link-btn" onAction={()=>refetchPerms({throwOnError:true})} onResult={setNotice}/>
             </p>
           </div>
@@ -308,7 +308,7 @@ export function Requirement1View({
         <div className="callout callout-danger" role="alert">
           <Icon name="alert" size={15} className="callout-icon" />
           <div>
-            <strong>库存数据加载失败</strong>
+            <strong>库存加载失败</strong>
             <p>
               {catalogErrorObj instanceof Error ? catalogErrorObj.message : String(catalogErrorObj)}
               <FeedbackButton label="重新加载库存" pendingLabel="正在刷新…" doneLabel="刷新完成" className="link-btn" onAction={()=>refetchCatalog({throwOnError:true})} onResult={setNotice}/>
@@ -321,7 +321,7 @@ export function Requirement1View({
         <div className="callout callout-danger" role="alert">
           <Icon name="alert" size={15} className="callout-icon" />
           <div>
-            <strong>调拨数据加载失败</strong>
+            <strong>调拨记录加载失败</strong>
             <p>{allocErrorObj instanceof Error ? allocErrorObj.message : String(allocErrorObj)}</p>
           </div>
         </div>

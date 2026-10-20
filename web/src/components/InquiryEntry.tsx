@@ -43,10 +43,11 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
     {open && <div className="dialog-mask" onClick={() => !busy && !uncertain && setOpen(false)}>
       <form className="dialog inquiry-dialog" role="dialog" aria-modal="true" aria-labelledby="inquiry-title" onSubmit={(event) => void submit(event)} onClick={(event) => event.stopPropagation()}>
         <h3 id="inquiry-title">提交询库需求 · {model.model}</h3>
+        {model.category === "硒鼓" && <p className="workflow-schedule">运营周一／三上午提交；商务当天下午审核，采购周二／四确认实际发出。</p>}
         <fieldset className="inquiry-fields" disabled={!draftCache.ready || busy || uncertain}>
           <div className="form-grid">
             <label className="field"><span>询库数量（必填）</span><input autoFocus required type="number" min="1" step="1" value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: e.target.value })} /></label>
-            <label className="field"><span>询库部门</span><select value={group ?? draft.department} disabled={Boolean(group)} onChange={(e) => setDraft({ ...draft, department: e.target.value })}>{(group ? [group] : ["一团", "二团"]).map((value) => <option key={value}>{value}</option>)}</select></label>
+            <label className="field"><span>询库团队</span><select value={group ?? draft.department} disabled={Boolean(group)} onChange={(e) => setDraft({ ...draft, department: e.target.value })}>{(group ? [group] : ["一团", "二团"]).map((value) => <option key={value}>{value}</option>)}</select></label>
             <label className="field"><span>询库店铺（必填）</span><input required pattern={"[^\\x2d]*US[^\\x2d]*"} title="店铺名称须包含大写 US，且不能包含‘-’。" aria-invalid={storeInvalid} value={draft.store} onChange={(e) => setDraft({ ...draft, store: e.target.value })} />{storeInvalid && <span className="field-error">店铺名称须包含大写 US，且不能包含‘-’。</span>}</label>
             <label className="field"><span>询库运营（必填）</span><input required placeholder="运营姓名" value={draft.operator} onChange={(e) => setDraft({ ...draft, operator: e.target.value })} /></label>
             <label className="field"><span>ASIN（必填）</span><input required value={draft.asin} onChange={(e) => setDraft({ ...draft, asin: e.target.value.trim().toUpperCase() })} /></label>
@@ -56,7 +57,7 @@ export function InquiryEntry({ model, role, enabled }: { model: ModelSummary; ro
         </fieldset>
         {error && <p className="dialog-error" role="alert">{error}</p>}
         {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
-        <div className="dialog-actions"><button type="button" className="btn btn-ghost" disabled={busy || uncertain} onClick={() => setOpen(false)}>取消</button><button type="submit" className="btn btn-primary" disabled={!draftCache.ready || busy}>{busy ? "提交中…" : uncertain ? "重试确认" : "提交询库"}</button></div>
+        <div className="dialog-actions"><button type="button" className="btn btn-ghost" disabled={busy || uncertain} onClick={() => setOpen(false)}>取消</button><button type="submit" className="btn btn-primary" disabled={!draftCache.ready || busy}>{busy ? "提交中…" : uncertain ? "请重试确认" : "提交询库"}</button></div>
       </form>
     </div>}
   </div>;

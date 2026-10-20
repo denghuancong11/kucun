@@ -4,6 +4,9 @@
 
 /* ---------- 调拨面板 ---------- */
 /* ---------- 审批中心与询库 ---------- */
+.approval-final-source { display: block; margin-top: 4px; color: var(--text-2); font-size: var(--fs-aux); white-space: normal; }
+.approval-conversion { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.approval-conversion p { margin: 0; }
 .inquiry-entry { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
 .detail-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); }
 .detail-tabs > .inquiry-entry { margin-left: 0; }
@@ -754,6 +757,11 @@
 .approval-summary-table td { padding:10px; border-bottom:1px solid #edf0f5; vertical-align:middle; }
 .approval-document-table { table-layout:fixed; width:100%; min-width:2890px; border-collapse:collapse; }
 .approval-data-row > td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.approval-data-row > .approval-source-batch-cell { white-space:normal; overflow-wrap:anywhere; }
+.approval-data-row > .approval-recall-cell { white-space:normal; overflow-wrap:anywhere; }
+.approval-hidden-toggle { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.approval-recall-feedback { display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%; }
+.allocation-source-batch { white-space:normal; overflow-wrap:anywhere; }
 .approval-summary-table .approval-model-name { color:#2864c5; }
 .approval-model-toggle { display:block; max-width:100%; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .approval-number { font-variant-numeric:tabular-nums; font-weight:600; }
@@ -772,11 +780,11 @@
 .field-wide { grid-column:1 / -1; }
 .approval-action-form { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
 .approval-action-form .field { flex:1 1 160px; min-width:0; }
-.approval-review-form { display:flex; align-items:end; gap:12px; width:100%; }
+.approval-review-form { display:flex; flex-wrap:wrap; align-items:end; gap:12px; width:100%; }
 .approval-review-form .field { width:140px; min-width:0; }
 .approval-review-form .approval-calculated-coverage { width:170px; }
 .approval-calculated-coverage output, .approval-pack-per-box output { display:block; min-height:34px; padding:8px 10px; border:1px solid #e4e8ee; border-radius:6px; background:#fff; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.approval-review-form .approval-business-note { flex:1; max-width:460px; }
+.approval-review-form .approval-business-note { flex:1 1 180px; max-width:460px; }
 .transit-page { padding:0; border:0; box-shadow:none; }
 .transit-toolbar { border-bottom:1px solid #edf0f5; padding-bottom:16px; margin-bottom:16px; }
 .upgrade-page .panel > .transit-toolbar:last-child { border-bottom:0; padding-bottom:0; margin-bottom:0; }
@@ -843,6 +851,8 @@
 .upgrade-board tr[hidden] { display: none; }
 .upgrade-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 100px; }
 .upgrade-row-actions .lingxing-sync { margin: 0; }
+.relocation-upgrade .upgrade-source-table > tbody > tr[data-source-key] > td { vertical-align: baseline; }
+.relocation-upgrade .upgrade-source-table .upgrade-row-actions { justify-content: center; }
 .upgrade-detail-row > td { padding: 0 !important; }
 .upgrade-task-details { padding: 18px; background: var(--surface-2); white-space: normal; }
 .upgrade-task-details h4, .upgrade-reversals h4 { margin: 18px 0 10px; }
@@ -895,3 +905,11 @@
 }
 
 .transfer-upgrade .transfer-filters { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); max-width: 1120px; }
+
+.workflow-schedule { margin: 0 0 14px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
+.approval-document-detail .allocation-history { margin-top: 20px; }
+.approval-document-detail .data-table { min-width: 1600px; }
+.approval-detail-row > td { padding: 0; }
+.approval-inline-detail { position: sticky; left: 0; width: 100cqw; max-width: 100%; background: var(--surface-2); }
+.approval-inline-detail > h3 { margin: 0; padding: 16px 20px 0; font-size: 15px; }
+.inquiry-fulfillment .approval-action-form > .form-hint { flex-basis: 100%; margin: 0; }

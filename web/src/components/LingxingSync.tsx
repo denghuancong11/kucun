@@ -42,8 +42,8 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
   useEffect(() => {
     if (job?.state!=='succeeded' || refreshed.current===job.id) return;
     refreshed.current=job.id;
-    void onSynced().catch(()=>setRefreshError('同步数据已保存，但页面刷新失败。'));
-  }, [job?.id,job?.state,onSynced]);
+    void onSynced().catch(()=>setRefreshError(target.action==='metrics'?'领星指标已保存，但刷新页面数据时出错。':'领星物流已保存，但刷新页面数据时出错。'));
+  }, [job?.id,job?.state,onSynced,target.action]);
 
   async function sync() {
     if (sending.current || active) return;
@@ -89,9 +89,11 @@ function SyncButton({role,target,disabled,onSynced,storageKey,initialRequestId}:
     } finally {sending.current=false;setSubmitting(false);}
   }
   const busy = submitting || active || checking;
-  const label = busy ? '正在同步…' : job?.state==='succeeded' ? '同步完成'
-    : job?.state==='failed' || (!requestId && submitError) ? '同步失败'
-    : uncertain ? '重试确认' : target.action==='metrics' ? '同步领星指标' : '同步领星物流';
+  const label = submitting ? '正在提交同步…' : job?.state==='queued' ? '等待同步…'
+    : job?.state==='running' ? '正在同步…' : checking ? '正在查询同步结果…'
+    : job?.state==='succeeded' ? '同步完成，可以再次同步'
+    : job?.state==='failed' || (!requestId && submitError) ? '同步失败，请重试'
+    : uncertain ? '请重试确认' : target.action==='metrics' ? '同步领星指标' : '同步领星物流';
   const error = submitting ? '' : job?.state==='failed' ? job.message
     : uncertain ? submitError || '尚未取得同步结果。'
     : active && jobs.isError ? '暂时无法读取同步进度，尚未取得结果。'

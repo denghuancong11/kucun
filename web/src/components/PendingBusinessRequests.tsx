@@ -6,20 +6,26 @@ const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "�
 const actionNames: Array<[RegExp, string]> = [
   [/^\/api\/upgrades\/relocation-waybills\/confirm$/, "运单文件已下载，待确认导出状态"],
   [/^\/api\/upgrades\/relocation-update\/import(?:\?|$)/, "移仓RMA和地址批量更新"],
+  [/^\/api\/transfer-upgrades\/update\/import\?stage=rma(?:&|$)/, "转仓升级 RMA 更新"],
+  [/^\/api\/transfer-upgrades\/update\/import\?stage=count(?:&|$)/, "转仓升级实际清点数量更新"],
+  [/^\/api\/transfer-upgrades\/update\/import\?stage=progress(?:&|$)/, "转仓升级进度更新"],
   [/^\/api\/transfer-upgrades\/update\/import(?:\?|$)/, "转仓升级办理"],
   [/^\/api\/transfer-upgrades\/import$/, "转仓升级导入"],
-  [/^\/api\/approvals\/inquiries\/clear$/, "清空询库列表"],
-  [/\/(?:inquiries|allocations)\/\d+\/alan-review$/, "Alan审核"],
-  [/\/allocations\/\d+\/reply$/, "调拨采购回复"], [/\/allocations\/\d+\/archive$/, "调拨采购归档"], [/\/allocations\/\d+\/recall$/, "调拨回撤"],
-  [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
+  [/^\/api\/approvals\/inquiries\/clear$/, "隐藏已完成或已拒绝的询库"],
+  [/\/inquiries\/\d+\/alan-review$/, "询库 Alan 审核"],
+  [/\/allocations\/\d+\/alan-review$/, "调拨 Alan 审核"],
+  [/\/allocations\/\d+\/transfer-inquiry$/, "商务转询库"],
+  [/\/allocations\/\d+\/conversion-decision$/, "运营确认转询库"],
+  [/\/allocations\/\d+\/reply$/, "提交调拨供应商库存回复"], [/\/allocations\/\d+\/archive$/, "调拨采购归档"], [/\/allocations\/\d+\/recall$/, "调拨回撤"],
+  [/\/inquiries\/\d+\/recall$/, "询库回撤"], [/^\/api\/inquiries$/, "询库申请"], [/\/inquiries\/\d+\/review$/, "询库审核"], [/\/inquiries\/\d+\/reply$/, "询库采购回复"], [/\/inquiries\/\d+\/archive$/, "询库归档"],
   [/^\/api\/allocations$/, "调拨录入"], [/\/allocations\/\d+\/review$/, "调拨审核"], [/\/allocations\/\d+\/confirm$/, "调拨完成"],
   [/^\/api\/upgrades\/direct$/, "在库升级发起"], [/\/upgrades\/direct\/\d+\/complete$/, "在库升级入库"], [/\/upgrades\/relocations\/\d+\/complete$/, "移仓升级入库"],
-  [/^\/api\/upgrades\/relocation-work-items$/, "移仓升级发起"], [/\/procurement$/, "物流资料"], [/\/operation$/, "运营订单"], [/\/ship$/, "移仓发货"],
-  [/^\/api\/transit\/import$/, "在途导入"], [/\/transit\/status\/apply$/, "物流更新"], [/\/on-shelf$/, "在途上架"],
+  [/^\/api\/upgrades\/relocation-work-items$/, "移仓升级发起"], [/\/procurement$/, "保存移仓 RMA 与地址"], [/\/operation$/, "保存移仓订单号"], [/\/ship$/, "移仓发货"],
+  [/^\/api\/transit\/import$/, "在途导入"], [/\/transit\/status\/apply$/, "在途物流更新"], [/\/on-shelf$/, "在途上架／直发FBA确认"],
 ];
 function describe(record: PendingBusinessRequest) {
   const payload = JSON.parse(record.body);
-  const action = actionNames.find(([pattern]) => pattern.test(record.url))?.[1] ?? "业务提交";
+  const action = record.url === "/api/allocations" && payload.zeroAvailableConfirmed === true ? "调拨需求（未预锁）" : actionNames.find(([pattern]) => pattern.test(record.url))?.[1] ?? "业务提交";
   const document = record.context || [payload.model, payload.store, payload.plan, payload.version || payload.sourceVersion || payload.newVersion, payload.removalOrderNo, payload.fileName].filter(Boolean).join(" / ");
   const quantity = payload.quantity ?? payload.completedQuantity ?? payload.supplierQuantity ?? payload.approvedQuantity ?? payload.alanQuantity;
   return [action, document, quantity !== undefined ? "数量 " + quantity : ""].filter(Boolean).join(" · ");

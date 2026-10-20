@@ -13,6 +13,7 @@ import type {
   TransitDetail,
   NoticeMessage,
 } from "../types";
+import { ApprovalDocumentButton } from "./ApprovalDocumentDetails";
 import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel";
 import { Icon } from "./Icon";
 import { InquiryEntry } from "./InquiryEntry";
@@ -186,7 +187,7 @@ function StockPane({
                           aria-expanded={open}
                           title={
                             !perm.actions
-                                ? "当前角色没有调拨操作权限"
+                                ? "当前角色没有提交调拨的权限"
                                 : open
                                   ? "收起调拨表单"
                                   : `填写调拨表单（当前可用 ${formatNumber(available)} 件）`
@@ -222,15 +223,16 @@ function StockPane({
                           {!alloc ? <p>调拨记录尚未加载。</p> : <>
                             <div className="table-wrap scroll-x">
                               <table className="data-table sub allocation-history-table">
-                                <thead><tr><th>运营姓名</th><th>团队</th><th className="num">原申请量</th><th className="num">批准量</th><th className="num">当前调拨占用</th><th className="num">实际调出</th><th>状态</th></tr></thead>
+                                <thead><tr><th>运营姓名</th><th>团队</th><th className="num">原申请量</th><th className="num">商务审核量</th><th className="num">最终执行量</th><th className="num">当前调拨占用</th><th className="num">实际调出</th><th>状态</th></tr></thead>
                                 <tbody>{(alloc.publicRecords[key] ?? []).length === 0
-                                  ? <tr><td colSpan={7}>暂无调拨记录</td></tr>
+                                  ? <tr><td colSpan={8}>暂无调拨记录</td></tr>
                                   : alloc.publicRecords[key].map(record => <tr key={record.id} data-allocation-summary-id={record.id}>
                                     <td>{record.operator || "历史未记录"}</td><td>{record.department || "历史未记录"}</td>
-                                    <td className="num">{record.requestedQuantity === null ? "历史未记录" : formatNumber(record.requestedQuantity)}</td>
-                                    <td className="num">{record.approvedQuantity !== null ? formatNumber(record.approvedQuantity) : record.status === "待商务审核" ? "待审核" : record.status === "已拒绝" ? "已拒绝" : "历史未记录"}</td>
+                                    <td className="num">{record.originalRequestedQuantity === null ? "历史未记录" : formatNumber(record.originalRequestedQuantity)}</td>
+                                    <td className="num">{record.businessReviewedQuantity !== null ? formatNumber(record.businessReviewedQuantity) : record.originalRequestedQuantity === null ? "历史未记录" : record.status === "待商务分配（未预锁）" ? "待分配" : record.status === "待商务审核" ? "待审核" : record.status === "已拒绝" ? "已拒绝" : "—"}</td>
+                                    <td className="num">{record.isVirtual ? "—" : record.finalQuantity === null ? "—" : formatNumber(record.finalQuantity)}</td>
                                     <td className="num">{record.lockedQuantity === null ? "未记录" : formatNumber(record.lockedQuantity)}</td>
-                                    <td className="num">{record.issuedQuantity === null ? "未记录" : formatNumber(record.issuedQuantity)}</td><td>{record.status.includes("已归档") ? "" : record.status}</td>
+                                    <td className="num">{record.issuedQuantity === null ? "未记录" : formatNumber(record.issuedQuantity)}</td><td><span data-field="调拨摘要状态">{record.status.includes("已归档") ? "" : record.status}</span>{(!operationGroups[role] || operationGroups[role] === record.department) && <div><ApprovalDocumentButton role={role} reference={{ kind: "allocation", id: record.id }} /></div>}</td>
                                   </tr>)}</tbody>
                               </table>
                             </div>
@@ -250,9 +252,9 @@ function StockPane({
              <td className="num subtotal-cell">{formatNumber(availableSum)}</td>
              <td className="subtotal-label" colSpan={colCount - 3}>
                明细合计
-               {sum !== model.inStock && ` · 与在库库存不一致（${formatNumber(model.inStock)}）`}
-               {model.locked != null && lockedSum !== model.locked && ` · 与汇总预锁定不一致（${formatNumber(model.locked)}）`}
-               {model.available != null && availableSum !== model.available && ` · 与可用库存不一致（${formatNumber(model.available)}）`}
+               {sum !== model.inStock && ` · 与汇总在库库存不一致（汇总 ${formatNumber(model.inStock)} 件）`}
+               {model.locked != null && lockedSum !== model.locked && ` · 与汇总预锁定不一致（汇总 ${formatNumber(model.locked)} 件）`}
+               {model.available != null && availableSum !== model.available && ` · 与汇总可用库存不一致（汇总 ${formatNumber(model.available)} 件）`}
              </td>
            </tr>
           </tfoot>
@@ -260,7 +262,7 @@ function StockPane({
       </div>
       {!showFields && (
         <p className="detail-field-note">
-          当前角色无法查看计划号、发货时间、版本号和 FNSKU。
+          当前角色无法查看套/箱、发货计划号、发货时间、版本号、已贴 FNSKU 和发货方式（所属海外仓）。
         </p>
       )}
     </div>
@@ -274,9 +276,9 @@ function TransitShelfAction({row,role,perm,onShelf,onShelfRefresh,onNotice}: Pic
   const allowed=TRANSIT_SHELF_ROLE_SET.has(role)&&(!operationGroups[role]||row.team===operationGroups[role])&&perm.actions&&!row.isLegacyPlaceholder;
   const submit=()=>action.perform({execute:async()=>{const result=await onShelf(row);setSaved(result.record.status==='on_shelf');},message});
   return <>
-    {action.busy?<button className="btn btn-primary btn-sm" disabled>正在处理…</button>:action.uncertain?<button className="btn btn-primary btn-sm" onClick={()=>void action.perform()}>重试确认</button>
+    {action.busy?<button className="btn btn-primary btn-sm" disabled>{row.shippingMethod==='直发FBA'?'正在确认直发FBA…':'正在确认上架…'}</button>:action.uncertain?<button className="btn btn-primary btn-sm" onClick={()=>void action.perform()}>请重试确认</button>
       :row.statusCode==='on_shelf'||saved?<Badge label={row.shippingMethod==='直发FBA'?'已确认':'已上架'} tone="green"/>
-      :allowed&&row.statusCode==='in_transit'?<button className="btn btn-primary btn-sm" onClick={()=>void submit()}>{row.shippingMethod==='直发FBA'?'yes':'确认上架'}</button>:<span>{row.onShelf}</span>}
+      :allowed&&row.statusCode==='in_transit'?<button className="btn btn-primary btn-sm" onClick={()=>void submit()}>{row.shippingMethod==='直发FBA'?'确认直发FBA':'确认上架'}</button>:<span>{row.onShelf}</span>}
     {action.error&&<p className="dialog-error" role="alert">{row.plan}：{action.error}</p>}
   </>;
 }

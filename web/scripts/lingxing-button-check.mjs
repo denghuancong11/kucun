@@ -44,7 +44,7 @@ const finishMetric=(id,sales=777)=>execute('finish',{id,capture:{items:[metric(s
 const label=async(container,text,enabled)=>{const button=container.getByRole('button',{name:text,exact:true});await button.waitFor();if(enabled!==undefined)assert.equal(await button.isEnabled(),enabled);};
 const nav=async(page,name)=>{await page.locator('.sidebar .nav-item',{hasText:name}).click();await page.waitForLoadState('networkidle');};
 const role=async(page,value)=>{await page.getByLabel('切换当前操作角色',{exact:true}).selectOption(value);await page.waitForLoadState('networkidle');};
-const filter=async(page,value)=>{await page.getByLabel('搜索运营姓名、型号或 ASIN',{exact:true}).fill(value);};
+const filter=async(page,value)=>{await page.getByLabel('搜索编号、型号、运营或 ASIN',{exact:true}).fill(value);};
 const submit=async(page,container,name)=>{const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/lingxing/jobs'&&r.request().method()==='POST');await container.getByRole('button',{name,exact:true}).click();return (await(await response).json()).job;};
 const newPage=async(context)=>{
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
@@ -64,8 +64,8 @@ try {
  await label(sync(a),'同步领星指标',true);
  let releasePost,postStarted;const postGate=new Promise(resolve=>releasePost=resolve),started=new Promise(resolve=>postStarted=resolve);
  await a.route('**/api/lingxing/jobs',async route=>{postStarted();await postGate;await route.continue();},{times:1});
- const pending=submit(a,sync(a),'同步领星指标');await started;await label(sync(a),'正在同步…',false);releasePost();const j1=await pending;
- assert.equal(j1.state,'queued');await label(sync(a),'正在同步…',false);check('指标提交和排队期间均显示同步中且禁止重复点击');
+ const pending=submit(a,sync(a),'同步领星指标');await started;await label(sync(a),'正在提交同步…',false);releasePost();const j1=await pending;
+ assert.equal(j1.state,'queued');await label(sync(a),'等待同步…',false);check('指标提交与排队分别显示对应状态且禁止重复点击');
  await label(sync(b),'同步领星指标',true);check('他人新任务不覆盖本机未发起的按钮');
  const j2=await submit(b,sync(b),'同步领星指标');assert.notEqual(j2.id,j1.id);
  
@@ -75,10 +75,10 @@ try {
  
  assert.equal(posts.length,2);await a.unroute('**/api/lingxing/jobs?**');check('执行中暂时读不到状态时继续禁止重复提交，不误报结束');
  await execute('finish',{id:j1.id,error:'领星登录已过期，请在部署电脑重新登录。'});
- await label(sync(a),'同步失败',true);await label(sync(b),'正在同步…',false);assert.equal(await sync(a).getByRole('alert').innerText(),'领星登录已过期，请在部署电脑重新登录。');
+ await label(sync(a),'同步失败，请重试',true);await label(sync(b),'等待同步…',false);assert.equal(await sync(a).getByRole('alert').innerText(),'领星登录已过期，请在部署电脑重新登录。');
  check('较早失败不覆盖另一窗口仍在排队的按钮');
  assert.equal((await execute('claim')).job.id,j2.id);await finishMetric(j2.id);
- await label(sync(b),'同步完成',true);await label(sync(a),'同步失败',true);check('同岗位、相同单据的两台客户端按各自任务显示失败和成功');
+ await label(sync(b),'同步完成，可以再次同步',true);await label(sync(a),'同步失败，请重试',true);check('同岗位、相同单据的两台客户端按各自任务显示失败和成功');
  
  const freshContext=await browser.newContext(),fresh=await newPage(freshContext);await label(sync(fresh),'同步领星指标',true);
  await fresh.reload({waitUntil:'networkidle'});await role(fresh,'business');await nav(fresh,'审批中心');await freshContext.close();check('新电脑未发起时保留初始按钮，不显示他人的任务历史');
@@ -89,20 +89,20 @@ try {
  await a.getByLabel('按需求类型筛选',{exact:true}).selectOption('allocation');await a.getByLabel('按需求类型筛选',{exact:true}).selectOption('all');
  await a.getByRole('button',{name:/^我的待办/}).click();await a.getByRole('button',{name:/^我的待办/}).click();
  await a.getByLabel('筛选审批进度',{exact:true}).selectOption('active');await a.getByLabel('筛选审批进度',{exact:true}).selectOption('all');
- await filter(a,'甲单');await label(sync(a),'同步失败',true);
+ await filter(a,'甲单');await label(sync(a),'同步失败，请重试',true);
  await role(a,'admin');await filter(a,'甲单');await label(sync(a),'同步领星指标',true);
- await role(a,'business');await filter(a,'甲单');await label(sync(a),'同步失败',true);check('筛选与角色切换后按钮按本机请求及岗位恢复');
+ await role(a,'business');await filter(a,'甲单');await label(sync(a),'同步失败，请重试',true);check('筛选与角色切换后按钮按本机请求及岗位恢复');
  await b.unroute('**/api/sync');
- const retry=await submit(a,sync(a),'同步失败');assert.notEqual(retry.id,j1.id);await label(sync(a),'正在同步…',false);
- assert.equal((await execute('claim')).job.id,retry.id);await finishMetric(retry.id,170);await label(sync(a),'同步完成',true);
+ const retry=await submit(a,sync(a),'同步失败，请重试');assert.notEqual(retry.id,j1.id);await label(sync(a),'等待同步…',false);
+ assert.equal((await execute('claim')).job.id,retry.id);await finishMetric(retry.id,170);await label(sync(a),'同步完成，可以再次同步',true);
  await b.locator('.approval-metric-value').filter({hasText:/^170$/}).waitFor();await b.locator('.approval-coverage-value').filter({hasText:'2.2 倍'}).waitFor();await b.locator('.approval-coverage-value').filter({hasText:'2.3 倍'}).waitFor();
  check('其他客户端保存后，现有全局刷新同时更新指标和调货前后计算结果');
- const again=await submit(a,sync(a),'同步完成');assert.notEqual(again.id,retry.id);await label(sync(a),'正在同步…',false);await execute('claim');await finishMetric(again.id,779);await label(sync(a),'同步完成',true);check('明确失败可重试，完成后保留按钮且再次点击创建新任务');
- const tab=await newPage(context);await label(sync(tab),'同步完成',true);const tabJob=await submit(tab,sync(tab),'同步完成');await label(sync(a),'同步完成',true);
- await label(sync(b),'同步完成',true);check('另一标签页发起任务不覆盖已完成按钮');
- await a.reload({waitUntil:'networkidle'});await role(a,'business');await nav(a,'审批中心');await filter(a,'甲单');await label(sync(a),'同步完成',true);
+ const again=await submit(a,sync(a),'同步完成，可以再次同步');assert.notEqual(again.id,retry.id);await label(sync(a),'等待同步…',false);await execute('claim');await finishMetric(again.id,779);await label(sync(a),'同步完成，可以再次同步',true);check('明确失败可重试，完成后保留按钮且再次点击创建新任务');
+ const tab=await newPage(context);await label(sync(tab),'同步完成，可以再次同步',true);const tabJob=await submit(tab,sync(tab),'同步完成，可以再次同步');await label(sync(a),'同步完成，可以再次同步',true);
+ await label(sync(b),'同步完成，可以再次同步',true);check('另一标签页发起任务不覆盖已完成按钮');
+ await a.reload({waitUntil:'networkidle'});await role(a,'business');await nav(a,'审批中心');await filter(a,'甲单');await label(sync(a),'同步完成，可以再次同步',true);
  await tab.close();await execute('claim');await finishMetric(tabJob.id,780);check('同浏览器两个标签页持有各自任务，刷新不会被另一标签页的新任务覆盖');
- await a.close();a=await newPage(context);await label(sync(a),'同步完成',true);check('关闭发起页面不影响执行，重新打开按服务端结果恢复');
+ await a.close();a=await newPage(context);await label(sync(a),'同步完成，可以再次同步',true);check('关闭发起页面不影响执行，重新打开按服务端结果恢复');
  // 已保存超过30条以后仍可查自己的任务，且不能跨岗位或流程读取。
  for(let i=0;i<31;i++) db.db.prepare("INSERT INTO lingxing_sync_jobs(request_id,role,request_json,requested_from,target_json,state,message,created_at,finished_at) SELECT ?,role,request_json,requested_from,target_json,'failed','隔离历史样例',created_at,finished_at FROM lingxing_sync_jobs WHERE id=?").run(rid(),j1.id);
  const newest=db.db.prepare('SELECT MAX(id) id FROM lingxing_sync_jobs').get().id;
@@ -112,16 +112,16 @@ try {
  // 同时丢失提交回执和状态读取，重试只重放原请求。
  let lost=true,blockStatus=true;
  await a.route('**/api/lingxing/jobs**',async route=>{if(route.request().method()==='GET'&&blockStatus)return route.abort();if(route.request().method()==='POST'&&lost){lost=false;await route.fetch();return route.abort();}return route.continue();});
- const postCount=posts.length;await sync(a).getByRole('button',{name:'同步完成',exact:true}).click();await label(sync(a),'重试确认',true);
+ const postCount=posts.length;await sync(a).getByRole('button',{name:'同步完成，可以再次同步',exact:true}).click();await label(sync(a),'请重试确认',true);
  assert.ok((await sync(a).innerText()).includes('尚未取得'));const lostKey=posts.at(-1).requestId;assert.equal(posts.length,postCount+1);
- const confirmed=await submit(a,sync(a),'重试确认');assert.equal(confirmed.requestId,lostKey);await label(sync(a),'正在同步…',false);
- await execute('claim');await finishMetric(confirmed.id,781);blockStatus=false;await a.unroute('**/api/lingxing/jobs**');await label(sync(a),'同步完成',true);
+ const confirmed=await submit(a,sync(a),'请重试确认');assert.equal(confirmed.requestId,lostKey);await label(sync(a),'等待同步…',false);
+ await execute('claim');await finishMetric(confirmed.id,781);blockStatus=false;await a.unroute('**/api/lingxing/jobs**');await label(sync(a),'同步完成，可以再次同步',true);
  assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(lostKey).n,1);check('网络未知结果不误报成功或失败，同一请求重试不重复执行');
  // 未送达服务器的请求也保留编号，重试才首次创建任务。
  let reject=true;await a.route('**/api/lingxing/jobs',route=>{if(reject){reject=false;return route.abort();}return route.continue();});
- await sync(a).getByRole('button',{name:'同步完成',exact:true}).click();await label(sync(a),'重试确认',true);const unsent=posts.at(-1).requestId;
+ await sync(a).getByRole('button',{name:'同步完成，可以再次同步',exact:true}).click();await label(sync(a),'请重试确认',true);const unsent=posts.at(-1).requestId;
  assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(unsent).n,0);
- const delivered=await submit(a,sync(a),'重试确认');assert.equal(delivered.requestId,unsent);await a.unroute('**/api/lingxing/jobs');await execute('claim');await finishMetric(delivered.id);await label(sync(a),'同步完成',true);check('请求未送达时不自动新增任务，手动确认沿用原编号');
+ const delivered=await submit(a,sync(a),'请重试确认');assert.equal(delivered.requestId,unsent);await a.unroute('**/api/lingxing/jobs');await execute('claim');await finishMetric(delivered.id);await label(sync(a),'同步完成，可以再次同步',true);check('请求未送达时不自动新增任务，手动确认沿用原编号');
  await a.locator('.approval-model-row[aria-expanded="false"]').click();await a.screenshot({path:path.join(output,'metrics-complete.png'),fullPage:true});
  await role(a,'operation-1');await nav(a,'升级库存');
  const row=i=>a.locator('[data-relocation-work-id="'+works[i].id+'"]'),log=i=>row(i).locator('.lingxing-sync');
@@ -138,13 +138,13 @@ try {
  }
  check('六岗位同步与发货权限独立，同步按钮位于当前任务操作列');
  await role(a,'operation-1');await nav(a,'升级库存');
- const l1=await logSubmit(0,'同步领星物流'),l2=await logSubmit(1,'同步领星物流');await logLabel(0,'正在同步…',false);await logLabel(1,'正在同步…',false);check('两个移仓物流入口分别排队且不能重复提交');
+ const l1=await logSubmit(0,'同步领星物流'),l2=await logSubmit(1,'同步领星物流');await logLabel(0,'等待同步…',false);await logLabel(1,'等待同步…',false);check('两个移仓物流入口分别排队且不能重复提交');
  assert.equal((await execute('claim')).job.id,l1.id);await logLabel(0,'正在同步…',false);
  const finishLog=id=>execute('finish',{id,capture:{capturedAt:new Date().toISOString(),shipments:[{externalId:'BUTTON-PKG',storeId:'TEST',storeName:'A-US 美国',orderNo:works[0].removalOrderNo,fnsku:common.fnsku,carrier:'UPS',trackingNo:'TRACK-BUTTON',quantity:5,shipDate:'2026-09-10T00:00:00.000Z'}]}});
- await finishLog(l1.id);await logLabel(0,'同步完成',true);await row(0).locator(':scope > td').first().click();await a.locator('[data-relocation-detail="'+works[0].id+'"]').getByText('TRACK-BUTTON',{exact:true}).first().waitFor();await logLabel(1,'正在同步…',false);check('物流保存成功即自动记入发货5，其他单的同步状态不变');
- await execute('claim');await execute('finish',{id:l2.id,error:'移除单 BUTTON-ORDER-1 中未找到 FNSKU XBUTTON001，请核对移除单号和升级来源。'});await logLabel(1,'同步失败',true);await logLabel(0,'同步完成',true);
+ await finishLog(l1.id);await logLabel(0,'同步完成，可以再次同步',true);await row(0).locator(':scope > td').first().click();await a.locator('[data-relocation-detail="'+works[0].id+'"]').getByText('TRACK-BUTTON',{exact:true}).first().waitFor();await logLabel(1,'等待同步…',false);check('物流保存成功即自动记入发货5，其他单的同步状态不变');
+ await execute('claim');await execute('finish',{id:l2.id,error:'移除单 BUTTON-ORDER-1 中未找到 FNSKU XBUTTON001，请核对移除单号和升级来源。'});await logLabel(1,'同步失败，请重试',true);await logLabel(0,'同步完成，可以再次同步',true);
  assert.equal((await api(`/api/lingxing/jobs?action=logistics&workId=${works[1].id}&requestId=${l1.requestId}`,'operation-1')).jobs.length,0);check('物流失败只影响对应流程，查询不能串用另一流程');
- const lAgain=await logSubmit(0,'同步完成');await logLabel(0,'正在同步…',false);assert.notEqual(lAgain.id,l1.id);await execute('claim');await finishLog(lAgain.id);await logLabel(0,'同步完成',true);check('物流完成可再次同步，创建独立任务');
+ const lAgain=await logSubmit(0,'同步完成，可以再次同步');await logLabel(0,'等待同步…',false);assert.notEqual(lAgain.id,l1.id);await execute('claim');await finishLog(lAgain.id);await logLabel(0,'同步完成，可以再次同步',true);check('物流完成可再次同步，创建独立任务');
  await a.setViewportSize({width:1280,height:1000});await choose(1);await log(1).scrollIntoViewIfNeeded();await log(1).screenshot({path:path.join(output,'logistics-button-narrow.png')});
  const layout=await log(1).evaluate(element=>{const button=element.querySelector('button'),error=element.querySelector('[role=alert]');return {button:button.scrollWidth<=button.clientWidth,error:error.scrollWidth<=error.clientWidth,height:button.getBoundingClientRect().height};});assert.ok(layout.button&&layout.error&&layout.height>20);check('1280桌面同步按钮完整显示，错误原因正常换行');
  await a.setViewportSize({width:1440,height:1000});await a.evaluate(()=>window.scrollTo(0,0));await a.screenshot({path:path.join(output,'logistics-states.png'),fullPage:true});
@@ -173,8 +173,8 @@ try {
  assert.equal(await secondCard.locator('.lingxing-sync button').count(),1);
  const beforeHistorySync={stock:db.getCatalog().models,shipped:db.getUpgradeRelocation(relocation.id).shipped_quantity,completed:db.getUpgradeRelocation(relocation.id).completed_quantity};
  const historyJob=await submit(a,historic.locator('.lingxing-sync'),'同步领星物流');assert.equal(historyJob.target.workId,works[0].id);
- await execute('claim');await finishLog(historyJob.id);await label(historic.locator('.lingxing-sync'),'同步完成',true);
- await historic.locator(':scope > td').first().click();const packages=a.locator('[data-relocation-detail="'+works[0].id+'"]').getByRole('table',{name:'移仓包裹明细',exact:true});await packages.waitFor();assert.deepEqual(await packages.locator('thead th').allTextContents(),['店铺','国家','订单号','FNSKU','承运商','运单号','包裹发货时间','包裹实发数量','已采纳数量','可采纳数量','取数时间']);const adoptedPackage=packages.locator('tbody tr').filter({hasText:'TRACK-BUTTON'});assert.equal(await adoptedPackage.count(),1);assert.deepEqual((await adoptedPackage.locator('td').allTextContents()).slice(2,10),[works[0].removalOrderNo,common.fnsku,'UPS','TRACK-BUTTON','2026-09-10T00:00:00.000Z','5','5','0']);
+ await execute('claim');await finishLog(historyJob.id);await label(historic.locator('.lingxing-sync'),'同步完成，可以再次同步',true);
+ await historic.locator(':scope > td').first().click();const packages=a.locator('[data-relocation-detail="'+works[0].id+'"]').getByRole('table',{name:'移仓包裹明细',exact:true});await packages.waitFor();assert.deepEqual(await packages.locator('thead th').allTextContents(),['店铺','国家','订单号','FNSKU','承运商','运单号','包裹发货时间','包裹实发数量','已采纳数量','可采纳数量','领星数据获取时间']);const adoptedPackage=packages.locator('tbody tr').filter({hasText:'TRACK-BUTTON'});assert.equal(await adoptedPackage.count(),1);assert.deepEqual((await adoptedPackage.locator('td').allTextContents()).slice(2,10),[works[0].removalOrderNo,common.fnsku,'UPS','TRACK-BUTTON','2026-09-10T00:00:00.000Z','5','5','0']);
  assert.equal(db.relocationExternalShipments(works[0].removalOrderNo,common.fnsku)[0].usedQuantity,5);
  assert.deepEqual(db.getCatalog().models,beforeHistorySync.stock);assert.equal(db.getUpgradeRelocation(relocation.id).shipped_quantity,beforeHistorySync.shipped);assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,beforeHistorySync.completed);
  assert.equal(await secondCard.getByText('TRACK-BUTTON',{exact:true}).count(),0);
@@ -182,7 +182,7 @@ try {
  await a.screenshot({path:path.join(output,'same-source-two-relocations-history-sync.png'),fullPage:true});
  await role(a,'purchasing');await nav(a,'升级库存');
  await choose(0);assert.equal(await row(0).locator('.lingxing-sync').count(),1);await row(0).getByRole('button',{name:'更新升级数量',exact:true}).click();const history=a.getByRole('dialog');
- await history.getByLabel('升级完数量',{exact:true}).fill('5');await history.getByLabel('升级完成版本号',{exact:true}).fill('V21');await history.getByLabel('目标海外仓',{exact:true}).selectOption('SyntheticWarehouseA');
+ await history.getByLabel('累计升级完成数量',{exact:true}).fill('5');await history.getByLabel('升级完成版本号',{exact:true}).fill('V21');await history.getByLabel('目标海外仓',{exact:true}).selectOption('SyntheticWarehouseA');
  const completion=a.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/upgrades/relocations/'+relocation.id+'/complete');await history.getByRole('button',{name:'保存升级数量',exact:true}).click();assert.equal((await completion).status(),200);await history.waitFor({state:'hidden'});await row(0).locator(':scope > td').first().click();await a.locator('[data-relocation-detail="'+works[0].id+'"]').getByRole('table',{name:'移仓入库批次'}).locator('tbody tr').filter({hasText:'V21'}).filter({hasText:'SyntheticWarehouseA'}).waitFor();
  assert.equal(db.getUpgradeRelocation(relocation.id).completed_quantity,5);assert.equal(db.getCatalog().models.find(m=>m.model==='SYNTH-TONER-001').inStock,stockBefore.models.find(m=>m.model==='SYNTH-TONER-001').inStock+5);check('采购登记5件回库后在库仅增加5件，已用包裹仍为5件');
  // 存储与未知回执专项：实际React、HTTP、任务表；执行端仍是隔离协议样例。
@@ -193,15 +193,15 @@ try {
   const faultContext=await browser.newContext(),fault=await newPage(faultContext);
   await fault.evaluate(area=>{window.asterOriginalSet=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(this===window[area]&&key.startsWith('aster-lingxing-request:'))throw new DOMException('隔离存储写入拒绝','QuotaExceededError');return window.asterOriginalSet.call(this,key,value);};},area);
   const count=posts.length;await sync(fault).getByRole('button',{name:'同步领星指标',exact:true}).click();
-  await label(sync(fault),'同步失败',true);assert.equal(posts.length,count);assert.match(await sync(fault).getByRole('alert').innerText(),/本次未发送/);
+  await label(sync(fault),'同步失败，请重试',true);assert.equal(posts.length,count);assert.match(await sync(fault).getByRole('alert').innerText(),/本次未发送/);
   const partial=await stored(fault);
   await fault.evaluate(()=>{Storage.prototype.setItem=window.asterOriginalSet;});
   let recovered;
   if(Object.values(partial.session).length) {
-   await sync(fault).getByRole('button',{name:'同步失败',exact:true}).click();await label(sync(fault),'重试确认',true);assert.equal(posts.length,count);
-   recovered=await submit(fault,sync(fault),'重试确认');assert.equal(recovered.requestId,Object.values(partial.session)[0]);
-  } else recovered=await submit(fault,sync(fault),'同步失败');
-  assert.equal(posts.length,count+1);assert.equal((await execute('claim')).job.id,recovered.id);await finishMetric(recovered.id,782);await label(sync(fault),'同步完成',true);
+   await sync(fault).getByRole('button',{name:'同步失败，请重试',exact:true}).click();await label(sync(fault),'请重试确认',true);assert.equal(posts.length,count);
+   recovered=await submit(fault,sync(fault),'请重试确认');assert.equal(recovered.requestId,Object.values(partial.session)[0]);
+  } else recovered=await submit(fault,sync(fault),'同步失败，请重试');
+  assert.equal(posts.length,count+1);assert.equal((await execute('claim')).job.id,recovered.id);await finishMetric(recovered.id,782);await label(sync(fault),'同步完成，可以再次同步',true);
   recoveryEvidence.push({kind:area+' write rejection',postsWhileBlocked:0,partial,recovered,jobCount:db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(recovered.requestId).n});
   check(area+'写失败明确未发送、0POST并解除busy；恢复存储后同页面只建1任务');await faultContext.close();
  }
@@ -209,10 +209,10 @@ try {
   const faultContext=await browser.newContext();
   await faultContext.addInitScript(()=>{window.asterOriginalGet=Storage.prototype.getItem;Storage.prototype.getItem=function(key){if(key.startsWith('aster-lingxing-request:'))throw new DOMException('隔离存储读取拒绝','SecurityError');return window.asterOriginalGet.call(this,key);};});
   const count=posts.length,fault=await newPage(faultContext);
-  assert.equal(await fault.locator('.app').count(),1);await label(sync(fault),'同步失败',true);assert.match(await sync(fault).getByRole('alert').innerText(),/无法读取/);
-  await sync(fault).getByRole('button',{name:'同步失败',exact:true}).click();await label(sync(fault),'同步失败',true);assert.equal(posts.length,count);assert.match(await sync(fault).getByRole('alert').innerText(),/本次未发送/);
+  assert.equal(await fault.locator('.app').count(),1);await label(sync(fault),'同步失败，请重试',true);assert.match(await sync(fault).getByRole('alert').innerText(),/无法读取/);
+  await sync(fault).getByRole('button',{name:'同步失败，请重试',exact:true}).click();await label(sync(fault),'同步失败，请重试',true);assert.equal(posts.length,count);assert.match(await sync(fault).getByRole('alert').innerText(),/本次未发送/);
   await fault.evaluate(()=>{Storage.prototype.getItem=window.asterOriginalGet;});
-  const recovered=await submit(fault,sync(fault),'同步失败');assert.equal((await execute('claim')).job.id,recovered.id);await finishMetric(recovered.id,783);await label(sync(fault),'同步完成',true);
+  const recovered=await submit(fault,sync(fault),'同步失败，请重试');assert.equal((await execute('claim')).job.id,recovered.id);await finishMetric(recovered.id,783);await label(sync(fault),'同步完成，可以再次同步',true);
   recoveryEvidence.push({kind:'getItem rejected without saved task',appAlive:true,postsWhileBlocked:0,recovered});
   check('getItem拒绝不崩整页，提示读失败且0POST；恢复存储后同页面可继续同步');await faultContext.close();
  }
@@ -221,11 +221,11 @@ try {
   const key='aster-lingxing-request:business:metrics:inquiry:'+docs[0].id;
   const faultContext=await browser.newContext();
   await faultContext.addInitScript(({key,id})=>{sessionStorage.setItem(key,id);localStorage.setItem(key,id);window.asterOriginalGet=Storage.prototype.getItem;Storage.prototype.getItem=function(key){if(key.startsWith('aster-lingxing-request:'))throw new DOMException('隔离存储读取拒绝','SecurityError');return window.asterOriginalGet.call(this,key);};},{key,id:originalId});
-  const count=posts.length,fault=await newPage(faultContext);await label(sync(fault),'同步失败',true);assert.equal(posts.length,count);
+  const count=posts.length,fault=await newPage(faultContext);await label(sync(fault),'同步失败，请重试',true);assert.equal(posts.length,count);
   await fault.evaluate(()=>{Storage.prototype.getItem=window.asterOriginalGet;});
-  await sync(fault).getByRole('button',{name:'同步失败',exact:true}).click();await label(sync(fault),'正在同步…',false);
+  await sync(fault).getByRole('button',{name:'同步失败，请重试',exact:true}).click();await label(sync(fault),'等待同步…',false);
   assert.equal(posts.length,count);assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(originalId).n,1);
-  assert.equal((await execute('claim')).job.id,created.id);await finishMetric(created.id,784);await label(sync(fault),'同步完成',true);
+  assert.equal((await execute('claim')).job.id,created.id);await finishMetric(created.id,784);await label(sync(fault),'同步完成，可以再次同步',true);
   recoveryEvidence.push({kind:'getItem restored existing task',originalId,created,postsDuringRecovery:0,pointer:await stored(fault)});
   check('读权限恢复先找回已保存原任务并查结果，0新POST、不覆盖原编号');await faultContext.close();
  }
@@ -236,22 +236,22 @@ try {
   const faultContext=await browser.newContext(),fault=await newPage(faultContext);await filter(fault,ink.documentNo);
   let lost=true,blockStatus=true;
   await fault.route('**/api/lingxing/jobs**',async route=>{if(route.request().method()==='GET'&&blockStatus)return route.abort();if(route.request().method()==='POST'&&lost){lost=false;await route.fetch();return route.abort();}return route.continue();});
-  const count=posts.length;await sync(fault).getByRole('button',{name:'同步领星指标',exact:true}).click();await label(sync(fault),'重试确认',true);
+  const count=posts.length;await sync(fault).getByRole('button',{name:'同步领星指标',exact:true}).click();await label(sync(fault),'请重试确认',true);
   const original=posts.at(-1),saved={...db.db.prepare('SELECT id,request_id,state FROM lingxing_sync_jobs WHERE request_id=?').get(original.requestId)};
   assert.equal(saved.state,'queued');matrix.墨盒.business.actions=false;await fs.writeFile(permissionFile,JSON.stringify(matrix));
   const deniedResponse=fault.waitForResponse(r=>new URL(r.url()).pathname==='/api/lingxing/jobs'&&r.request().method()==='POST');
-  await sync(fault).getByRole('button',{name:'重试确认',exact:true}).click();const denied=await deniedResponse;assert.equal(denied.status(),403);const deniedBody=await denied.json();
-  await label(sync(fault),'重试确认',true);assert.match(await sync(fault).getByRole('alert').innerText(),/原同步结果仍待确认/);
+  await sync(fault).getByRole('button',{name:'请重试确认',exact:true}).click();const denied=await deniedResponse;assert.equal(denied.status(),403);const deniedBody=await denied.json();
+  await label(sync(fault),'请重试确认',true);assert.match(await sync(fault).getByRole('alert').innerText(),/原同步结果仍待确认/);
   assert.ok(Object.values((await stored(fault)).session).includes(original.requestId));assert.ok(Object.values((await stored(fault)).local).includes(original.requestId));
   assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(original.requestId).n,1);
   await fault.reload({waitUntil:'networkidle'});assert.equal(await fault.getByLabel('切换当前操作角色',{exact:true}).inputValue(),'admin');
-  await role(fault,'business');await nav(fault,'审批中心');await filter(fault,ink.documentNo);await label(sync(fault),'重试确认',true);
+  await role(fault,'business');await nav(fault,'审批中心');await filter(fault,ink.documentNo);await label(sync(fault),'请重试确认',true);
   assert.equal(posts.length,count+2);matrix.墨盒.business.actions=true;await fs.writeFile(permissionFile,JSON.stringify(matrix));
-  const confirmed=await submit(fault,sync(fault),'重试确认');assert.equal(confirmed.requestId,original.requestId);assert.equal(confirmed.id,saved.id);
+  const confirmed=await submit(fault,sync(fault),'请重试确认');assert.equal(confirmed.requestId,original.requestId);assert.equal(confirmed.id,saved.id);
   assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id=?').get(original.requestId).n,1);
   const submitted=posts.slice(count);assert.equal(submitted.length,3);assert.ok(submitted.every(post=>post.requestId===original.requestId));assert.deepEqual(submitted,[original,original,original]);
   blockStatus=false;await fault.unroute('**/api/lingxing/jobs**');assert.equal((await execute('claim')).job.id,saved.id);
-  await finishMetric(saved.id,785);await label(sync(fault),'同步完成',true);
+  await finishMetric(saved.id,785);await label(sync(fault),'同步完成，可以再次同步',true);
   recoveryEvidence.push({kind:'saved unknown replay forbidden then restore',original,saved,denied:deniedBody,confirmed,submitted,pointer:await stored(fault),jobCount:1});
   check('已排队丢回执→真实403保留原编号→刷新原岗位仍可确认→恢复权限3次同键只有1任务');await faultContext.close();
  }
@@ -261,23 +261,23 @@ try {
   const before=db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs').get().n;
   const response=fault.waitForResponse(r=>new URL(r.url()).pathname==='/api/lingxing/jobs'&&r.request().method()==='POST');
   await sync(fault).getByRole('button',{name:'同步领星指标',exact:true}).click();const rejected=await response;assert.equal(rejected.status(),400);const body=await rejected.json();
-  assert.equal(body.code,'invalid_sync_asin');await label(sync(fault),'同步失败',true);
+  assert.equal(body.code,'invalid_sync_asin');await label(sync(fault),'同步失败，请重试',true);
   assert.deepEqual(await stored(fault),{session:{},local:{}});assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs').get().n,before);
   await filter(fault,docs[0].documentNo);await label(sync(fault),'同步领星指标',true);const next=await submit(fault,sync(fault),'同步领星指标');
-  assert.deepEqual(next.target.documents,[{kind:'inquiry',id:docs[0].id}]);assert.equal((await execute('claim')).job.id,next.id);await finishMetric(next.id,786);await label(sync(fault),'同步完成',true);
+  assert.deepEqual(next.target.documents,[{kind:'inquiry',id:docs[0].id}]);assert.equal((await execute('claim')).job.id,next.id);await finishMetric(next.id,786);await label(sync(fault),'同步完成，可以再次同步',true);
   recoveryEvidence.push({kind:'first definite400 clears and valid filter continues',rejected:body,next});
   check('首次明确坏ASIN400不建任务并清本机编号；过滤正确单可正常新同步');await faultContext.close();
  }
  {
   const sharedContext=await browser.newContext(),firstPage=await newPage(sharedContext),secondPage=await newPage(sharedContext);
   const count=posts.length;
-  const first=await submit(firstPage,sync(firstPage),'同步领星指标');await label(sync(firstPage),'正在同步…',false);
+  const first=await submit(firstPage,sync(firstPage),'同步领星指标');await label(sync(firstPage),'等待同步…',false);
   await label(sync(secondPage),'同步领星指标',true);
   const second=await submit(secondPage,sync(secondPage),'同步领星指标');assert.notEqual(first.requestId,second.requestId);assert.notEqual(first.id,second.id);
-  await label(sync(secondPage),'正在同步…',false);assert.equal(posts.length,count+2);
+  await label(sync(secondPage),'等待同步…',false);assert.equal(posts.length,count+2);
   assert.ok(Object.values((await stored(firstPage)).session).includes(first.requestId));assert.ok(Object.values((await stored(secondPage)).session).includes(second.requestId));
-  assert.equal((await execute('claim')).job.id,first.id);await finishMetric(first.id,787);await label(sync(firstPage),'同步完成',true);await label(sync(secondPage),'正在同步…',false);
-  assert.equal((await execute('claim')).job.id,second.id);await finishMetric(second.id,788);await label(sync(secondPage),'同步完成',true);
+  assert.equal((await execute('claim')).job.id,first.id);await finishMetric(first.id,787);await label(sync(firstPage),'同步完成，可以再次同步',true);await label(sync(secondPage),'等待同步…',false);
+  assert.equal((await execute('claim')).job.id,second.id);await finishMetric(second.id,788);await label(sync(secondPage),'同步完成，可以再次同步',true);
   assert.equal(db.db.prepare('SELECT COUNT(*) n FROM lingxing_sync_jobs WHERE request_id IN (?,?)').get(first.requestId,second.requestId).n,2);
   recoveryEvidence.push({kind:'two already open same browser tabs remain independent',first,second,posts:posts.slice(count)});
   check('同浏览器两个先打开页各自提交不同编号、2任务；他页local编号不接管本页按钮');await sharedContext.close();

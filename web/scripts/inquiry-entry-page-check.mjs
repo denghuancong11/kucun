@@ -97,9 +97,9 @@ try{
   await open('ZERO-TONER');await page.setViewportSize({width:1366,height:1000});
   await page.screenshot({path:path.join(output,'inventory-empty-1366.png'),fullPage:true,animations:'disabled'});
   await button().click();const writeCount=writes.length;
-  await page.getByRole('button',{name:'提交询库',exact:true}).click();assert.equal(writes.length,writeCount);
+  await page.getByRole('dialog').getByRole('button',{name:'提交询库',exact:true}).click();assert.equal(writes.length,writeCount);
   await fields({'询库数量（必填）':0,'询库店铺（必填）':'不可串用草稿US','询库运营（必填）':'测试','ASIN（必填）':'BTEST00001','FNSKU（必填）':'XTEST'});
-  await page.getByRole('button',{name:'提交询库',exact:true}).click();assert.equal(writes.length,writeCount);
+  await page.getByRole('dialog').getByRole('button',{name:'提交询库',exact:true}).click();assert.equal(writes.length,writeCount);
   await page.getByRole('button',{name:'取消',exact:true}).click();
   await page.getByRole('tab',{name:/在途明细/}).click();await button().click();assert.equal(await page.getByLabel('询库店铺（必填）',{exact:true}).inputValue(),'不可串用草稿US');
   await page.getByRole('button',{name:'取消',exact:true}).click();
@@ -113,12 +113,12 @@ try{
   const inventoryBefore=db.getCatalog();
   for(const [role,model,team] of [['admin','ZERO-INK','二团'],['operation-1','ZERO-TONER','一团'],['operation-2','SYNTH-TONER-001','二团']]){
     await open(model,role);await button().click();
-    const department=page.locator('.inquiry-fields label').filter({hasText:'询库部门'}).locator('select');
+    const department=page.locator('.inquiry-fields label').filter({hasText:'询库团队'}).locator('select');
     if(role==='admin')await department.selectOption(team);else {assert.equal(await department.isDisabled(),true);assert.equal(await department.inputValue(),team);}
     await fields({'询库数量（必填）':7,'询库店铺（必填）':role.replaceAll('-','')+'店铺US','询库运营（必填）':role,'ASIN（必填）':'BTEST00001','FNSKU（必填）':'XINQUIRY','运营备注（选填）':'移动入口回归'});
     if(role==='admin')await page.screenshot({path:path.join(output,'inquiry-dialog-1366.png'),fullPage:true,animations:'disabled'});
     const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/inquiries'&&r.request().method()==='POST');
-    await page.getByRole('button',{name:'提交询库',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'提交询库',exact:true}).click();
     const received=await response;assert.equal(received.status(),200);const {record}=await received.json();
     assert.equal(record.model,model);assert.equal(record.department,team);assert.equal(record.quantity,7);assert.equal(record.operatorNote,'移动入口回归');
     await page.getByRole('dialog').waitFor({state:'hidden'});assert.match(await page.getByRole('status').filter({hasText:'询库已提交'}).innerText(),/商务审核/);

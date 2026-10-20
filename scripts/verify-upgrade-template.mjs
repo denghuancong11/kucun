@@ -65,7 +65,7 @@ function makeRelocation(plan,model='SYNTH-TONER-001'){
   let r=db.createInquiry({role:'operation-1',model,quantity:100,department:'一团',store:'AUS',operator:'隔离模板验收',fnsku:'000012',asin:'BTEST001',requestId:rid()}).record;
   r=db.reviewInquiry({id:r.id,role:'business',decision:'approve',approvedQuantity:100,...common(r)}).record;
   r=db.replyInquiry({id:r.id,role:'purchasing',supplierQuantity:100,shippingWarehouse:'CA',...common(r)}).record;
-  r=db.archiveInquiry({id:r.id,role:model==='SYNTH-INK-001'?'purchasing':'assistant-1',plan,date:'2026-10-10',version:'001',...common(r)}).record;
+  r=db.archiveInquiry({id:r.id,role:'purchasing',plan,date:'2026-10-10',version:'001',...common(r)}).record;
   return db.initiateRelocationUpgrade({role:'operation-1',inquiryId:r.id,sourceRevision:r.revision,requestId:rid()}).workItem;
 }
 async function makeTransfers(plans){
