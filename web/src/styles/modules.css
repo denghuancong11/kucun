@@ -762,6 +762,9 @@
 .approval-hidden-toggle { display:flex; align-items:center; gap:6px; white-space:nowrap; }
 .approval-recall-feedback { display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%; }
 .allocation-source-batch { white-space:normal; overflow-wrap:anywhere; }
+.allocation-source-batch-inline { display:flex; align-items:baseline; gap:8px; white-space:nowrap; overflow-wrap:normal; }
+.allocation-source-batch-inline > * { flex-shrink:0; }
+.allocation-source-batch-inline .approval-final-source { margin-top:0; white-space:nowrap; }
 .approval-summary-table .approval-model-name { color:#2864c5; }
 .approval-model-toggle { display:block; max-width:100%; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .approval-number { font-variant-numeric:tabular-nums; font-weight:600; }

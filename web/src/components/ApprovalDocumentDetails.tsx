@@ -14,22 +14,22 @@ function useDocumentHistory(role: Role, reference: ApprovalDocumentReference) {
   return useQuery<DocumentHistory | InquiryHistory>({ queryKey: ["approval-history", role, reference.kind, reference.id], queryFn: () => reference.kind === "allocation" ? fetchAllocationHistory(role, reference.id) : fetchInquiryHistory(role, reference.id) });
 }
 
-export function ApprovalDocumentButton({ role, reference, label, showHistory = true }: {
-  role: Role; reference: ApprovalDocumentReference; label?: string; showHistory?: boolean;
+export function ApprovalDocumentButton({ role, reference, label, showHistory = true, fromAuditLog = false }: {
+  role: Role; reference: ApprovalDocumentReference; label?: string; showHistory?: boolean; fromAuditLog?: boolean;
 }) {
   const [selected, setSelected] = useState<ApprovalDocumentReference | null>(null);
   return <><button type="button" className="link-btn" onClick={() => setSelected(reference)}>{label ?? (reference.kind === "allocation" ? "查看调拨" : "查看询库")}</button>
-    {selected && <ApprovalDocumentDialog role={role} reference={selected} onNavigate={setSelected} onClose={() => setSelected(null)} showHistory={showHistory} />}
+    {selected && <ApprovalDocumentDialog role={role} reference={selected} onNavigate={setSelected} onClose={() => setSelected(null)} showHistory={showHistory} fromAuditLog={fromAuditLog} />}
   </>;
 }
 
-function ApprovalDocumentDialog({ role, reference, onNavigate, onClose, showHistory }: {
-  role: Role; reference: ApprovalDocumentReference; onNavigate: (reference: ApprovalDocumentReference) => void; onClose: () => void; showHistory: boolean;
+function ApprovalDocumentDialog({ role, reference, onNavigate, onClose, showHistory, fromAuditLog }: {
+  role: Role; reference: ApprovalDocumentReference; onNavigate: (reference: ApprovalDocumentReference) => void; onClose: () => void; showHistory: boolean; fromAuditLog: boolean;
 }) {
   const query = useDocumentHistory(role, reference);
   const businessName = reference.kind === "allocation" ? "调拨" : "询库";
-  return <UpgradeDialog title={`${businessName}详情${query.data ? " · " + query.data.document.documentNo : ""}`} busy={false} onClose={onClose} wide>
-    <ApprovalDocumentBody reference={reference} query={query} onNavigate={onNavigate} showHistory={showHistory} />
+  return <UpgradeDialog title={`${businessName}详情${query.data && !fromAuditLog ? " · " + query.data.document.documentNo : ""}`} busy={false} onClose={onClose} wide>
+    <ApprovalDocumentBody reference={reference} query={query} onNavigate={onNavigate} showHistory={showHistory} fromAuditLog={fromAuditLog} />
   </UpgradeDialog>;
 }
 
@@ -43,8 +43,8 @@ export function ApprovalDocumentInline({ role, reference }: { role: Role; refere
   </section>;
 }
 
-function ApprovalDocumentBody({ reference, query, onNavigate, showHistory = true }: {
-  reference: ApprovalDocumentReference; query: ReturnType<typeof useDocumentHistory>; onNavigate: (reference: ApprovalDocumentReference) => void; showHistory?: boolean;
+function ApprovalDocumentBody({ reference, query, onNavigate, showHistory = true, fromAuditLog = false }: {
+  reference: ApprovalDocumentReference; query: ReturnType<typeof useDocumentHistory>; onNavigate: (reference: ApprovalDocumentReference) => void; showHistory?: boolean; fromAuditLog?: boolean;
 }) {
   const row = query.data?.document;
   const allocation = row && reference.kind === "allocation" ? row as Allocation : null;
@@ -55,8 +55,8 @@ function ApprovalDocumentBody({ reference, query, onNavigate, showHistory = true
     ["状况", allocation ? allocationProgressLabel(allocation) : inquiryProgressLabel(inquiry!)],
     ["型号", row.model], ["类目", row.category], ["团队", row.department], ["店铺", row.store], ["运营", row.operator], ["ASIN", row.asin], ["FNSKU", row.fnsku],
     ["原申请数量", quantity(row.originalRequestedQuantity)], ["商务审核数量", quantity(row.businessReviewedQuantity)], ["最终执行数量", row.finalQuantity == null ? (allocation?.statusCode === "confirmed" || inquiry?.status === "archived" ? "历史未记录" : "—") : quantity(row.finalQuantity)],
-    ...(allocation ? [["当前调拨占用", quantity(allocation.lockedQuantity)], ["实际调出", quantity(allocation.issuedQuantity)], ["来源批次", allocation.batchKey]] as Array<[string, string | null]> : []),
-    ...(allocation ? [["发货方式-所属海外仓", <AllocationSourceBatch info={allocation.sourceBatchInfo} />]] as Array<[string, ReactNode]> : []),
+    ...(allocation ? [["当前调拨占用", quantity(allocation.lockedQuantity)], ["实际调出", quantity(allocation.issuedQuantity)]] as Array<[string, string | null]> : []),
+    ...(allocation ? [["发货方式-所属海外仓", <AllocationSourceBatch info={allocation.sourceBatchInfo} inline={fromAuditLog} />]] as Array<[string, ReactNode]> : []),
     ...(inquiry ? [["供应商库存回复", quantity(inquiry.supplierQuantity)], ["发货仓库", inquiry.shippingWarehouse], ["采购备注", inquiry.procurementNote],
       ...(inquiry.sourceAllocationId != null ? [["原调拨申请量", quantity(inquiry.sourceOriginalRequestedQuantity)], ["商务转询库量", quantity(inquiry.originalRequestedQuantity)]] : [])] as Array<[string, string | null]> : []),
     ["商务备注", row.businessNote], ["运营备注", row.operatorNote], ["发货计划号", row.plan], ["发货日期", row.date], ["原版本号", row.version],
