@@ -4,13 +4,20 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { createInventoryDatabase, InventoryDatabase } from "../inventory-db.mjs";
 import { freePort, createTestInstanceId, waitForOwnedServer } from "./test-server-ownership.mjs";
 import { syntheticInboundRows, writeSyntheticTransitWorkbook } from "./fixtures/generate-synthetic-workbook.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const state = await fs.mkdtemp(path.join(os.tmpdir(), "aster-warehouse-fba-"));
 const output = process.env.ASTER_ACCEPTANCE_OUTPUT || path.join(state, "artifacts");
+await fs.mkdir(output, { recursive: true });
+// Install owned synthetic configuration before importing business modules.
+process.env.ASTER_RUNTIME_CONFIG = path.join(output, "runtime.synthetic.json");
+process.env.ASTER_WAREHOUSE_ACCOUNTS = path.join(output, "accounts.synthetic.json");
+process.env.ASTER_OVERSEAS_WAREHOUSES = "SyntheticWarehouseA;SyntheticWarehouseB";
+await fs.writeFile(process.env.ASTER_RUNTIME_CONFIG, JSON.stringify({ schemaVersion: 1, overseasWarehouses: ["SyntheticWarehouseA", "SyntheticWarehouseB"] }));
+await fs.writeFile(process.env.ASTER_WAREHOUSE_ACCOUNTS, JSON.stringify({ accounts: [{ account: "AUS", shortName: "SYNTH", room: "SYNTH-101" }] }));
+const { createInventoryDatabase, InventoryDatabase } = await import("../inventory-db.mjs");
 const sourceRows = syntheticInboundRows(47).map(row => ({ ...row, date: "1.1" }));
 const fbaRows = sourceRows.filter(row => row.shippingMethod === "直发FBA");
 const localSourceQuantity = sourceRows.filter(row => row.shippingMethod !== "直发FBA").reduce((sum, row) => sum + row.quantity, 0);
@@ -25,7 +32,6 @@ const checks = [];
 const check = name => { checks.push(name); console.log("PASS " + name); };
 
 await writeSyntheticTransitWorkbook(workbookPath, { rows: sourceRows, sheetName: "SyntheticImport" });
-await fs.mkdir(output, { recursive: true });
 createInventoryDatabase({ databasePath, seedCatalogData: false });
 const db = new InventoryDatabase(state);
 const server = spawn(process.execPath, [path.join(root, "server.mjs")], {
@@ -120,7 +126,8 @@ try {
   for (const field of ["team", "version"]) {
     const altered = payload(parsed);
     altered.rows = structuredClone(parsed.rows);
-    altered.rows[0].data[field] = "TAMPERED";
+    // Keep the tampered team valid so this check still reaches the preview-signature comparison.
+    altered.rows[0].data[field] = field === "team" ? "二团" : "TAMPERED";
     await api("/api/transit/import", "admin", altered, 409);
   }
   check("提交篡改文件团队或版本拒绝");

@@ -45,7 +45,7 @@ globalThis.asterStartReport = job=>{
   }
   async function bounded(collect,milliseconds) {
     state.deadline=Date.now()+milliseconds;
-    const timer=setTimeout(()=>controller.abort(new Error(`领星采集超过${milliseconds}毫秒；最后阶段“${state.lastProgress??'未知'}”；页面可见性${document.visibilityState??'unknown'}`)),milliseconds);
+    const timer=setTimeout(()=>controller.abort(new Error(`领星采集超过${milliseconds/1000}秒仍未完成。最后进度：“${state.lastProgress??'未知'}”；报表页状态：${document.visibilityState==='visible'?'可见':document.visibilityState==='hidden'?'不可见':document.visibilityState==='unknown'||document.visibilityState==null?'未知':document.visibilityState}。`)),milliseconds);
     try {const capture=await collect();signal.throwIfAborted();return capture;}
     finally {clearTimeout(timer);}
   }

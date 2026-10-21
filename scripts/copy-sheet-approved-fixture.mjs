@@ -61,7 +61,7 @@ export async function prepareApprovedFixture() {
     const inkArchive = readyInquiry(ink, 'COPY-INK-ARCHIVE-READY', 30);
     const tonerArchive = readyInquiry(toner, 'COPY-TONER-ARCHIVE-READY', 45);
     assert.equal(inkArchive.status, 'pending_assistant'); assert.equal(tonerArchive.status, 'pending_assistant');
-    add('ink-inquiry-archive', ['SP-008'], 'purchasing', '审批中心 → 墨盒 → 询库 → 展开型号 → 对应询库“采购归档”按钮 → 仅查看弹窗标题“保存并备份”，关闭不提交', inkArchive);
+    add('ink-inquiry-archive', ['SP-008', 'A003'], 'purchasing', '审批中心 → 墨盒 → 询库 → 展开型号 → 对应询库“采购归档”按钮 → 仅查看弹窗标题“保存”，关闭不提交', inkArchive);
     add('toner-inquiry-archive', ['SP-009'], 'purchasing', '审批中心 → 硒鼓 → 询库 → 展开型号 → 对应询库“确认实际发出并归档”按钮 → 仅查看弹窗标题“确认”，关闭不提交', tonerArchive);
 
     function conversion(model, quantity, convertedQuantity) {

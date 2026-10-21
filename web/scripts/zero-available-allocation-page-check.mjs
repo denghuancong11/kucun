@@ -109,7 +109,7 @@ try{
   const createdPosts=requests.slice(postCount).filter(r=>r.path==='/api/allocations');assert.equal(createdPosts.length,1);assert.equal(createdPosts[0].body.zeroAvailableConfirmed,true);assert.equal(createdPosts[0].body.quantity,30);
   await openApprovals(who,source.model);assert((await card(demand).innerText()).includes(statusText));assert.equal(await card(demand).locator('[data-field="当前调拨占用"]').innerText(),'0');await shot(category+'-02-demand-zero-lock');
   check(category+'：是/双击只建一笔真实0锁调拨，文案与占用0正确，同型号另一批次不变',{id:demand.id,batchKey:source.batchKey});
-  await openApprovals('business',source.model);assert((await card(demand).locator('[data-field="来源批次"]').innerText()).includes(source.batchKey));const beforeFail=snapshot();await uiReview(demand,30,{expected:409});unchanged(category+' 未释放旧单锁前审批失败',beforeFail);assertWaiting(demand);assert.equal(lock(original),100);
+  await openApprovals('business',source.model);const sourceHint=await card(demand).locator('[data-field="来源批次"]').innerText();assert.equal(sourceHint,'来源批次：'+[source.plan,source.date,source.version].filter(Boolean).join(' · '));assert(!sourceHint.includes(source.batchKey));const beforeFail=snapshot();await uiReview(demand,30,{expected:409});unchanged(category+' 未释放旧单锁前审批失败',beforeFail);assertWaiting(demand);assert.equal(lock(original),100);
   await uiReview(original,70);assert.equal(lock(original),70);assert.equal(balance(source).available,30);await uiReview(demand,30);assert.equal(lock(demand),30);assert.equal(lock(original),70);assert.equal(balance(source).locked,100);
   check(category+'：先批新需求不抢原锁；原单先减100→70只释放30，再逐单批准新30');
   if(category==='墨盒'){

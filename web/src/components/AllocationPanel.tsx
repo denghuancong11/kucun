@@ -37,7 +37,7 @@ export function AllocationPanel({batch, totals, role, actionsAllowed, busy, onEn
   const storeValid = store.includes("US") && !store.includes("-");
   const storeInvalid = store.length > 0 && !storeValid;
   const packPerBox = Number(batch.packPerBox);
-  const packError = Number.isInteger(packPerBox) && packPerBox > 0 ? "" : "当前批次套/箱数据异常（须为有效正整数），无法提交调拨，请核对批次数据。";
+  const packError = Number.isInteger(packPerBox) && packPerBox > 0 ? "" : "该批次的套/箱须为正整数，核对后才能提交调拨。";
   const zeroAvailableDemand = totals.available === 0 && totals.locked > 0;
   const quantityLimit = zeroAvailableDemand ? totals.onHand : totals.available;
   const validateQuantity = (value: string) => {

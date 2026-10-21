@@ -46,7 +46,7 @@ try{
  check('超库存增批36失败无写入；可用0时缩批24→12释放12，后续出库账本正确');
  for(const pack of [null,'',' ','0','-12','1.5','abc','Infinity']){
   db.db.prepare('UPDATE stock_batches SET pack_per_box=? WHERE batch_key=?').run('12',bad.batchKey);const row=await create(bad);db.db.prepare('UPDATE stock_batches SET pack_per_box=? WHERE batch_key=?').run(pack,bad.batchKey);
-  const view=(await api('/api/approvals','business')).allocations.find(r=>r.id===row.id);assert.equal(view.packPerBox,pack);const result=await rejectUnchanged(row,reviewBody(row,12),400,'invalid_pack_per_box');assert.ok(result.error.includes('来源批次套/箱数据异常'));rejectDirect(row,12,'invalid_pack_per_box');
+  const view=(await api('/api/approvals','business')).allocations.find(r=>r.id===row.id);assert.equal(view.packPerBox,pack);const result=await rejectUnchanged(row,reviewBody(row,12),400,'invalid_pack_per_box');assert.equal(result.error,'来源批次的套/箱须为正整数，核对后才能批准调拨。');rejectDirect(row,12,'invalid_pack_per_box');
   const before=db.getBalance(bad.batchKey),body=reviewBody(row,13,'reject'),rejected=(await api(`/api/allocations/${row.id}/review`,'business',body)).record;assert.equal(rejected.approvalStatus,'rejected');assert.equal(db.getBalance(bad.batchKey).locked,before.locked-12);assert.equal(ledger(row.id,'release_reservation')[0].locked_delta,-12);
   const after=snapshot();assert.equal((await api(`/api/allocations/${row.id}/review`,'business',body)).deduped,true);assert.deepEqual(snapshot(),after);assert.equal(db.db.prepare('SELECT pack_per_box FROM stock_batches WHERE batch_key=?').get(bad.batchKey).pack_per_box,pack);
  }

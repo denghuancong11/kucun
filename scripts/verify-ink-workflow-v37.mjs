@@ -180,6 +180,9 @@ try {
   for (const role of ['admin', 'business', 'assistant-1', 'assistant-2', 'purchasing', 'logistics', 'operation-1']) await rejected(route('allocations', r, 'alan-review'), role, {...common(r), alanQuantity: 60});
   for (const invalid of [null, '', ' ', -1, 1.5]) await rejected(route('allocations', r, 'alan-review'), 'alan', {...common(r), alanQuantity: invalid, alanNote: '仅备注'}, 400);
   await rejected(route('allocations', r, 'alan-review'), 'alan', {...common(r), alanQuantity: 75}, 400);
+  db.db.prepare('UPDATE stock_batches SET pack_per_box=NULL WHERE batch_key=?').run(r.batchKey);
+  assert.equal((await rejected(route('allocations', r, 'alan-review'), 'alan', {...common(r), alanQuantity: 60}, 400, 'invalid_pack_per_box')).error, '来源批次的套/箱须为正整数，核对后才能提交。');
+  db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE batch_key=?").run(r.batchKey);
   await rejected(route('allocations', r, 'alan-review'), 'alan', {...common(r), alanQuantity: 210}, 409);
   for (const role of ['purchasing', 'logistics']) for (const action of ['reply', 'archive', 'recall']) await rejected(route('allocations', r, action), role, {...common(r), supplierQuantity: 60});
   r = await alan(r); stage(r, 'pending_assistant'); balance(r, 200, 60);
@@ -206,11 +209,13 @@ try {
 
   for (const mode of ['zero', 'reject']) {
     let row = await review(await allocation());
+    db.db.prepare('UPDATE stock_batches SET pack_per_box=NULL WHERE batch_key=?').run(row.batchKey);
     row = mode === 'zero' ? await alan(row, 'allocations', 0, '') : (await api(route('allocations', row, 'alan-review'), 'alan', {...common(row), decision: 'reject', alanNote: ''})).record;
     stage(row, 'rejected'); balance(row, 200, 0); assert.equal(row.businessReviewedQuantity, 80); assert.equal(source('allocations', row), undefined);
     assert.equal(row.alanQuantity, mode === 'zero' ? 0 : null);
     assert.equal(db.db.prepare("SELECT COUNT(*) n FROM inventory_ledger WHERE document_id=? AND entry_type='release_reservation'").get(row.id).n, 1);
     await auditFor(row, 'reject', {lockedDelta: -80});
+    db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE batch_key=?").run(row.batchKey);
   }
   const rejectedBusiness = await review(await allocation(), 'allocations', 80, 'reject'); balance(rejectedBusiness, 200, 0); stage(rejectedBusiness, 'rejected');
   check('Alan0和独立拒绝理由可空，均只释放一次；商务拒绝同样不出库、不产生移仓来源');

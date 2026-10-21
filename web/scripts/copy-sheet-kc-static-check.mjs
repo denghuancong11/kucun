@@ -143,7 +143,7 @@ check('KC-021/022 retry text; existing defaults KC-023/024 unchanged',()=>{
   draft={...emptyDraft,statusPreview,uncertainStatus:true};assert(render(Requirement3View,{role:'admin'}).includes('请重试确认'));
   draft={...emptyDraft,preview,uncertainImport:true};assert(render(Requirement3View,{role:'admin'}).includes('请重试确认'));
   draft=emptyDraft;
-  assert(render(Requirement3View,{role:'admin'}).includes('未导入在途库存表格'));
+  assert(render(Requirement3View,{role:'admin'}).includes('暂无导入或物流更新预览'));
   assert(render(Requirement3View,{role:'alan'}).includes('无法导入在途库存'));
 });
 check('FW-012/013 local recovery-error override; other draft callers keep three arguments',()=>{

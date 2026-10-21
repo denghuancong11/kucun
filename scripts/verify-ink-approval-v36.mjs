@@ -188,8 +188,8 @@ try {
       await reject(route(kind, row, 'reply'), 'purchasing', replyBody(kind, row, 310), 409, 'insufficient_available');
       const increased = await alan(kind, row, 200); assertLock(increased, 200); const decreased = await reply(kind, increased, 40); assertLock(decreased, 40); assert.equal(decreased.quantity, 40);
       const bad = await ready(kind); db.db.prepare('UPDATE stock_batches SET pack_per_box=NULL WHERE batch_key=?').run(bad.batchKey);
-      await reject(route(kind, bad, 'alan-review'), 'alan', alanBody(bad, 70), 400, 'invalid_pack_per_box');
-      await reject(route(kind, bad, 'reply'), 'purchasing', replyBody(kind, bad, 60), 400, 'invalid_pack_per_box');
+      assert.equal((await reject(route(kind, bad, 'alan-review'), 'alan', alanBody(bad, 70), 400, 'invalid_pack_per_box')).error, '来源批次的套/箱须为正整数，核对后才能提交。');
+      assert.equal((await reject(route(kind, bad, 'reply'), 'purchasing', replyBody(kind, bad, 60), 400, 'invalid_pack_per_box')).error, '来源批次的套/箱须为正整数，核对后才能提交。');
       const zero = await alan(kind, bad, 0); assertLock(zero, 0); await reply(kind, zero, 0);
       db.db.prepare("UPDATE stock_batches SET pack_per_box='10' WHERE batch_key=?").run(bad.batchKey);
     } else {

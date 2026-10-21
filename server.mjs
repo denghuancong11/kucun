@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { TextDecoder } from "node:util";
-import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, INVENTORY_SCHEMA_VERSION, WAYBILL_EXPORT_ROLES, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
+import { BusinessError, InventoryDatabase, TRANSFER_UPGRADE_FIELDS, validateTransferUpgradeRows, validateTransitImportRows, transitSourceTeam, INVENTORY_SCHEMA_VERSION, WAYBILL_EXPORT_ROLES, OVERSEAS_WAREHOUSES, OPERATION_GROUPS, ROLES, TRANSIT_ROLES, hashBuffer, hashTemplate, normalizeTransitPlan, requireValidStoreCode, transitCategoryFromFileName } from "./inventory-db.mjs";
 import { relocationAccounts, accountStore, processRelocationAddress } from './relocation-address.mjs';
 import {RELOCATION_UPDATE_HEADERS,TRANSFER_STAGES,TRANSFER_EDITABLE,transferUpdateWorkbook,transferUpdateValues,upgradeWorkbook} from './transfer-workbook.mjs';
 import { LingxingHost } from './lingxing-host.mjs';
@@ -277,6 +277,15 @@ async function requireActions(role, category) {
   }
 }
 
+async function readableCategoriesForRole(role) {
+  const readable = [];
+  for (const category of allCategories) {
+    const permission = await categoryPermissions(role, category);
+    if (permission.summary && permission.detail && permission.expand) readable.push(category);
+  }
+  return readable;
+}
+
 async function requireTransitRowActions(role, fileName, rows) {
   const fallbackCategory = transitCategoryFromFileName(fileName);
   const categories = new Set(rows.map(item => {
@@ -336,7 +345,7 @@ function normalizeAuditBoundary(value, label, endOfDay = false) {
 
 function ensureDocumentVisibility(document, role) {
   const group = operationGroups[role];
-  if (group && document.department !== group) {
+  if (group && (transitSourceTeam(document.department) || document.department) !== group) {
     throw new BusinessError(403, "group_forbidden", `当前角色仅可查看或操作本团（${group}）记录`);
   }
 }
@@ -645,11 +654,11 @@ function relocationSavedRecord(work) {
       statusText:relocation.status==='active'?job.statusText:relocation.statusText}:{})};
 }
 async function relocationRecordsForRole(role,query) {
-  const permissions=await loadPermissions();
+  const readableCategories=await readableCategoriesForRole(role);
   const dashboard=inventory.getUpgradeDashboard({visibleGroup:operationGroups[role]??null});
   const works=new Map(dashboard.relocationWorkItems.map(w=>[w.id,w]));
   for(const job of dashboard.upgrades.filter(j=>j.kind==='relocation'))for(const row of job.relocations)if(row.workId)works.set(row.workId,inventory.getRelocationWorkItem(row.workId));
-  return [...works.values()].filter(w=>w && ['summary','detail','expand'].every(key=>(permissions[w.category]?.[role]??openPermissions)[key])
+  return [...works.values()].filter(w=>w && (!allCategories.includes(w.category)||readableCategories.includes(w.category))
     && (!query.get('model')||w.model===query.get('model')) && (!query.get('version')||w.sourceVersion===query.get('version'))
     && (!query.get('source')||query.get('source')===w.sourceKind+':'+(w.allocationId??w.inquiryId??w.fbaArchiveId))).map(relocationSavedRecord);
 }
@@ -689,8 +698,10 @@ async function handleRelocationTemplate(request,response,pathname,role) {
   }
   if(role!=='logistics') throw new BusinessError(403,'upgrade_logistics_required','仅物流可下载及导入RMA、移仓地址更新模板');
   if(pathname.endsWith('/template') && request.method==='GET') {
-    const permissions=await loadPermissions();
-    const records=(await relocationRecordsForRole(role,new URL(request.url,'http://localhost').searchParams)).filter(row=>row.status==='awaiting_procurement' && ['summary','detail','expand','actions'].every(key=>(permissions[row.category]?.[role]??openPermissions)[key]));
+    const records=[];
+    for(const row of await relocationRecordsForRole(role,new URL(request.url,'http://localhost').searchParams)) {
+      if(row.status==='awaiting_procurement' && (await categoryPermissions(role,row.category)).actions) records.push(row);
+    }
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('移仓升级-更新模板.xlsx')});
     response.end(relocationUpdateWorkbook(records));return;
   }
@@ -728,7 +739,7 @@ async function handleRelocationTemplate(request,response,pathname,role) {
         const rma=String(values[10]??'').trim(),address=String(values[11]??'').trim();
         if(rma===(work.rma??'') && address===(work.originalRelocationAddress??'')){unchangedCount++;continue;}
         if(work.status!=='awaiting_procurement')throw new Error('已进入后续环节或已取消，不能用旧模板覆盖');
-        if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('RMA 不能为空或模板说明');
+        if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('请填写实际RMA，不能留空或使用模板说明。');
         const processed=processRelocationAddress(work.store,address);
         rows.push({sourceRow,record:{model:work.model,sourceVersion:work.sourceVersion,store:work.store,plan:work.plan,shipDate:work.shipDate},data:{id:String(work.id),revision:String(work.revision),workNo,rma,relocationAddress:address},processedAddress:processed.address,before:{rma:work.rma??'',relocationAddress:work.originalRelocationAddress??'',status:work.statusText},afterStatus:'待运营填写订单号'});
       } catch(error) { errors.push({sourceRow,message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message}); }
@@ -836,7 +847,7 @@ async function handleApprovalsApi(request, response, pathname) {
     const action = match[2];
     const allowedRoles = { review: ["business"], "alan-review": ["alan"], reply: ["purchasing", "logistics"], archive: ["purchasing", "logistics", ...assistantRoleSet], recall: ["purchasing", "logistics", "business"] }[action];
     if (!allowedRoles.includes(role)) throw new BusinessError(403, "inquiry_action_forbidden", "当前角色不能执行此询库步骤");
-    await getInquiryForRole(id, role);
+    const inquiry = await getInquiryForRole(id, role);
     const payload = await parseJsonRequest(request);
     const common = {
       id, role, expectedRevision: Number(payload.expectedRevision),
@@ -864,11 +875,15 @@ async function handleApprovalsApi(request, response, pathname) {
     } else if (action === "recall") {
       result = inventory.recallInquiry(common);
     } else if (action === "archive") {
+      // 资格随首次归档消失，但原请求仍须交给既有幂等层核对角色和参数后回放。
+      const savedRequest = inventory.db.prepare('SELECT 1 FROM idempotency_requests WHERE scope=? AND request_id=?')
+        .get(`inquiry:archive:${id}`, common.requestId);
+      const historicalZero = role === 'purchasing' && (inquiry.canArchiveHistoricalZero || savedRequest);
       result = inventory.archiveInquiry({
         ...common,
-        plan: requireNonBlank(payload, "plan", "发货计划号"),
-        date: requireNonBlank(payload, "date", "发货日期"),
-        version: requireNonBlank(payload, "version", "原版本号"),
+        plan: historicalZero ? payload.plan : requireNonBlank(payload, "plan", "发货计划号"),
+        date: historicalZero ? payload.date : requireNonBlank(payload, "date", "发货日期"),
+        version: historicalZero ? payload.version : requireNonBlank(payload, "version", "原版本号"),
       });
     }
     sendJson(response, 200, approvalResultForRole(result, role));
@@ -900,8 +915,8 @@ async function handleUpgradesApi(request, response, pathname) {
 
   if (pathname === "/api/upgrades" && request.method === "GET") {
     const dashboard = inventory.getUpgradeDashboard({ visibleGroup, scopeDirectByTeam });
-    const permissions = await loadPermissions();
-    const visible = item => { const p=permissions[item.category]?.[role] ?? openPermissions; return p.summary && p.detail && p.expand; };
+    const readableCategories = await readableCategoriesForRole(role);
+    const visible = item => !allCategories.includes(item.category) || readableCategories.includes(item.category);
     for (const key of ["directSources", "relocationCandidates", "relocationWorkItems", "upgrades"]) dashboard[key] = dashboard[key].filter(visible);
 
     sendJson(response, 200, {
@@ -946,6 +961,16 @@ async function handleUpgradesApi(request, response, pathname) {
       requestId: requireNonBlank(payload, "requestId", "提交编号"),
     });
     sendJson(response, 200, result);
+    return;
+  }
+
+  const directCancelMatch = pathname.match(/^\/api\/upgrades\/direct\/(\d+)\/cancel$/);
+  if (directCancelMatch && request.method === "POST") {
+    const upgrade = inventory.getUpgrade(Number(directCancelMatch[1]));
+    if (!upgrade || upgrade.kind !== "direct") throw new BusinessError(404, "upgrade_not_found", "找不到在库升级记录");
+    await requireActions(role, upgrade.category);
+    const payload = await parseJsonRequest(request);
+    sendJson(response, 200, inventory.cancelDirectUpgrade({id:upgrade.id,role,reason:String(payload.reason ?? '').trim(),expectedRevision:Number(payload.expectedRevision),requestId:requireNonBlank(payload,'requestId','提交编号')}));
     return;
   }
 
@@ -996,6 +1021,20 @@ async function handleUpgradesApi(request, response, pathname) {
       onSaved: record => lingxingHost.enqueue(role,'relocation-order-'+record.id+'-'+record.revision,{action:'logistics',workId:record.id},{action:'logistics',workId:record.id,orderNo:record.removalOrderNo,fnsku:record.fnsku},'订单保存自动同步').job,
     });
     sendJson(response, 200, result);
+    return;
+  }
+
+  const recoveryMatch = pathname.match(/^\/api\/upgrades\/relocation-work-items\/(\d+)\/(correct-order|cancel)$/);
+  if (recoveryMatch && request.method === "POST") {
+    const work = inventory.getRelocationWorkItem(Number(recoveryMatch[1]));
+    if (!work) throw new BusinessError(404, "relocation_work_not_found", "找不到移仓流程");
+    await requireRelocationSourceVisibility(work, role);
+    const payload = await parseJsonRequest(request);
+    const common = {id:work.id,role,expectedRevision:Number(payload.expectedRevision),requestId:requireNonBlank(payload,'requestId','提交编号')};
+    const result = recoveryMatch[2] === 'correct-order'
+      ? inventory.correctRelocationOrder({...common,removalOrderNo:requireNonBlank(payload,'removalOrderNo','移除订单号')})
+      : inventory.cancelRelocationWork({...common,reason:String(payload.reason ?? '').trim()});
+    sendJson(response,200,result);
     return;
   }
 
@@ -1612,6 +1651,12 @@ function parseTransitImportRows(buffer, fileName, { sheetName = "", dateYear = u
     else fingerprints.set(fingerprint, item.sourceRow);
   }
   if (filtered.length === 0) errors.push({ row: headerIndex + 1, field: "整行", code: "no_match", message: "没有可导入的在途库存数据行" });
+  for (const error of validateTransitImportRows(filtered)) {
+    // 空团队已在上面给出源行错误，其他校验与确认入账共用同一规则。
+    if (errors.some(item => item.row === error.row && item.code === error.code)) continue;
+    errors.push(error);
+    filtered.find(item => item.sourceRow === error.row)?.errors.push(error);
+  }
   return {
     fileName, sheetName: table.sheetName, sheetCandidates: table.sheetCandidates, encoding: table.encoding, dateYear: dateYear ?? null,
     dateYearRequired: dataRows.some((row) => isShortTransitDate(String(row[indexOf[dateHeader]] ?? "").trim()) && !dateYear),
@@ -1848,9 +1893,10 @@ const server = http.createServer(async (request, response) => {
       const role = requireRole(request);
       const visibleGroup = operationGroups[role] ?? null;
       const scopeDirectByTeam = Boolean(operationGroups[role]);
+      const readableCategories = await readableCategoriesForRole(role);
       const detailMatch = pathname.match(/^\/api\/audit\/(\d+)$/);
       if (detailMatch) {
-        sendJson(response, 200, approvalResultForRole({ ok: true, ...inventory.auditDetail(Number(detailMatch[1]), visibleGroup, { scopeDirectByTeam }) }, role));
+        sendJson(response, 200, approvalResultForRole({ ok: true, ...inventory.auditDetail(Number(detailMatch[1]), visibleGroup, { scopeDirectByTeam, readableCategories }) }, role));
         return;
       }
       if (pathname !== "/api/audit") {
@@ -1873,6 +1919,7 @@ const server = http.createServer(async (request, response) => {
         limit,
         visibleGroup,
         scopeDirectByTeam,
+        readableCategories,
       });
       sendJson(response, 200, { ok: true, records, sync: inventory.syncState() });
       return;
@@ -1881,8 +1928,13 @@ const server = http.createServer(async (request, response) => {
       await handleTransferUpdate(request,response,pathname,requireRole(request),new URL(request.url,'http://localhost').searchParams.get('stage'));return;
     }
     if (pathname === "/api/transfer-upgrades" && request.method === "GET") {
-      requireRole(request);
-      sendJson(response, 200, { ok: true, records: inventory.getTransferUpgrades(), sync: inventory.syncState() });
+      const role = requireRole(request);
+      const readableCategories = await readableCategoriesForRole(role);
+      const records = inventory.getTransferUpgrades().filter(item => {
+        const category = inventory.getModel(item.data.model)?.category;
+        return !allCategories.includes(category) || readableCategories.includes(category);
+      });
+      sendJson(response, 200, { ok: true, records, sync: inventory.syncState() });
       return;
     }
     if (pathname === "/api/transfer-upgrades/preview" && request.method === "POST") {
@@ -1911,7 +1963,7 @@ const server = http.createServer(async (request, response) => {
       await requireActions(role, transitCategoryFromFileName(fileName));
       const parsed = parseTransitImportRows(body, fileName, { sheetName: sheetNameHeader(request), dateYear: dateYearHeader(request) });
       await requireTransitRowActions(role, fileName, parsed.rows);
-      inventory.requireTransitImportTeams(role, parsed.rows);
+      if (parsed.validation.errors.length === 0) inventory.requireTransitImportTeams(role, parsed.rows);
       const fileSha256 = hashBuffer(body);
       const templateSha256 = hashTemplate(parsed.headers);
       /* 所有业务字段均来自文件，预览后不再允许补录或改写。 */
@@ -1971,7 +2023,7 @@ const server = http.createServer(async (request, response) => {
       for (const category of new Set(inventory.previewTransitStatusUpdates(payload.rows, role).updates.map(row => inventory.getModel(row.model).category))) await requireActions(role, category);
       const result = inventory.updateTransitStatuses({ role, previewToken: requirePreviewToken(payload), rows: Array.isArray(payload.rows) ? payload.rows : [], fileHash: payload.fileHash, templateHash: payload.templateHash, fileName: payload.fileName, requestId: requireNonBlank(payload, "requestId", "提交编号") });
       // 旧版已保存的请求结果同样按当前归属检查，重试不能返回跨团明细。
-      for (const row of result.updated) ensureDocumentVisibility({ department: inventory.getTransit(row.id)?.team }, role);
+      for (const row of result.updated) ensureDocumentVisibility({ department: transitSourceTeam(inventory.getTransit(row.id)?.team) }, role);
       sendJson(response, 200, result);
       return;
     }
@@ -1986,7 +2038,7 @@ const server = http.createServer(async (request, response) => {
       const role = requireRole(request);
       const transit = inventory.getTransit(Number(onShelfMatch[1]));
       if (!transit) throw new BusinessError(404, "transit_not_found", "找不到在途记录");
-      ensureDocumentVisibility({ department: transit.team }, role);
+      ensureDocumentVisibility({ department: transitSourceTeam(transit.team) }, role);
       await requireActions(role, inventory.getModel(transit.model).category);
       const payload = await parseJsonRequest(request);
       const result = inventory.markTransitOnShelf({ id: Number(onShelfMatch[1]), role, expectedRevision: Number(payload.expectedRevision), yes: String(payload.yes ?? "").trim(), requestId: requireNonBlank(payload, "requestId", "提交编号") });

@@ -71,7 +71,7 @@ function TransferUpdate({role,active,filters,children}:{role:Role;active:boolean
    if(row.quantityDelta>=0)return '';
    const chosen=reversalsFor(row.data.documentNo);
    if(chosen.some(x=>!Number.isSafeInteger(x.quantity)||x.quantity<=0))return '扣回数量须为正整数';
-   if(chosen.some(x=>{const b=row.receiptBatches.find(b=>b.batchKey===x.batchKey);return !b||b.issue||x.quantity>b.quantity;}))return '批次或扣回数量校验异常，请核对后重试';
+   if(chosen.some(x=>{const b=row.receiptBatches.find(b=>b.batchKey===x.batchKey);return !b||b.issue||x.quantity>b.quantity;}))return '请核对扣回批次和数量：只能选择本单可扣回的入库批次，扣回数量不能超过该批次的有效入库数量。';
    return chosen.reduce((sum,x)=>sum+x.quantity,0)===-row.quantityDelta?'':'请选择扣回批次，扣回总量需等于指定套数';
  };
  const client=useQueryClient(),action=useBusinessAction(async()=>{await Promise.all(['upgrades','inventory','audit'].map(key=>client.invalidateQueries({queryKey:[key]}, {throwOnError:true})));},message=>{setPreview(null);setOpen(false);setNotice(message);});

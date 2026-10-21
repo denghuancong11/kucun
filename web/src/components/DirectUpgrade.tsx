@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { completeDirectUpgrade, createDirectUpgrade, formatNumber, type ApiError } from "../api";
+import { cancelDirectUpgrade, completeDirectUpgrade, createDirectUpgrade, formatNumber, type ApiError } from "../api";
 import type { DirectUpgrade, DirectUpgradeSource, Role } from "../types";
 import { useEffectivePermissions } from "../hooks/usePermissions";
 import { useSessionDraft } from "../hooks/useSessionDraft";
@@ -11,6 +11,7 @@ const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "�
 type Draft = { sourceLineId?: number; quantity: string; version: string; warehouse: string };
 type StartRequest = { model: string; sourceVersion: string; requestId: string };
 type CompleteRequest = { sourceLineId: number; completedQuantity: number; newVersion: string; targetWarehouse: string; expectedRevision: number; requestId: string };
+type CancelRequest = { id: number; reason: string; expectedRevision: number; requestId: string };
 const blankDraft: Draft = { quantity: "", version: "", warehouse: "" };
 const description = (job: DirectUpgrade) => [job.model, job.sourceVersion, displayTime(job.initiatedAt, true), roleNames[job.initiatedByRole]].join(" · ");
 
@@ -40,6 +41,10 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
   const [pendingStart, setPendingStart] = useState<StartRequest | null>(null);
   const [startError, setStartError] = useState("");
   const [completeId, setCompleteId] = useState<number | null>(null);
+  const [cancelId, setCancelId] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelRequest, setCancelRequest] = useState<CancelRequest | null>(null);
+  const [cancelError, setCancelError] = useState("");
   const [drafts, setDrafts, draftCache] = useSessionDraft<Record<number, Draft>>(role, "direct-completion", {});
   const [pending, setPending] = useState<Record<number, CompleteRequest>>({});
   const [errors, setErrors] = useState<Record<number, string>>({});
@@ -52,6 +57,8 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
   const startModels = [...new Set([...sources.map(item => item.model), ...(pendingStart ? [pendingStart.model] : [])])];
   const startVersions = [...new Set([...sources.filter(item => item.model === startModel).map(item => item.sourceVersion), ...(pendingStart ? [pendingStart.sourceVersion] : [])])];
   const selectedJob = jobs.find(job => job.id === completeId);
+  const cancelJob = jobs.find(job => job.id === cancelId);
+  const mayCancel = (job: DirectUpgrade) => job.canCancel && canAct(job.category) && ["admin", "purchasing", job.initiatedByRole].includes(role);
   const recovery = completeId === null ? undefined : pending[completeId];
   const draft = recovery ? { sourceLineId: recovery.sourceLineId, quantity: String(recovery.completedQuantity), version: recovery.newVersion, warehouse: recovery.targetWarehouse } : (completeId === null ? blankDraft : drafts[completeId] ?? blankDraft);
   const selectedLine = selectedJob?.lines.find(line => line.id === draft.sourceLineId);
@@ -100,10 +107,27 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
     } finally { running.current = false; setBusy(null); }
   };
 
+  const cancel = async () => {
+    if (!cancelJob || running.current || (!cancelRequest && !mayCancel(cancelJob))) return;
+    const request = cancelRequest ?? { id: cancelJob.id, reason: cancelReason.trim(), expectedRevision: cancelJob.revision, requestId: createRequestId("upgrade-direct-cancel") };
+    running.current = true; setBusy("cancel"); setCancelRequest(request); setCancelError(""); onBegin();
+    try {
+      await cancelDirectUpgrade(role, request.id, request, description(cancelJob));
+      setCancelRequest(null); setCancelId(null); setCancelReason("");
+      await onSaved(`${cancelJob.model}：在库升级已取消，本任务剩余锁定已释放。`);
+    } catch (failure) {
+      const error = failure as ApiError;
+      const rejected = error.status !== undefined && error.status >= 400 && error.status < 500;
+      if (rejected) setCancelRequest(null);
+      setCancelError(error.message + (rejected ? "" : " 暂未确认取消结果，请点击“重试确认”。"));
+    } finally { running.current = false; setBusy(null); }
+  };
+
   return <section className="direct-upgrade" hidden={!active}>
-    <Panel title="在库升级记录" badge={<span className="muted">{visible.length} 条</span>} actions={canStart ? <button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>发起在库升级</button> : undefined}>
+    <Panel title="在库升级记录" badge={<span className="muted">{visible.length} 条</span>} actions={canStart ? <button className="btn btn-ghost btn-sm" disabled={busy !== null || cancelRequest !== null} onClick={() => setStartOpen(true)}>发起在库升级</button> : undefined}>
       {draftCache.storageError && <p className="dialog-error" role="alert">{draftCache.storageError}</p>}
       {pendingStart && !startOpen && <div className="direct-pending" role="status"><span>{pendingStart.model} · {pendingStart.sourceVersion}：发起结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setStartOpen(true)}>重试确认</button></div>}
+      {cancelRequest && cancelId === null && <div className="direct-pending" role="status"><span>在库升级取消结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCancelId(cancelRequest.id)}>重试确认</button></div>}
       {jobs.filter(job => pending[job.id] && completeId !== job.id).map(job => <div className="direct-pending" role="status" key={job.id}><span>{description(job)}：完成结果待确认</span><button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>重试确认</button></div>)}
       <div className="direct-filters">
         <label className="field"><span>型号</span><select aria-label="筛选型号" value={model} onChange={event => { const next = event.target.value; setModel(next); if (version && !jobs.some(job => (!next || job.model === next) && job.sourceVersion === version)) setVersion(""); }}><option value="">全部型号</option>{models.map(item => <option key={item}>{item}</option>)}</select></label>
@@ -114,9 +138,10 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
         <tbody>{visible.map(job => <Fragment key={job.id}>
           <tr data-upgrade-id={job.id} className={`expandable-row${expanded.includes(job.id) ? " row-expanded" : ""}`} {...expandableRowProps(expanded.includes(job.id), () => setExpanded(current => current.includes(job.id) ? current.filter(id => id !== job.id) : [...current, job.id]))}>
             <td className="mono"><strong>{job.model}</strong></td><td><span className="ver-chip">{job.sourceVersion}</span></td><td className="direct-time">{displayTime(job.initiatedAt, true)}</td><td>{roleNames[job.initiatedByRole]}</td><td className="num">{formatNumber(job.initialQuantity)}</td><td className="num">{formatNumber(job.completedQuantity)}</td><td className="num strong">{formatNumber(job.inProgressQuantity)}</td><td><Badge label={job.statusText} tone={job.status === "completed" ? "green" : job.status === "cancelled" ? "neutral" : "blue"} /></td>
-            <td>{canComplete && (pending[job.id] || (job.status === "active" && canAct(job.category))) && <button className="btn btn-ghost btn-sm" disabled={busy !== null} onClick={() => setCompleteId(job.id)}>{pending[job.id] ? "重试确认" : "登记完成"}</button>}</td>
+            <td>{canComplete && (pending[job.id] || (job.status === "active" && canAct(job.category))) && <button className="btn btn-ghost btn-sm" disabled={busy !== null || cancelRequest !== null} onClick={() => setCompleteId(job.id)}>{pending[job.id] ? "重试确认" : "登记完成"}</button>}{(mayCancel(job) || cancelRequest?.id === job.id) && <button className="btn btn-ghost btn-sm" disabled={busy !== null || !!pending[job.id] || (cancelRequest !== null && cancelRequest.id !== job.id)} onClick={() => { setCancelId(job.id); if (!cancelRequest) { setCancelReason(""); setCancelError(""); } }}>{cancelRequest?.id === job.id ? "重试确认取消" : "取消在库升级"}</button>}</td>
           </tr>
           {expanded.includes(job.id) && <tr className="direct-detail-row"><td colSpan={9}><div className="direct-batches" data-direct-batches={job.id}>
+            {job.status === "cancelled" && <p>取消岗位：{job.cancelledByRole ? roleNames[job.cancelledByRole] : "—"} · {displayTime(job.cancelledAt, true)}{job.cancelReason ? ` · 原因：${job.cancelReason}` : ""}</p>}
             <table className="data-table sub direct-batch-table reconcile-table" aria-label="来源批次明细"><thead><tr><th>发货计划号</th><th>发货时间</th><th>入库时间</th><th>FNSKU</th><th>来源仓库</th><th>来源团队</th><th className="num">初始锁定量</th><th className="num">升级完成量</th><th className="num">剩余升级量</th><th>升级完成版本</th><th>目标海外仓</th><th className="num">本次完成数量</th></tr></thead><tbody>{job.lines.map(line => <Fragment key={line.id}>
               <tr data-direct-line={line.id} data-direct-completion={line.completions.length ? line.id : undefined}>
                 <td rowSpan={Math.max(1, line.completions.length)}>{line.plan || "—"}</td><td rowSpan={Math.max(1, line.completions.length)}>{line.shipDate || "—"}</td><td rowSpan={Math.max(1, line.completions.length)}>{line.receivedAt ? displayTime(line.receivedAt, true) : "—"}</td><td rowSpan={Math.max(1, line.completions.length)} className="mono">{line.fnsku || "—"}</td><td rowSpan={Math.max(1, line.completions.length)}>{line.warehouse || "—"}</td><td rowSpan={Math.max(1, line.completions.length)}>{line.sourceTeam || "—"}</td><td rowSpan={Math.max(1, line.completions.length)} className="num">{formatNumber(line.initialQuantity)}</td><td rowSpan={Math.max(1, line.completions.length)} className="num">{formatNumber(line.completedQuantity)}</td><td rowSpan={Math.max(1, line.completions.length)} className="num strong">{formatNumber(line.inProgressQuantity)}</td>
@@ -128,6 +153,10 @@ export function DirectUpgradeBoard({ role, active, sources, jobs, warehouses, on
         </Fragment>)}</tbody></table></div>
       {!visible.length && <EmptyState title={jobs.length ? "暂无符合筛选条件的在库升级记录" : "暂无在库升级记录"} />}
     </Panel>
+    {active && cancelJob && <DirectDialog title="取消在库升级" busy={busy !== null} onClose={() => setCancelId(null)}><form onSubmit={event => { event.preventDefault(); void cancel(); }}>
+      <div className="direct-dialog-body"><p>{description(cancelJob)}</p><p>取消后释放本任务全部剩余锁定，保留发起和取消历史。已登记过完成入库的任务不能取消。</p><label className="field"><span>取消原因（选填）</span><input aria-label="在库升级取消原因" autoFocus value={cancelRequest?.reason ?? cancelReason} disabled={busy !== null || cancelRequest !== null} onChange={event => setCancelReason(event.target.value)} /></label>{cancelError && <p className="dialog-error" role="alert">{cancelError}</p>}</div>
+      <footer className="dialog-actions"><button className="btn btn-ghost" type="button" disabled={busy !== null} onClick={() => setCancelId(null)}>关闭</button><button className="btn btn-primary" disabled={busy !== null || (!cancelRequest && !mayCancel(cancelJob))}>{busy === "cancel" ? "正在取消…" : cancelRequest ? "重试确认" : "确认取消并释放锁定"}</button></footer>
+    </form></DirectDialog>}
     {active && startOpen && <DirectDialog title="发起在库升级" busy={busy !== null} onClose={() => setStartOpen(false)}><form onSubmit={event => { event.preventDefault(); void start(); }}>
       <div className="direct-dialog-body"><div className="form-grid">
         <label className="field"><span>型号</span><select aria-label="发起型号" autoFocus value={startModel} disabled={!!pendingStart || busy !== null} onChange={event => { setStartModel(event.target.value); setStartVersion(""); setStartError(""); }}><option value="">请选择型号</option>{startModels.map(item => <option key={item}>{item}</option>)}</select></label>

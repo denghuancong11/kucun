@@ -27,10 +27,35 @@ count('components/RelocationUpgrade.tsx', '处理后移仓地址', 2);
 count('components/RelocationUpdate.tsx', '<th>更新后处理地址</th>');
 for (const text of ['下载已发起，待确认导出状态', '已发起文件下载，导出状态尚未确认。', '首次导出时间（北京时间）']) count('components/RelocationWaybills.tsx', text);
 for (const text of ['<th>领星数据获取时间</th>', '最近获取领星数据：{displayTime', '<th>已采纳包裹的数据获取时间</th>']) count('components/RelocationExternalShipments.tsx', text);
-for (const text of ['上传转仓升级表格', 'title="转仓升级表格预览"', '将新增 {preview.rows.length} 条转仓升级记录</p>', '确认新增转仓升级记录', '批次或扣回数量校验异常，请核对后重试', "'请选择扣回批次，扣回总量需等于指定套数'"]) count('components/TransferUpgrade.tsx', text);
+for (const text of ['上传转仓升级表格', 'title="转仓升级表格预览"', '将新增 {preview.rows.length} 条转仓升级记录</p>', '确认新增转仓升级记录', '请核对扣回批次和数量：只能选择本单可扣回的入库批次，扣回数量不能超过该批次的有效入库数量。', "'请选择扣回批次，扣回总量需等于指定套数'"]) count('components/TransferUpgrade.tsx', text);
 
 // Test the actual JSX expressions for all three update steps, including unchanged busy states.
 const transfer = sources.get('components/TransferUpgrade.tsx').ast;
+const reversalDeclaration = visit(transfer, node => ts.isVariableDeclaration(node) && node.name.getText(transfer) === 'reversalError');
+assert(reversalDeclaration, 'actual transfer reversal validation');
+const reversalCode = ts.transpileModule('globalThis.reversalError = ' + reversalDeclaration.initializer.getText(transfer) + ';', {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
+const reversalMessage = '请核对扣回批次和数量：只能选择本单可扣回的入库批次，扣回数量不能超过该批次的有效入库数量。';
+const sumMessage = '请选择扣回批次，扣回总量需等于指定套数';
+for (const [name, quantityDelta, selected, receipts, expected] of [
+  ['no decrease', 0, [{batchKey: 'receipt', quantity: 1.5}], [], ''],
+  ['positive integer', -3, [{batchKey: 'receipt', quantity: 1.5}], [{batchKey: 'receipt', quantity: 12, issue: ''}], '扣回数量须为正整数'],
+  ['negative quantity', -3, [{batchKey: 'receipt', quantity: -1}], [{batchKey: 'receipt', quantity: 12, issue: ''}], '扣回数量须为正整数'],
+  ['over effective receipt', -3, [{batchKey: 'receipt', quantity: 13}], [{batchKey: 'receipt', quantity: 12, issue: ''}], reversalMessage],
+  ['not this document', -3, [{batchKey: 'other', quantity: 3}], [{batchKey: 'receipt', quantity: 12, issue: ''}], reversalMessage],
+  ['occupied receipt', -3, [{batchKey: 'receipt', quantity: 3}], [{batchKey: 'receipt', quantity: 12, issue: '此入库批次存在预锁定或后续库存变动，当前不能扣回。'}], reversalMessage],
+  ['wrong total', -3, [{batchKey: 'receipt', quantity: 2}], [{batchKey: 'receipt', quantity: 12, issue: ''}], sumMessage],
+  ['nothing selected', -3, [], [{batchKey: 'receipt', quantity: 12, issue: ''}], sumMessage],
+  ['valid deduction', -3, [{batchKey: 'receipt', quantity: 3}], [{batchKey: 'receipt', quantity: 12, issue: ''}], ''],
+]) {
+  const context = {reversalsFor: () => selected};
+  vm.runInNewContext(reversalCode, context);
+  assert.equal(context.reversalError({quantityDelta, data: {documentNo: 'SYNTHETIC-A013'}, receiptBatches: receipts}), expected, name);
+}
+count('components/TransferUpgrade.tsx', 'disabled={action.disabled||!!b.issue}');
+const server = fs.readFileSync(path.join(web, '..', 'server.mjs'), 'utf8');
+assert(server.includes("if(!rma || /填写项|^XXX$/i.test(rma))throw new Error('请填写实际RMA，不能留空或使用模板说明。');"), 'A012 changes only the original RMA error string');
+assert(server.includes("if(rma===(work.rma??'') && address===(work.originalRelocationAddress??'')){unchangedCount++;continue;}"), 'unchanged RMA/address rows still skip validation and writing');
+assert(server.includes("message:'工作表“移仓升级”第 '+sourceRow+' 行：'+error.message"), 'A012 keeps sheet and source-row context');
 const uploadLabel = visit(transfer, node => ts.isJsxElement(node) && node.openingElement.tagName.getText(transfer) === 'label' && node.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.text === 'htmlFor' && attribute.initializer?.text === 'transfer-update-file'));
 assert(uploadLabel, 'transfer update upload label');
 const uploadExpression = uploadLabel.children.find(node => ts.isJsxExpression(node) && node.expression).expression.getText(transfer);
@@ -81,4 +106,4 @@ count('components/RelocationWaybills.tsx', '已发起文件下载，导出状态
 count('components/RelocationExternalShipments.tsx', 'displayTime(item.snapshot.capturedAt, true)');
 count('components/RelocationExternalShipments.tsx', 'displayTime(row.capturedAt, true)');
 for (const {text} of sources.values()) assert(!text.includes('与FW-'), 'coordination notes must not appear in UI');
-console.log('PASS copy-sheet-sj: seven TSX files parse; 32 SJ decisions and five FW recovery decisions checked; three stage labels, pending states, kept copy, and original data bindings preserved. No services or databases used.');
+console.log('PASS copy-sheet-sj: seven TSX files parse; 32 SJ decisions and five FW recovery decisions checked; A012 guard/sheet/source row and nine actual A013 validation cases preserved; three stage labels, pending states, kept copy, and original data bindings preserved. No services or databases used.');

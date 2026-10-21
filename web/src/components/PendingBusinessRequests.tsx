@@ -4,7 +4,7 @@ import type { Role } from "../types";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", logistics: "物流", alan: "Alan", business: "商务" };
 const actionNames: Array<[RegExp, string]> = [
-  [/^\/api\/upgrades\/relocation-waybills\/confirm$/, "运单文件已下载，待确认导出状态"],
+  [/^\/api\/upgrades\/relocation-waybills\/confirm$/, "运单文件已下载。"],
   [/^\/api\/upgrades\/relocation-update\/import(?:\?|$)/, "移仓RMA和地址批量更新"],
   [/^\/api\/transfer-upgrades\/update\/import\?stage=rma(?:&|$)/, "转仓升级 RMA 更新"],
   [/^\/api\/transfer-upgrades\/update\/import\?stage=count(?:&|$)/, "转仓升级实际清点数量更新"],
@@ -26,6 +26,7 @@ const actionNames: Array<[RegExp, string]> = [
 function describe(record: PendingBusinessRequest) {
   const payload = JSON.parse(record.body);
   const action = record.url === "/api/allocations" && payload.zeroAvailableConfirmed === true ? "调拨需求（未预锁）" : actionNames.find(([pattern]) => pattern.test(record.url))?.[1] ?? "业务提交";
+  if (record.url === "/api/upgrades/relocation-waybills/confirm") return action;
   const document = record.context || [payload.model, payload.store, payload.plan, payload.version || payload.sourceVersion || payload.newVersion, payload.removalOrderNo, payload.fileName].filter(Boolean).join(" / ");
   const quantity = payload.quantity ?? payload.completedQuantity ?? payload.supplierQuantity ?? payload.approvedQuantity ?? payload.alanQuantity;
   return [action, document, quantity !== undefined ? "数量 " + quantity : ""].filter(Boolean).join(" · ");
@@ -60,7 +61,7 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
   const confirm = async (record: PendingBusinessRequest) => {
     if (running.current) return;
     running.current=true;setBusy(record.requestId); setMessage("");
-    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+"：原提交结果已确认。"); }
+    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+(record.url === "/api/upgrades/relocation-waybills/confirm" ? "" : "：原提交结果已确认。")); }
     catch (failure) { setMessage((failure as Error).message); }
     finally { running.current=false;setBusy(null); }
   };

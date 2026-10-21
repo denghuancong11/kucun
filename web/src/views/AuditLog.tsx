@@ -6,7 +6,7 @@ import { Icon } from "../components/Icon";
 import { Panel, displayTime } from "../components/ui";
 import type { AuditAction, AuditRecord, Role, Tone } from "../types";
 
-type VisibleAuditAction = Extract<AuditAction, "alan_timeout" | "transfer_inquiry" | "conversion_accepted" | "conversion_rejected" | "inquiry_completed" | "inquiry_rejected" | "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
+type VisibleAuditAction = Extract<AuditAction, "alan_timeout" | "transfer_inquiry" | "conversion_accepted" | "conversion_rejected" | "inquiry_completed" | "inquiry_rejected" | "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "upgrade_relocation_cancelled" | "upgrade_relocation_corrected" | "transit_team_corrected" | "entry" | "review" | "reject" | "confirm" | "cancel" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_direct_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete">;
 
 const auditActions: ReadonlyArray<{ value: VisibleAuditAction; label: string; tone: Tone }> = [
   { value: "alan_timeout", label: "5 小时到期，采用商务审核数量", tone: "blue" },
@@ -30,6 +30,9 @@ const auditActions: ReadonlyArray<{ value: VisibleAuditAction; label: string; to
   { value: "confirm", label: "调拨确认", tone: "green" },
   { value: "upgrade_relocation_created", label: "移仓发货", tone: "amber" },
   { value: "upgrade_relocation_complete", label: "移仓升级完成", tone: "green" },
+  { value: "upgrade_direct_cancelled", label: "在库升级取消", tone: "amber" },
+  { value: "upgrade_relocation_corrected", label: "移仓订单更正", tone: "blue" },
+  { value: "upgrade_relocation_cancelled", label: "移仓流程取消", tone: "amber" },
   { value: "upgrade_direct_start", label: "在库升级锁定", tone: "blue" },
   { value: "upgrade_direct_complete", label: "在库升级完成", tone: "green" },
 ];

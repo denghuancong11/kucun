@@ -10,6 +10,10 @@ import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ow
 import {restoreSchema37Fixture} from './fixtures/schema37-fixture.mjs';
 
 process.env.ASTER_OVERSEAS_WAREHOUSES='SyntheticWarehouseA;SyntheticWarehouseB';
+const configRoot=await fs.mkdtemp(path.join(os.tmpdir(),'aster-toner-v38-config-'));
+process.env.ASTER_RUNTIME_CONFIG=path.join(configRoot,'runtime-config.json');process.env.ASTER_WAREHOUSE_ACCOUNTS=path.join(configRoot,'warehouse-accounts.json');
+await fs.writeFile(process.env.ASTER_RUNTIME_CONFIG,JSON.stringify({schemaVersion:1,overseasWarehouses:['SyntheticWarehouseA','SyntheticWarehouseB']}));
+await fs.writeFile(process.env.ASTER_WAREHOUSE_ACCOUNTS,JSON.stringify({accounts:[]}));
 const {createInventoryDatabase,InventoryDatabase,migrateInventoryDatabaseToCurrent,INVENTORY_SCHEMA_VERSION,ROLES}=await import('../inventory-db.mjs');
 const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/toner-workflow-v38/api');
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-toner-v38-')),databasePath=path.join(state,'data/aster-inventory.sqlite');
@@ -82,9 +86,20 @@ async function migrationTest(){
     for(const r of [...pending,later]){assert.equal(migrated.getDocument(r.id).tonerConversionStatus,null);assert.equal(migrated.getDocument(r.id).statusCode,'pending');assert.equal(migrated.getDocument(r.id).lockedQuantity,r.quantity);}
     const repeat=snapshot(migrated.db);assert.equal(migrateInventoryDatabaseToCurrent({databasePath:legacyPath}).changed,false);assert.deepEqual(snapshot(migrated.db),repeat);
     const all=migrated.audit({limit:500});assert.deepEqual(all.map(x=>[x.at,x.eventId]),[...all].sort((a,b)=>b.at.localeCompare(a.at)||b.eventId-a.eventId).map(x=>[x.at,x.eventId]));
+    const pendingZero=migrated.getInquiry(zeroPending.id),zeroHistory=pendingZero.events;
+    const zeroInventory=()=>Object.fromEntries(['stock_batches','stock_receipts','inventory_ledger','upgrade_inventory_ledger'].map(name=>[name,migrated.db.prepare('SELECT * FROM '+name).all()]));
+    const beforeZeroInventory=zeroInventory();assert.equal(pendingZero.canArchiveHistoricalZero,true);
+    for(const role of ['logistics','assistant-1','operation-1'])assert.throws(()=>migrated.archiveInquiry({id:pendingZero.id,role,...common(pendingZero)}),error=>error.status===403);
+    const closeZero={id:pendingZero.id,role:'purchasing',...common(pendingZero)},closedZero=migrated.archiveInquiry(closeZero).record;
+    assert.equal(closedZero.status,'archived');assert.equal(closedZero.supplierQuantity,0);assert.equal(closedZero.plan,'');assert.equal(closedZero.date,'');assert.equal(closedZero.version,'');
+    assert.deepEqual(closedZero.events.slice(0,-1),zeroHistory);assert.equal(closedZero.events.at(-1).payload.quantity,0);assert.deepEqual(zeroInventory(),beforeZeroInventory);
+    assert.equal(migrated.archiveInquiry(closeZero).deduped,true);assert.equal(migrated.getInquiry(pendingZero.id).events.filter(e=>e.type==='archive').length,1);
+    const completedZero=migrated.db.prepare("SELECT payload_json FROM document_events WHERE event_type='inquiry_completed' AND json_extract(payload_json,'$.inquiryId')=?").all(pendingZero.id);
+    assert.equal(completedZero.length,1);assert.deepEqual([JSON.parse(completedZero[0].payload_json).quantity,JSON.parse(completedZero[0].payload_json).onHandDelta,JSON.parse(completedZero[0].payload_json).lockedDelta],[0,0,0]);
+    assert(!migrated.getRelocationCandidates().some(r=>r.inquiryId===pendingZero.id));
     assert.deepEqual(migrated.db.prepare('PRAGMA foreign_key_check').all(),[]);migrationEvidence.push({legacyState,result,projected:projected.length,unchangedPendingIds:pending.map(r=>r.id),unchangedLaterId:later.id});
   }finally{migrated.close();}
-  check('schema37合成夹具→38受控迁移有完整备份；业务/旧事件/锁账不变，两待商及阶段漂移不重置，仅原archive/reject时刻角色数量投影');
+  check('schema37合成夹具→38迁移保持旧事实；历史0采购可无发货资料结束，发货0/库存0，非采购拒绝，重试唯一且原历史保留');
 }
 
 try{

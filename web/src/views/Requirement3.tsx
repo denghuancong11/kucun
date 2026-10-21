@@ -232,7 +232,7 @@ export function Requirement3View({ role }: { role: Role }) {
       {preview && <section className="transit-import-preview"><h2>{preview.fileName}</h2><p>待导入 {preview.rows.length} 条在途库存记录。</p>{importErrors.length > 0 && <div className="callout callout-danger" role="alert"><ul>{importErrors.map((error, index) => <li key={index}>{error.message}</li>)}</ul></div>}
         <div className="table-wrap scroll-x transit-preview-scroll"><table className="data-table transit-preview-table"><thead><tr><th>型号</th><th>数量</th><th>套/箱</th><th>FNSKU</th><th>发货方式</th><th>发货计划号</th><th>发货时间</th><th>团队</th><th>版本号</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.sourceRow}><td>{row.data.model}</td><td>{formatNumber(row.data.quantity)}</td><td>{row.data.packPerBox || "—"}</td><td>{row.data.fnsku}</td><td>{row.data.shippingMethod}</td><td>{row.data.plan}</td><td>{row.data.date}</td><td>{row.data.team}</td><td>{row.data.version}</td></tr>)}</tbody></table></div>
       <div className="transit-actions"><button type="button" className="btn btn-primary" disabled={!canImport} onClick={() => void submit()}>{busy === "import" ? "正在导入…" : uncertainImport?"请重试确认":"确认导入在途库存"}</button></div></section>}
-      {!preview && !statusPreview && !notice && <EmptyState title={transitAccess ? "未导入在途库存表格" : "无法导入在途库存"} />}
+      {!preview && !statusPreview && !notice && <EmptyState title={transitAccess ? "暂无导入或物流更新预览" : "无法导入在途库存"} />}
     </div>
   );
 }

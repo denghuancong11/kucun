@@ -17,7 +17,7 @@ import { ApprovalDocumentButton } from "./ApprovalDocumentDetails";
 import { AllocationPanel, type AllocationBatchContext } from "./AllocationPanel";
 import { Icon } from "./Icon";
 import { InquiryEntry } from "./InquiryEntry";
-import { operationGroups } from "../utils/roles";
+import { operationGroups, transitSourceTeam } from "../utils/roles";
 import { preserveSummarySelection } from "../utils/rowExpansion";
 import { Badge, Clip, displayTime, Segmented, Spinner } from "./ui";
 
@@ -179,7 +179,6 @@ function StockPane({
                     )}
                     <td className="actions-col">
                       <div className="row-actions">
-                        {row.isLegacyPlaceholder ? null : locked > 0 && <Badge label={`预锁定 ${formatNumber(locked)}`} tone="blue" />}
                         {canCreateAllocation && <button
                           type="button"
                           className={`alloc-toggle${open ? " open" : ""}`}
@@ -273,7 +272,7 @@ function TransitShelfAction({row,role,perm,onShelf,onShelfRefresh,onNotice}: Pic
   const [saved,setSaved]=useState(false);
   const message=row.plan+' · '+row.fnsku+'：'+(row.shippingMethod==='直发FBA'?'直发FBA已确认归档，未增加本地在库库存。':'已确认上架入库。');
   const action=useBusinessAction(()=>onShelfRefresh(row),text=>onNotice({kind:'success',text}));
-  const allowed=TRANSIT_SHELF_ROLE_SET.has(role)&&(!operationGroups[role]||row.team===operationGroups[role])&&perm.actions&&!row.isLegacyPlaceholder;
+  const allowed=TRANSIT_SHELF_ROLE_SET.has(role)&&(!operationGroups[role]||transitSourceTeam(row.team)===operationGroups[role])&&perm.actions&&!row.isLegacyPlaceholder;
   const submit=()=>action.perform({execute:async()=>{const result=await onShelf(row);setSaved(result.record.status==='on_shelf');},message});
   return <>
     {action.busy?<button className="btn btn-primary btn-sm" disabled>{row.shippingMethod==='直发FBA'?'正在确认直发FBA…':'正在确认上架…'}</button>:action.uncertain?<button className="btn btn-primary btn-sm" onClick={()=>void action.perform()}>请重试确认</button>

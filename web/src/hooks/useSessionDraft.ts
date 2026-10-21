@@ -71,7 +71,7 @@ export function useSessionDraft<T>(role: Role, name: string, initialValue: T, re
         }
       }
     }).catch(() => {
-      if (!cancelled) setStorageError("暂时无法核对草稿来源，未恢复未保存内容。请恢复连接后刷新页面。");
+      if (!cancelled) setStorageError("暂存内容尚未恢复，请恢复连接后刷新页面。");
     }).finally(() => { if (!cancelled) setReady(true); });
     // 离页后仍可保存原响应；同一草稿重新挂载后，只允许新实例保存。
     return () => { cancelled = true; };

@@ -146,7 +146,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice, actionsAllowed, recal
   const packPerBox = Number(item.kind === "allocation" ? item.record.packPerBox : null);
   const basicQuantityInvalid = !quantity.trim() || !Number.isInteger(Number(quantity)) || Number(quantity) <= 0;
   const quantityError = item.kind !== "allocation" ? ""
-    : !Number.isInteger(packPerBox) || packPerBox <= 0 ? "来源批次套/箱数据异常（须为有效正整数），无法批准调拨，请核对批次数据。"
+    : !Number.isInteger(packPerBox) || packPerBox <= 0 ? "来源批次的套/箱须为正整数，核对后才能批准调拨。"
     : !Number.isInteger(Number(quantity)) || Number(quantity) <= 0 ? `来源批次套/箱为 ${packPerBox}，审核数量请填写大于 0 的整数，且须为 ${packPerBox} 的整数倍。`
     : Number(quantity) % packPerBox !== 0 ? `来源批次套/箱为 ${packPerBox}，审核数量须为 ${packPerBox} 的整数倍。` : "";
   const { perform, busy, uncertain: actionUncertain, error, setError } = useBusinessAction(onRefresh, text => onNotice({ kind: "success", text }));
@@ -229,7 +229,7 @@ function ApprovalRecord({ item, role, onRefresh, onNotice, actionsAllowed, recal
     </tr>
     <tr className="approval-action-row"><td colSpan={DOCUMENT_COLUMNS.length + metricColumns.length + COVERAGE_COLUMNS.length}><div className="approval-row-actions">
       {recallRetention && <div className="approval-recall-feedback" role={recallRetention.uncertain ? "alert" : "status"}><span>此单回撤尚未完成，已保留显示：{recallRetention.message}{recallRetention.uncertain && !actionUncertain ? " 请在顶部确认原回撤提交结果。" : ""}</span><button type="button" className="btn btn-ghost btn-sm" disabled={busy || uncertain || recallRetention.uncertain} onClick={() => { onRecallRetention(null); setError(null); setRecalling(false); }}>关闭回撤提示</button></div>}
-      {item.kind === "allocation" && role === "business" && needsReview && <span className="form-hint" data-field="来源批次">来源批次：{[row.plan, row.date, row.version].filter(Boolean).join(" · ")}<small className="approval-final-source">批次标识：{item.record.batchKey}</small></span>}
+      {item.kind === "allocation" && role === "business" && needsReview && <span className="form-hint" data-field="来源批次">来源批次：{[row.plan, row.date, row.version].filter(Boolean).join(" · ")}</span>}
       {role === "business" && (needsReview || uncertain) && <form className="approval-review-form" aria-label={`商务审核 ${row.model} · ${row.store}`} onSubmit={event => event.preventDefault()}>
         <label className="field"><span>审核数量</span><input required type="number" min="1" step="1" aria-label="审核数量" aria-invalid={item.kind === "allocation" ? Boolean(quantityError) : basicQuantityInvalid} value={quantity} disabled={!draft.ready || busy || uncertain} onChange={event => { setQuantity(event.target.value); if (quantityRequestError) { setError(null); setQuantityRequestError(false); } }} /></label>
         {item.kind === "allocation" && <label className="field approval-pack-per-box"><span>套/箱</span><output aria-label={`套/箱 ${row.model} · ${row.store}`}>{item.record.packPerBox || "—"}</output></label>}

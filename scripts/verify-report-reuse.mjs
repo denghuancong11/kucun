@@ -5,7 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import {runtime} from './extension-test-runtime.mjs';
 const root=path.resolve(import.meta.dirname,'..');
-const checks=[],check=x=>{checks.push(x);console.log('PASS '+x);};
+const checks=[],copyTimeoutCases=[],check=x=>{checks.push(x);console.log('PASS '+x);};
 const marker='#aster-sync='+'a'.repeat(32),metrics='https://erp.lingxing.com/erp/productExpressionNew',logistics='https://erp.lingxing.com/erp/msupply/removeInbound';
 const tabs=new Map([[41,{id:41,url:metrics,windowId:1}],[42,{id:42,url:metrics+marker,windowId:1,status:'loading'}]]);
 const r=await runtime({local:{enabled:false,port:4174,reportTab:999},tabs});
@@ -32,7 +32,7 @@ r.tabs.delete(42);r.context.chrome.tabs.create=async()=>{throw new Error('禁止
 r.context.fetch=async(url,options)=>({ok:true,json:async()=>({job:{id:3,message:JSON.parse(options.body).error}})});
 r.context.job={id:3,requestId:'missing',target:{action:'metrics'}};
 await r.eval('begin(state,job)');
-assert.match(r.local.connectionStatus,/执行页未打开.*重新打开/s);assert.ok(r.local.connectionStatus.includes(metrics+marker));
+assert.match(r.local.connectionStatus,/领星同步报表页未打开.*请打开/s);assert.ok(r.local.connectionStatus.includes(metrics+marker));
 assert.equal(r.tabs.size,1);assert.equal(r.tabs.get(41).url,metrics);
 check('指定页关闭后通过原任务状态提示完整重开地址，零新页且不接管日常页');
 
@@ -102,7 +102,8 @@ assert.ok(pageProgress&&Number.isFinite(Date.parse(pageProgress.pageAt))&&pagePr
 assert.equal(messages.filter(m=>m.type==='report-result').length,0);
 assert.throws(()=>context.asterStartReport({...request,requestId:'next'}),/尚未结束/);
 finishCleanup();await context.asterStopReport('停止');
-assert.match(context.asterReportState.payload.error,/超过180000毫秒/);assert.equal(context.asterReportState.settled,true);
+assert.equal(context.asterReportState.payload.error,'BFIXTURE01：领星采集超过180秒仍未完成。最后进度：“正在读取 BFIXTURE01 的领星指标（1/1）。”；报表页状态：未知。');assert.equal(context.asterReportState.settled,true);
+copyTimeoutCases.push({copy:'A007',action:'metrics',milliseconds:180000,visibility:null,error:context.asterReportState.payload.error});
 context.asterLingxing.collectAsins=async()=>({items:[{asin:'BFIXTURE01'}],source:{captures:[]}});
 context.asterStartReport({...request,requestId:'next'});
 await new Promise(resolve=>setImmediate(resolve));
@@ -116,6 +117,7 @@ context.asterLingxing.collectAsins=async(asins,{signal})=>{
 };
 context.asterStartReport({...request,requestId:'alarm-timeout'});
 await new Promise(resolve=>setImmediate(resolve));
+context.document.visibilityState='hidden';
 context.asterReportState.deadline=Date.now()-1;
 r.tabs.set(42,{id:42,url:metrics+marker,status:'complete',active:false,discarded:false,frozen:true});
 r.context.state.activeJob={job:{...request,id:4,requestId:'alarm-timeout'},workerId:null,databaseId:'isolated',tabId:42,started:true};
@@ -135,7 +137,8 @@ const inspected=r.eval('inspect(state)');
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(finishes.length,0);assert.ok(r.local.activeJob);assert.equal(context.asterReportState.payload,null);
 finishCleanup();await inspected;
-assert.equal(finishes.length,1);assert.match(finishes[0].error,/页面执行期限已到/);
+assert.equal(finishes.length,1);assert.equal(finishes[0].error,'BFIXTURE01：领星报表执行超时。最后进度：“正在读取 BFIXTURE01 的领星指标（1/1）。”；上次记录的报表页状态：未知。');
+copyTimeoutCases.push({copy:'A008',action:'metrics',currentVisibility:'hidden',lastVisibility:null,error:finishes[0].error});
 assert.equal(r.local.activeJob,undefined);assert.equal(r.tabs.get(42).url,metrics+marker);
 assert.ok(progressMessages.some(message=>message.includes('frozen=true')&&message.includes('active=false')));
 check('后台采样标签冻结状态但不激活；deadline超时仍先等待页内finally，再保存失败并保留同一报表');
@@ -146,4 +149,60 @@ r.context.chrome.scripting.executeScript=async()=>{throw new Error('不可向登
 await r.eval('inspect(state)');
 assert.match(finishes.at(-1).error,/登录/);assert.equal(r.local.activeJob,undefined);
 check('指定页跨站登录跳转沿用登录提示，旧文档已销毁时不注入无权限站点且正常结束任务');
-const output=process.env.ASTER_CLEANUP_RESULT||path.join(root,'.test-output/cleanup-result.json');await fs.mkdir(path.dirname(output),{recursive:true});await fs.writeFile(output,JSON.stringify({kind:'isolated-vm-chrome-api-and-runner',checks,realLingxing:false},null,2));
+
+// A007/A008只改表达：使用实际runner与后台函数生成错误，保留期限、阶段和状态原值。
+const visibilityCases=[['visible','可见'],['hidden','不可见'],['unknown','未知'],[undefined,'未知'],['prerender','prerender'],['constructor','constructor']];
+const runnerSource=await fs.readFile(new URL('../edge-extension/report-runner.js',import.meta.url),'utf8');
+for(const action of ['metrics','logistics'])for(const [visibility,label]of visibilityCases){
+  const timers=new Map(),scheduled=[];let timerId=0;
+  const page=vm.createContext({AbortController,Date,Error,console,
+    setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,ms});scheduled.push(ms);return id;},clearTimeout:id=>timers.delete(id),
+    chrome:{runtime:{sendMessage:async()=>{}}},
+    document:{title:'合成报表',visibilityState:'visible',querySelectorAll:selector=>{
+      if(selector.includes('password'))return [];
+      if(selector==='.vxe-table--main-wrapper')return action==='logistics'?[{...element,querySelectorAll:()=>['MSKU','FNSKU','申报量'].map(innerText=>({innerText}))}]:[];
+      if(selector==='#tab-msku')return action==='metrics'?[element]:[];
+      return [element];
+    }},
+    asterLingxing:{collectAsins:async(asins,{signal,onProgress})=>{onProgress('等待近30天报表刷新');await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}},
+    queryLingxingRemoval:async(target,{signal})=>{await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));},
+  });
+  vm.runInContext(runnerSource,page);
+  page.asterStartReport({requestId:'copy-'+action+'-'+String(visibility),target:action==='metrics'?{action,asins:['BFIXTURE01']}:{action,orderNo:'SYNTHETIC-ORDER-1',fnsku:'SYNTHETIC-FNSKU-1'}});
+  await new Promise(resolve=>setImmediate(resolve));
+  const milliseconds=action==='metrics'?180000:600000,timer=[...timers.values()].find(item=>item.ms===milliseconds);
+  assert.ok(timer,JSON.stringify({action,visibility,scheduled,state:page.asterReportState}));assert.deepEqual(scheduled,[milliseconds]);
+  const progress=page.asterReportState.lastProgress;
+  assert.equal(page.asterReportState.pageVisibility,'visible');
+  if(visibility===undefined)delete page.document.visibilityState;else page.document.visibilityState=visibility;
+  timer.fn();await new Promise(resolve=>setImmediate(resolve));
+  const expected=(action==='metrics'?'BFIXTURE01：':'')+`领星采集超过${milliseconds/1000}秒仍未完成。最后进度：“${progress}”；报表页状态：${label}。`;
+  assert.equal(page.asterReportState.payload.error,expected);assert.equal(page.asterReportState.settled,true);assert.equal(timers.size,0);
+  assert.equal(progress,action==='metrics'?'BFIXTURE01：等待近30天报表刷新':'正在读取移除订单 SYNTHETIC-ORDER-1、FNSKU SYNTHETIC-FNSKU-1 的包裹及商品数量。');
+  copyTimeoutCases.push({copy:'A007',action,milliseconds,visibility:visibility??null,progress,error:page.asterReportState.payload.error});
+}
+check('A007保持180/600秒期限、ASIN与具体进度；翻译visible/hidden/unknown/缺失，其他状态原值保留，读取超时时当前状态');
+for(const [visibility,label]of visibilityCases){
+  const next=await runtime({local:{enabled:false,port:4174},tabs:new Map([[42,{id:42,url:logistics+marker,status:'complete',active:false,discarded:false,frozen:true}]])});
+  const progress='正在读取移除订单 SYNTHETIC-ORDER-1、FNSKU SYNTHETIC-FNSKU-1 的包裹及商品数量。';
+  const page=vm.createContext({Date,document:{visibilityState:'current-state-not-last-sample'},asterReportState:{deadline:Date.now()-1,key:'copy-alarm',payload:null,lastProgress:progress,...(visibility===undefined?{}:{pageVisibility:visibility})}});
+  page.asterStopReport=async message=>{if(!page.asterReportState.payload)page.asterReportState.payload={error:message};};
+  next.context.state={port:4174,connection:{workerId:null,databaseId:'isolated'},reportTab:42,activeJob:{job:{id:6,requestId:'copy-alarm',target:{action:'logistics'}},workerId:null,databaseId:'isolated',tabId:42,started:true}};
+  next.local.activeJob=structuredClone(next.context.state.activeJob);
+  const receipts=[],samples=[];
+  next.context.fetch=async(url,options)=>({ok:true,json:async()=>{
+    const body=JSON.parse(options.body);
+    if(url.endsWith('/progress'))samples.push(body.message);
+    if(url.endsWith('/finish')){receipts.push(body);return {job:{id:6,message:body.error,state:'failed'}};}
+    return {job:{...next.context.state.activeJob.job,state:'running'}};
+  }});
+  next.context.chrome.scripting.executeScript=async options=>{page.scriptArgs=options.args??[];return [{result:await vm.runInContext('('+options.func.toString()+')(...scriptArgs)',page)}];};
+  await next.eval('inspect(state)');
+  const expected=`领星报表执行超时。最后进度：“${progress}”；上次记录的报表页状态：${label}。`;
+  assert.equal(receipts.length,1);assert.equal(receipts[0].error,expected);assert.equal(next.local.activeJob,undefined);
+  assert.ok(next.local.connectionStatus.includes(expected));assert.ok(samples.some(message=>message.includes('frozen=true')&&message.includes('active=false')));
+  assert.equal(next.calls.some(call=>['create','update','remove'].includes(call.method)),false);
+  copyTimeoutCases.push({copy:'A008',action:'logistics',lastVisibility:visibility??null,currentVisibility:page.document.visibilityState,progress,error:receipts[0].error});
+}
+check('A008保留具体进度、后台冻结诊断与单次失败回执；使用上次记录状态而非当前状态，其他状态原值不丢失');
+const output=process.env.ASTER_CLEANUP_RESULT||path.join(root,'.test-output/cleanup-result.json');await fs.mkdir(path.dirname(output),{recursive:true});await fs.writeFile(output,JSON.stringify({kind:'isolated-vm-chrome-api-and-runner',checks,copyTimeoutCases,realLingxing:false},null,2));

@@ -178,7 +178,7 @@ export async function downloadInquiryExport(role: Role, filters: InquiryExportFi
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
-    throw new Error("询库明细导出失败：" + (error instanceof Error ? error.message : "请检查网络后重试"));
+    throw new Error(error instanceof Error ? error.message : "请检查网络后重试");
   }
 }
 
@@ -318,6 +318,24 @@ export function initiateRelocationUpgrade(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
+  }, context);
+}
+
+export function cancelDirectUpgrade(role: Role, id: number, payload: { reason?: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/upgrades/direct/${id}/cancel`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function correctRelocationOrder(role: Role, id: number, payload: { removalOrderNo: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/upgrades/relocation-work-items/${id}/correct-order`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+  }, context);
+}
+
+export function cancelRelocationWork(role: Role, id: number, payload: { reason?: string; expectedRevision: number; requestId: string }, context?: string): Promise<unknown> {
+  return requestJson(`/api/upgrades/relocation-work-items/${id}/cancel`, role, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   }, context);
 }
 

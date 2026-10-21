@@ -21,7 +21,7 @@ createInventoryDatabase({databasePath:path.join(state,'data/aster-inventory.sqli
 const db=new InventoryDatabase(state),rid=()=>crypto.randomUUID(),common=r=>({expectedRevision:r.revision,requestId:rid()});
 const port=await freePort(),base=`http://127.0.0.1:${port}`,instanceId=createTestInstanceId('allocation-source-page');
 assert.notEqual(port,4173);
-const field='发货方式-所属海外仓',legacyLabel='当前批次信息（非提交快照）';
+const field='发货方式-所属海外仓',legacyLabel='当前批次';
 const longWarehouse='美国加利福尼亚洛杉矶东区第三方海外仓-超长来源仓库名称完整可读-'+('LONGWAREHOUSE1234567890'.repeat(5));
 const startedAt=new Date().toISOString(),checks=[],requests=[],responses=[],errors=[],screenshots=[],layouts=[],services=[];
 const historyOnly=process.argv.includes('--history-only');

@@ -103,7 +103,7 @@ async function inspect(state) {
     } else {
       const [result]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:async()=>{
         const report=globalThis.asterReportState;
-        if(report && !report.payload && Date.now()>report.deadline) await globalThis.asterStopReport(`页面执行期限已到；最后阶段“${report.lastProgress??'未知'}”；页面可见性${report.pageVisibility??'未知'}`);
+        if(report && !report.payload && Date.now()>report.deadline) await globalThis.asterStopReport(`领星报表执行超时。最后进度：“${report.lastProgress??'未知'}”；上次记录的报表页状态：${report.pageVisibility==='visible'?'可见':report.pageVisibility==='hidden'?'不可见':report.pageVisibility==='unknown'||report.pageVisibility==null?'未知':report.pageVisibility}。`);
         return report ?? null;
       }});
       const report=result.result;

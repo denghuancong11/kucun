@@ -5,9 +5,14 @@ import path from 'node:path';
 import os from 'node:os';
 import {spawn,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
-import {InventoryDatabase,createInventoryDatabase,ROLES} from '../inventory-db.mjs';
-import {transferWorkbook,transferSample} from './fixtures/transfer-workbook.mjs';
 import {freePort,createTestInstanceId,waitForOwnedServer} from './test-server-ownership.mjs';
+
+const configRoot=await fs.mkdtemp(path.join(os.tmpdir(),'aster-upgrade-template-config-'));
+process.env.ASTER_RUNTIME_CONFIG=path.join(configRoot,'runtime-config.json');process.env.ASTER_WAREHOUSE_ACCOUNTS=path.join(configRoot,'warehouse-accounts.json');process.env.ASTER_OVERSEAS_WAREHOUSES='SyntheticWarehouseA;SyntheticWarehouseB';
+await fs.writeFile(process.env.ASTER_RUNTIME_CONFIG,JSON.stringify({schemaVersion:1,overseasWarehouses:['SyntheticWarehouseA','SyntheticWarehouseB']}));
+await fs.writeFile(process.env.ASTER_WAREHOUSE_ACCOUNTS,JSON.stringify({accounts:[{account:'A号',shortName:'SYNTH-A',room:'001',sourceCell:'synthetic'}]}));
+const {InventoryDatabase,createInventoryDatabase,ROLES}=await import('../inventory-db.mjs');
+const {transferWorkbook,transferSample}=await import('./fixtures/transfer-workbook.mjs');
 
 const root=path.resolve(import.meta.dirname,'..'),out=process.env.ASTER_ACCEPTANCE_OUTPUT||path.join(root,'.test-output/upgrade-template');
 const state=await fs.mkdtemp(path.join(os.tmpdir(),'aster-original-template-'));
@@ -62,6 +67,7 @@ w.save(sys.argv[2])`,file,target,JSON.stringify(instructions)],{windowsHide:true
   return target;
 }
 function makeRelocation(plan,model='SYNTH-TONER-001'){
+  if(model==='SYNTH-INK-001')db.db.prepare("INSERT OR IGNORE INTO stock_batches(batch_key,model,plan,ship_date,version,fnsku,base_quantity,updated_at,pack_per_box,source_team) VALUES('TEMPLATE-INK-TEAM1',?,'TEMPLATE-INK-TEAM1','2026-10-21','SOURCE','SOURCE',0,?,'10','一团')").run(model,new Date().toISOString());
   let r=db.createInquiry({role:'operation-1',model,quantity:100,department:'一团',store:'AUS',operator:'隔离模板验收',fnsku:'000012',asin:'BTEST001',requestId:rid()}).record;
   r=db.reviewInquiry({id:r.id,role:'business',decision:'approve',approvedQuantity:100,...common(r)}).record;
   r=db.replyInquiry({id:r.id,role:'purchasing',supplierQuantity:100,shippingWarehouse:'CA',...common(r)}).record;

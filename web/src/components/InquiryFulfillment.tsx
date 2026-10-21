@@ -19,26 +19,27 @@ export function InquiryFulfillment({ row, role, onRefresh, onNotice, draft }: {
   row: Inquiry; role: Role; onRefresh: () => Promise<unknown>; onNotice: (notice: NoticeMessage) => void; draft: ApprovalDraftControls;
 }) {
   const [open, setOpen] = useState(false);
+  const historicalZero = row.canArchiveHistoricalZero === true;
   const plan = draft.value?.plan ?? "", date = draft.value?.date ?? "", version = draft.value?.version ?? "";
   const action = useBusinessAction(onRefresh, text => { setOpen(false); onNotice({ kind: "success", text }); });
   const archive = (event: FormEvent) => {
     event.preventDefault();
     if (!draft.ready || action.disabled) return;
-    const payload = { plan: plan.trim(), date, version: version.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-archive") };
-    void action.perform({ execute: draft.prepare(() => archiveInquiry(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))), message: row.model + " · " + row.store + "：询库已完成归档。" });
+    const payload = { plan: historicalZero ? "" : plan.trim(), date: historicalZero ? "" : date, version: historicalZero ? "" : version.trim(), expectedRevision: row.revision, requestId: createRequestId("inquiry-archive") };
+    void action.perform({ execute: draft.prepare(() => archiveInquiry(role, row.id, payload, [row.model,row.store,row.plan,row.fnsku,displayTime(row.createdAt)].filter(Boolean).join(" / "))), message: row.model + " · " + row.store + (historicalZero ? "：历史无货询库已结束，发货 0 件，库存变动 0。" : "：询库已完成归档。") });
   };
   const assistant = role === "assistant-1" || role === "assistant-2";
   const allowed = (row.category === "墨盒" ? ["purchasing", "logistics"].includes(role) : role === "purchasing") && row.status === "pending_assistant";
-  const label = row.category === "墨盒" ? "采购归档" : "确认实际发出并归档";
+  const label = historicalZero ? "结束历史无货询库" : row.category === "墨盒" ? "采购归档" : "确认实际发出并归档";
   if (!allowed && !action.uncertain) return null;
   return <div className="inquiry-fulfillment"><button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>{label}</button>
-    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.model} · ${row.store}`}><h3>{row.category === "墨盒" ? "保存并备份" : "确认"}</h3>
+    {open && <div className="dialog-mask"><div className="dialog" role="dialog" aria-modal="true" aria-label={`${label} ${row.model} · ${row.store}`}><h3>{row.category === "墨盒" ? "保存" : "确认"}</h3>
     {allowed && <form className="approval-action-form" onSubmit={archive}>
-      <p className="form-hint">确认本单 {formatNumber(row.finalQuantity ?? row.supplierQuantity ?? 0)} 件已全部实际发出，再提交归档。</p>
+      {historicalZero ? <p className="form-hint">本单保留了采购回复无货的历史事实。结束后记录发货 0 件、库存变动 0，原申请、审核和回复历史保持不变。</p> : <><p className="form-hint">确认本单 {formatNumber(row.finalQuantity ?? row.supplierQuantity ?? 0)} 件已全部实际发出，再提交归档。</p>
       <label className="field"><span>发货计划号</span><input required value={plan} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ plan: event.target.value })} /></label>
       <label className="field"><span>发货时间</span><input required type="date" value={date} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ date: event.target.value })} /></label>
-      <label className="field"><span>原版本号</span><input required value={version} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ version: event.target.value })} /></label>
-      <button className="btn btn-primary" type="submit" disabled={!draft.ready || action.disabled}>{action.busy ? "正在归档…" : row.category === "硒鼓" ? "确认全部发出并归档" : "提交采购归档"}</button>
+      <label className="field"><span>原版本号</span><input required value={version} disabled={!draft.ready || action.disabled} onChange={event => draft.update({ version: event.target.value })} /></label></>}
+      <button className="btn btn-primary" type="submit" disabled={!draft.ready || action.disabled}>{action.busy ? "正在归档…" : historicalZero ? "确认发货0件并结束" : row.category === "硒鼓" ? "确认全部发出并归档" : "提交采购归档"}</button>
     </form>}
     {action.error && <p className="dialog-error" role="alert">{action.error}</p>}
     {action.uncertain && <button className="btn btn-primary" disabled={action.busy} onClick={() => void action.perform()}>{action.busy ? "正在确认…" : "重试确认"}</button>}
@@ -93,7 +94,7 @@ export function ApprovalProcurementCells({ kind, row, quantity, onQuantityChange
 function allocationQuantityError(quantity: string, pack: string | null) {
   if (Number(quantity) === 0) return "";
   const packPerBox = Number(pack);
-  if (!Number.isInteger(packPerBox) || packPerBox <= 0) return "来源批次套/箱数据异常（须为有效正整数），无法提交。";
+  if (!Number.isInteger(packPerBox) || packPerBox <= 0) return "来源批次的套/箱须为正整数，核对后才能提交。";
   return Number(quantity) % packPerBox ? `来源批次套/箱为 ${packPerBox}，数量须为 ${packPerBox} 的整数倍。` : "";
 }
 

@@ -323,6 +323,7 @@ export interface InquiryShipment {
 }
 
 export interface Inquiry {
+  canArchiveHistoricalZero: boolean;
   sourceAllocationId: number | null;
   sourceAllocationNo: string | null;
   sourceOriginalRequestedQuantity: number | null;
@@ -576,6 +577,8 @@ export interface RelocationExternalItem {
 }
 
 export interface RelocationWorkItem {
+  canCorrectOrder: boolean;
+  canCancel: boolean;
   history: DocumentEvent[];
   originalRelocationAddress: string | null;
   inquiryRecall: InquiryRecallInfo | null;
@@ -653,6 +656,7 @@ interface UpgradeBase {
 }
 
 export interface DirectUpgrade extends UpgradeBase {
+  canCancel: boolean;
   kind: "direct";
   lines: DirectUpgradeLine[];
 }
@@ -740,7 +744,7 @@ export interface NoticeMessage {
 }
 
 /* 后端保留的现有库存事件类型；具体页面可再收窄可见范围。 */
-export type AuditAction = "alan_timeout" | "transfer_inquiry" | "conversion_accepted" | "conversion_rejected" | "inquiry_completed" | "inquiry_rejected" | "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
+export type AuditAction = "alan_timeout" | "transfer_inquiry" | "conversion_accepted" | "conversion_rejected" | "inquiry_completed" | "inquiry_rejected" | "alan_review" | "reply" | "archive" | "recall" | "transfer_upgrade_update" | "transfer_upgrade_import" | "business_correction" | "entry" | "review" | "reject" | "confirm" | "cancel" | "withdraw" | "import_stage" | "legacy_import" | "transit_import" | "transit_import_revert" | "transit_status" | "transit_on_shelf" | "transit_off_shelf" | "transit_merge" | "transit_delete" | "transit_manual" | "transit_team_corrected" | "upgrade_direct_start" | "upgrade_direct_complete" | "upgrade_direct_cancelled" | "upgrade_relocation_started" | "upgrade_relocation_procurement" | "upgrade_relocation_operation" | "upgrade_relocation_corrected" | "upgrade_relocation_cancelled" | "upgrade_relocation_created" | "upgrade_relocation_complete";
 
 export interface AuditQuery {
   action: AuditAction;

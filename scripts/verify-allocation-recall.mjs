@@ -182,6 +182,9 @@ try {
   inquiry = (await api(`/api/inquiries/${inquiry.id}/reply`, 'purchasing', { ...common(inquiry), supplierQuantity: 20, shippingWarehouse: 'CA' })).record;
   inquiry = (await api(`/api/inquiries/${inquiry.id}/archive`, 'purchasing', { ...common(inquiry), plan: 'INQ-P', date: '2026-10-19', version: 'V1' })).record;
   await api('/api/approvals/inquiries/clear', 'purchasing', { requestId: rid() });
+  // The fixture above rewinds display metadata; settle the current calendar boundary
+  // before asserting that subsequent equivalent reads do not write.
+  db.refreshApprovalDisplay();
   const beforeHiddenRead = all(), defaults = await api('/api/approvals'), optin = await api('/api/approvals?includeHiddenCompletedAllocations=1');
   assert.equal(Object.hasOwn(defaults, 'hiddenCompletedAllocationIds'), false);
   assert.deepEqual([...optin.hiddenCompletedAllocationIds].sort((a,b) => a-b), optin.allocations.filter(r => !defaults.allocations.some(d => d.id === r.id)).map(r => r.id).sort((a,b) => a-b));
