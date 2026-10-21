@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { confirmPendingBusinessRequest, fetchSync, readPendingBusinessRequests, type PendingBusinessRequest } from "../api";
 import type { Role } from "../types";
+import { settleConfirmedTransitDraft } from "../utils/transitDraft";
 
 const roleNames: Record<Role, string> = { admin: "管理员", "assistant-1": "助理-一团", "assistant-2": "助理-二团", "operation-1": "运营·一团", "operation-2": "运营·二团", purchasing: "采购", logistics: "物流", alan: "Alan", business: "商务" };
 const actionNames: Array<[RegExp, string]> = [
@@ -61,7 +62,7 @@ export function PendingBusinessRequests({ role }: { role: Role }) {
   const confirm = async (record: PendingBusinessRequest) => {
     if (running.current) return;
     running.current=true;setBusy(record.requestId); setMessage("");
-    try { await confirmPendingBusinessRequest(record); setMessage(describe(record)+(record.url === "/api/upgrades/relocation-waybills/confirm" ? "" : "：原提交结果已确认。")); }
+    try { const result = await confirmPendingBusinessRequest(record); settleConfirmedTransitDraft(record, result); setMessage(describe(record)+(record.url === "/api/upgrades/relocation-waybills/confirm" ? "" : "：原提交结果已确认。")); }
     catch (failure) { setMessage((failure as Error).message); }
     finally { running.current=false;setBusy(null); }
   };

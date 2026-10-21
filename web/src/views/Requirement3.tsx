@@ -5,10 +5,9 @@ import { EmptyState } from "../components/ui";
 import { TRANSIT_ROLES, type NoticeMessage, type Role, type TransitImportPreview, type TransitStatusPreview } from "../types";
 import { createRequestId } from "../utils/ids";
 import { useSessionDraft } from "../hooks/useSessionDraft";
+import type { TransitDraft } from "../utils/transitDraft";
 
 
-type PendingRequest = { previewToken: string; payloadKey: string; requestId: string };
-type TransitDraft = { preview: TransitImportPreview | null; statusPreview: TransitStatusPreview | null; importRequest: PendingRequest | null; statusRequest: PendingRequest | null; uncertainImport: boolean; uncertainStatus: boolean; importYear?: string; importYearRequired?: boolean; importFileName?: string };
 const emptyDraft: TransitDraft = { preview: null, statusPreview: null, importRequest: null, statusRequest: null, uncertainImport: false, uncertainStatus: false, importYear: "", importYearRequired: false, importFileName: "" };
 const hasMonthDayOnly = (value: string) => /^\d{1,2}[./-]\d{1,2}$/.test(value.trim()) || /^\d{1,2}月\d{1,2}日$/.test(value.trim());
 

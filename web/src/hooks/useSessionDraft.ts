@@ -6,6 +6,24 @@ import { createRequestId } from "../utils/ids";
 type DraftInstance = { token: symbol; databaseId: () => string | null; recover: (value: unknown, id: string) => void; reportError: (message: string) => void };
 const latestDraftInstances = new Map<string, DraftInstance>();
 
+// 原提交在其他页面确认后，只结算仍属于同一数据库的已保存草稿。
+export function updateSavedSessionDraft<T>(role: Role, name: string, id: string, update: (value: T) => T) {
+  const key = `aster-draft:${role}:${name}`;
+  try {
+    const raw = sessionStorage.getItem(key);
+    const saved = raw ? JSON.parse(raw) as { databaseId: string; value: T } : null;
+    if (!saved || saved.databaseId !== id) return;
+    const next = update(saved.value);
+    if (next === saved.value) return;
+    sessionStorage.setItem(key, JSON.stringify({ databaseId: id, value: next, writeId: createRequestId("draft") }));
+    latestDraftInstances.get(key)?.recover(next, id);
+  } catch {
+    const message = "原提交已确认，但草稿未能更新。请回到原业务页面按原提交重试确认。";
+    latestDraftInstances.get(key)?.reportError(message);
+    throw new Error(message);
+  }
+}
+
 // 草稿只在当前浏览器会话、原数据库和原角色内恢复，不作为业务提交结果。
 export function useSessionDraft<T>(role: Role, name: string, initialValue: T, recoveryErrorMessage = "未保存内容无法恢复，请重新核对并填写。") {
   const key = `aster-draft:${role}:${name}`;

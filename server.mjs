@@ -286,6 +286,21 @@ async function readableCategoriesForRole(role) {
   return readable;
 }
 
+async function transferAccessForRole(role) {
+  const readableCategories = await readableCategoriesForRole(role);
+  const actionableCategories = [];
+  for (const category of allCategories) {
+    if ((await categoryPermissions(role, category)).actions) actionableCategories.push(category);
+  }
+  return { readableCategories, actionableCategories };
+}
+
+function transferRecordVisible(record, access, requireAction = false) {
+  const category = inventory.getModel(record.data.model)?.category;
+  return !allCategories.includes(category) || (access.readableCategories.includes(category)
+    && (!requireAction || access.actionableCategories.includes(category)));
+}
+
 async function requireTransitRowActions(role, fileName, rows) {
   const fallbackCategory = transitCategoryFromFileName(fileName);
   const categories = new Set(rows.map(item => {
@@ -730,8 +745,13 @@ async function handleRelocationTemplate(request,response,pathname,role) {
       try {
         const matched=candidates.get(upgradeBusinessKey(values,identityColumns,table.date1904))??[];
         if(!matched.length)throw new Error('未找到业务资料一致且有权访问的原记录；请核对型号、来源、发货计划号、发货时间、版本号、已贴FNSKU、初始调拨数量、调拨店铺和订单号');
-        if(matched.length!==1)throw new Error('业务资料匹配到 '+matched.length+' 条移仓记录，无法唯一定位；原模板不能分别更新这些记录');
-        const work=matched[0];workNo=work.workNo;
+        const current=matched.filter(work=>!['cancelled','withdrawn'].includes(work.status));
+        if(current.length>1)throw new Error('业务资料匹配到 '+current.length+' 条移仓记录，无法唯一定位；原模板不能分别更新这些记录');
+        // 历史行可原样回导，但不能与当前流程竞争更新；19列本身不携带内部编号。
+        const unchanged=matched.filter(work=>relocationUpdateValues(work).every((value,col)=>upgradeCellValue(values[col],col,table.date1904)===upgradeCellValue(value,col)));
+        const work=unchanged.find(work=>!seen.has(work.id))??unchanged[0]??current[0]??(matched.length===1?matched[0]:null);
+        if(!work)throw new Error('业务资料匹配到 '+matched.length+' 条移仓记录，无法唯一定位；原模板不能分别更新这些记录');
+        workNo=work.workNo;
         if(seen.has(work.id))throw new Error('文件中多行对应同一移仓记录，请每单仅保留一行；运单拆行文件仅供查看');seen.add(work.id);
         if(values.slice(RELOCATION_UPDATE_HEADERS.length).some(value=>String(value??'').trim()))throw new Error('原模板19列之外存在内容，请移除新增字段');
         const expected=relocationUpdateValues(work);
@@ -1459,23 +1479,24 @@ function groupUpgradeRecords(records,valuesFor,columns){
 
 async function handleTransferUpdate(request,response,pathname,role,stage) {
   const query=new URL(request.url,'http://localhost').searchParams;
+  const access=await transferAccessForRole(role);
   const matches=r=>['model','version','status'].every(key=>!query.get(key)||r.data[key]===query.get(key));
   if(pathname.endsWith('/export')&&request.method==='GET'){
     if(!['admin','purchasing','logistics'].includes(role))throw new BusinessError(403,'upgrade_export_forbidden','仅管理员、采购和物流可导出转仓升级');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级.xlsx')});
-    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades().filter(matches),TRANSFER_UPGRADE_FIELDS,crc32));return;
+    response.end(transferUpdateWorkbook(inventory.getTransferUpgrades().filter(r=>transferRecordVisible(r,access)).filter(matches),TRANSFER_UPGRADE_FIELDS,crc32));return;
   }
   if(role!=='logistics')throw new BusinessError(403,'transfer_logistics_required','仅物流可通过模板办理转仓升级');
   if(!Object.hasOwn(TRANSFER_STAGES,stage))throw new BusinessError(422,'transfer_stage','请选择RMA、实际清点数量或升级进度');
   const fields=TRANSFER_UPGRADE_FIELDS,headers=fields.map(([,label])=>label);
-  const records=inventory.getTransferUpgrades();
+  const records=inventory.getTransferUpgrades().filter(r=>transferRecordVisible(r,access,request.method!=='GET'));
   if(pathname.endsWith('/template')&&request.method==='GET') {
     const selected=records.filter(matches).filter(r=>stage==='rma'||stage==='count'&&r.data.rma||stage==='progress'&&r.data.countedQuantity!=='');
     response.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','cache-control':'no-store','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent('转仓升级-'+TRANSFER_STAGES[stage]+'更新模板.xlsx')});
     response.end(transferUpdateWorkbook(selected,fields,crc32));return;
   }
   if(pathname.endsWith('/import')&&request.method==='POST'){
-    sendJson(response,200,inventory.updateTransferUpgrades({...await parseJsonRequest(request),role,stage}));return;
+    sendJson(response,200,inventory.updateTransferUpgrades({...await parseJsonRequest(request),role,stage,access}));return;
   }
   if(!pathname.endsWith('/preview')||request.method!=='POST')throw new BusinessError(404,'route_not_found','找不到模板操作');
   const body=await readBody(request),fileName=decodeFileNameHeader(request.headers['x-file-name'],'upload.xlsx');
@@ -1943,6 +1964,7 @@ const server = http.createServer(async (request, response) => {
       const body = await readBody(request);
       const fileName = decodeFileNameHeader(request.headers["x-file-name"], "upload.xlsx");
       const parsed = parseTransferUpgrade(body, fileName), fileSha256 = hashBuffer(body), templateSha256 = hashTemplate(parsed.headers);
+      inventory.requireTransferAccess(parsed.rows, await transferAccessForRole(role));
       const proof = parsed.errors.length === 0 ? inventory.createTransitPreviewToken({ kind: "transfer_upgrade", role, fileName, fileHash: fileSha256,
         templateHash: templateSha256, payload: { rows: parsed.rows } }) : null;
       sendJson(response, 200, { ok: true, ...parsed, fileSha256, templateSha256, ...(proof ? { previewToken: proof.token } : {}) });
@@ -1951,7 +1973,7 @@ const server = http.createServer(async (request, response) => {
     if (pathname === "/api/transfer-upgrades/import" && request.method === "POST") {
       const role = requireRole(request), payload = await parseJsonRequest(request);
       sendJson(response, 200, inventory.importTransferUpgrades({ role, previewToken: requirePreviewToken(payload), fileName: payload.fileName,
-        fileHash: payload.fileHash, templateHash: payload.templateHash, rows: Array.isArray(payload.rows) ? payload.rows : [], requestId: requireNonBlank(payload, "requestId", "提交编号") }));
+        fileHash: payload.fileHash, templateHash: payload.templateHash, rows: Array.isArray(payload.rows) ? payload.rows : [], requestId: requireNonBlank(payload, "requestId", "提交编号"), access:await transferAccessForRole(role) }));
       return;
     }
     /* 需求三：在途导入、物流状态更新与上架。上传/转换写入均由服务端事务、幂等键和角色校验保障。 */
@@ -2030,7 +2052,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && pathname === "/api/transit/imports") {
       const role = requireRole(request);
       if (!transitRoleSet.has(role) && role !== "alan") throw new BusinessError(403, "transit_import_forbidden", "当前角色无权查看导入批次");
-      sendJson(response, 200, { ok: true, imports: inventory.listTransitImports(role), sync: inventory.syncState() });
+      sendJson(response, 200, { ok: true, imports: inventory.listTransitImports(role, {readableCategories:await readableCategoriesForRole(role)}), sync: inventory.syncState() });
       return;
     }
     const onShelfMatch = pathname.match(/^\/api\/transit\/(\d+)\/on-shelf$/);
